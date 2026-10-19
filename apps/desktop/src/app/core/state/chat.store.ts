@@ -1,15 +1,9 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
-import type {
-  ChatMessage,
-  ChatStreamEvent,
-  ModelInfo,
-  ProviderDescriptor,
-  ProviderModels,
-} from '@jarvis/shared-types';
+import type { ChatMessage, ChatStreamEvent } from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
-import { SettingsStore } from './settings.store';
+import { type ModelOption, ModelsStore, optionKey } from './models.store';
 
 export type ChatEntryStatus = 'complete' | 'streaming' | 'cancelled' | 'failed';
 
@@ -21,11 +15,6 @@ export interface ChatEntry {
   readonly model?: string;
   readonly error?: string;
   readonly elapsedMs?: number;
-}
-
-export interface ModelOption {
-  readonly provider: ProviderDescriptor;
-  readonly model: ModelInfo;
 }
 
 /** `connecting`: request sent, waiting for `started`; `streaming`: receiving text. */
@@ -41,42 +30,39 @@ export const MAX_MESSAGE_LENGTH = 32_000;
 @Injectable({ providedIn: 'root' })
 export class ChatStore {
   private readonly api = inject(JarvisApi);
-  private readonly settingsStore = inject(SettingsStore);
+  private readonly models = inject(ModelsStore);
   private nextId = 1;
   private cancelRequested = false;
+  /** `null` = automatic: the core's model router decides. */
+  private readonly selectedKey = signal<string | null>(null);
 
   readonly entries = signal<readonly ChatEntry[]>([]);
   readonly phase = signal<ChatPhase>('idle');
   readonly activeRequestId = signal<string | null>(null);
-  readonly providers = signal<readonly ProviderModels[]>([]);
-  readonly selected = signal<ModelOption | null>(null);
-  readonly modelsError = signal<IpcError | null>(null);
 
   readonly busy = computed(() => this.phase() !== 'idle');
-  readonly modelOptions = computed<ModelOption[]>(() =>
-    this.providers().flatMap((p) =>
-      p.models.filter((m) => m.capabilities.chat).map((model) => ({ provider: p.provider, model })),
-    ),
-  );
-  /** True when no real AI provider is registered (Phase 1). */
-  readonly diagnosticOnly = computed(() => {
-    const providers = this.providers();
-    return providers.length > 0 && providers.every((p) => p.provider.kind === 'diagnostic');
+  readonly modelOptions = this.models.chatOptions;
+  readonly modelsError = this.models.error;
+  readonly automaticRoute = this.models.generalRoute;
+  /** Explicitly selected model; `null` when automatic or no longer available. */
+  readonly selected = computed<ModelOption | null>(() => {
+    const key = this.selectedKey();
+    return key === null
+      ? null
+      : (this.modelOptions().find((o) => optionKey(o.provider.id, o.model.id) === key) ?? null);
   });
+  /** True when models are loaded and no real AI model is reachable. */
+  readonly diagnosticOnly = computed(
+    () => this.models.loaded() && !this.models.realModelAvailable(),
+  );
 
-  async loadModels(): Promise<void> {
-    try {
-      const providers = await this.api.listAiModels();
-      this.providers.set(providers);
-      this.modelsError.set(null);
-      this.ensureSelection();
-    } catch (error) {
-      this.modelsError.set(IpcError.from(error));
-    }
+  loadModels(force = false): Promise<void> {
+    return this.models.refresh(force);
   }
 
-  select(option: ModelOption): void {
-    this.selected.set(option);
+  /** Selects a model, or automatic routing with `null`. */
+  select(option: ModelOption | null): void {
+    this.selectedKey.set(option ? optionKey(option.provider.id, option.model.id) : null);
   }
 
   async send(text: string): Promise<void> {
@@ -179,28 +165,6 @@ export class ChatStore {
       .filter((e) => e.content.length > 0 && e.status !== 'failed')
       .slice(-(MAX_CONTEXT_MESSAGES - 1))
       .map((e) => ({ role: e.role, content: e.content }));
-  }
-
-  private ensureSelection(): void {
-    const options = this.modelOptions();
-    const current = this.selected();
-    if (
-      current &&
-      options.some((o) => o.provider.id === current.provider.id && o.model.id === current.model.id)
-    ) {
-      return;
-    }
-    const ai = this.settingsStore.settings()?.ai;
-    const preferred =
-      options.find(
-        (o) =>
-          (!ai?.defaultProviderId || o.provider.id === ai.defaultProviderId) &&
-          o.model.id === ai?.defaultModel,
-      ) ??
-      options.find((o) => o.provider.kind !== 'diagnostic') ??
-      options[0] ??
-      null;
-    this.selected.set(preferred);
   }
 
   private addEntry(entry: Omit<ChatEntry, 'id'>): ChatEntry {

@@ -4,6 +4,7 @@ import type { DataLocality } from '@jarvis/shared-types';
 
 import { ChatStore } from '../../core/state/chat.store';
 import { EventLogStore } from '../../core/state/event-log.store';
+import { ModelsStore } from '../../core/state/models.store';
 import { pollWhileVisible } from '../../core/state/poll';
 import { SystemStore } from '../../core/state/system.store';
 import { AiCore, type CoreState } from '../../shared/ai-core/ai-core';
@@ -26,6 +27,7 @@ export class Dashboard {
   private readonly system = inject(SystemStore);
   private readonly chat = inject(ChatStore);
   private readonly eventLog = inject(EventLogStore);
+  private readonly models = inject(ModelsStore);
 
   protected readonly formatBytes = formatBytes;
   protected readonly formatPercent = formatPercent;
@@ -41,8 +43,19 @@ export class Dashboard {
   protected readonly health = this.system.health;
   protected readonly metrics = this.system.metrics;
   protected readonly platform = this.system.platform;
-  protected readonly selectedModel = this.chat.selected;
   protected readonly diagnosticOnly = this.chat.diagnosticOnly;
+  protected readonly generalRoute = this.models.generalRoute;
+  /** Model the router currently uses for general chat. */
+  protected readonly activeModel = computed(() => {
+    const route = this.generalRoute();
+    if (!route?.providerId || !route.model) {
+      return null;
+    }
+    const option = this.models
+      .options()
+      .find((o) => o.provider.id === route.providerId && o.model.id === route.model);
+    return option ? { ...option, automatic: route.automatic } : null;
+  });
   protected readonly chatPhase = this.chat.phase;
 
   protected readonly coreState = computed<CoreState>(() => {

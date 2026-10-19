@@ -15,6 +15,7 @@ crate-type = ["rlib"]
 tauri-build.workspace = true
 
 [dependencies]
+jarvis-ai.workspace = true
 jarvis-core.workspace = true
 jarvis-events.workspace = true
 jarvis-platform.workspace = true

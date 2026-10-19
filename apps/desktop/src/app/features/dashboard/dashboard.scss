@@ -269,3 +269,9 @@
 .dim {
   color: var(--jv-text-dim);
 }
+
+.notice a,
+.note a {
+  color: inherit;
+  text-decoration: underline;
+}

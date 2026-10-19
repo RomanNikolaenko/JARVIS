@@ -17,14 +17,17 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 ## Phase 2 — AI integration 🟡
 
 - ✅ `AiProvider` abstraction, capabilities, privacy locality, registry
-- ✅ Streaming chat pipeline with cancellation and timeouts (diagnostic provider)
-- ⬜ Ollama provider (`/api/chat`, `/api/tags`, streaming NDJSON)
-- ⬜ OpenAI-compatible provider (LM Studio, llama.cpp server, vLLM, …)
-- ⬜ Provider configuration UI (endpoints, health, models)
-- ⬜ Model router (per-category model selection, capability/privacy aware)
-- ⬜ Provider contract test suite (shared by all providers, mock HTTP server)
-- ⬜ Markdown rendering with sanitization and code highlighting in chat
-- ⬜ Secrets in the OS keychain (for cloud providers)
+- ✅ Streaming chat pipeline with cancellation and timeouts
+- ✅ Ollama provider (`/api/chat` NDJSON, `/api/tags`, `/api/show`, `/api/embed`)
+- ✅ OpenAI-compatible provider (LM Studio, llama.cpp server, vLLM, …)
+- ✅ Provider configuration UI (Models screen: add/edit/test/enable/remove)
+- ✅ Model router (per-category selection, capability/privacy/locality aware)
+- ✅ Provider contract test suite (shared by all providers, scripted HTTP server)
+- ✅ Markdown rendering with inert links/images and code highlighting
+- ⬜ Secrets in the OS keychain; API-key authentication
+- ⬜ Cloud providers (OpenAI, Anthropic, Gemini) behind the privacy opt-in
+- ⬜ Verification against real Ollama / LM Studio installations (only protocol
+  mocks so far)
 
 ## Phase 3 — Embedded runtime ⬜
 
@@ -63,5 +66,6 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Phase 2: Ollama provider + OpenAI-compatible provider with a shared contract
-test suite, provider settings in the UI, and Markdown rendering in chat.
+Finish Phase 2 (keychain-backed API keys, cloud providers behind the privacy
+opt-in, verification against real servers), then Phase 3: managed
+`llama-server` runtime with GGUF import and hardware detection.

@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use jarvis_ai::ProviderId;
+use jarvis_ai::{EchoProvider, ProviderConfig};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
 
 use crate::error::CoreError;
+use crate::routing::ModelRouting;
 
 /// Version of the settings schema written by this build.
 pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
@@ -23,7 +24,8 @@ pub const MIN_REQUEST_TIMEOUT_SECS: u32 = 10;
 pub const MAX_REQUEST_TIMEOUT_SECS: u32 = 3600;
 pub const MIN_IDLE_TIMEOUT_SECS: u32 = 5;
 pub const MAX_IDLE_TIMEOUT_SECS: u32 = 600;
-const MAX_MODEL_ID_LEN: usize = 256;
+pub const MAX_PROVIDERS: usize = 16;
+pub(crate) const MAX_MODEL_ID_LEN: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -79,23 +81,24 @@ pub struct InterfaceSettings {
 #[serde(rename_all = "camelCase", default)]
 #[ts(export_to = "core.ts")]
 pub struct AiSettings {
-    /// Provider used when a request does not name one.
-    pub default_provider_id: Option<ProviderId>,
-    /// Model used when a request does not name one.
-    pub default_model: Option<String>,
+    /// AI servers JARVIS connects to, in priority order.
+    pub providers: Vec<ProviderConfig>,
+    /// Explicit model choices per task category; unset means automatic.
+    pub routing: ModelRouting,
     /// Upper bound for a whole chat request.
     pub request_timeout_secs: u32,
-    /// Maximum silence between two streamed chunks.
+    /// Maximum silence between two streamed chunks. Also bounds the wait
+    /// for the first token, which includes model loading.
     pub idle_timeout_secs: u32,
 }
 
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
-            default_provider_id: None,
-            default_model: None,
+            providers: ProviderConfig::defaults(),
+            routing: ModelRouting::default(),
             request_timeout_secs: 300,
-            idle_timeout_secs: 60,
+            idle_timeout_secs: 120,
         }
     }
 }
@@ -167,18 +170,8 @@ impl Settings {
         if ai.idle_timeout_secs > ai.request_timeout_secs {
             problems.push("ai.idleTimeoutSecs must not exceed ai.requestTimeoutSecs".to_owned());
         }
-        if let Some(model) = &ai.default_model
-            && (model.trim().is_empty() || model.len() > MAX_MODEL_ID_LEN)
-        {
-            problems.push(format!(
-                "ai.defaultModel must be 1..={MAX_MODEL_ID_LEN} characters"
-            ));
-        }
-        if let Some(provider) = &ai.default_provider_id
-            && !is_valid_provider_id(provider.as_str())
-        {
-            problems.push("ai.defaultProviderId has an invalid format".to_owned());
-        }
+        validate_providers(&ai.providers, &mut problems);
+        validate_routing(&ai.routing, &ai.providers, &mut problems);
 
         if problems.is_empty() {
             Ok(())
@@ -191,12 +184,51 @@ impl Settings {
     }
 }
 
-fn is_valid_provider_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
+fn validate_providers(providers: &[ProviderConfig], problems: &mut Vec<String>) {
+    if providers.len() > MAX_PROVIDERS {
+        problems.push(format!(
+            "at most {MAX_PROVIDERS} AI providers can be configured"
+        ));
+    }
+    for (index, provider) in providers.iter().enumerate() {
+        if let Err(problem) = provider.validate() {
+            problems.push(format!("ai.providers: {problem}"));
+        }
+        if provider.id.as_str() == EchoProvider::ID {
+            problems.push(format!(
+                "ai.providers: id \"{}\" is reserved",
+                EchoProvider::ID
+            ));
+        }
+        if providers[..index].iter().any(|p| p.id == provider.id) {
+            problems.push(format!("ai.providers: duplicate id \"{}\"", provider.id));
+        }
+    }
+}
+
+fn validate_routing(
+    routing: &ModelRouting,
+    providers: &[ProviderConfig],
+    problems: &mut Vec<String>,
+) {
+    for (category, model_ref) in routing.entries() {
+        let known = model_ref.provider_id.as_str() == EchoProvider::ID
+            || providers.iter().any(|p| p.id == model_ref.provider_id);
+        if !known {
+            problems.push(format!(
+                "ai.routing.{}: unknown provider \"{}\"",
+                category.key(),
+                model_ref.provider_id
+            ));
+        }
+        let model = model_ref.model.trim();
+        if model.is_empty() || model.len() > MAX_MODEL_ID_LEN {
+            problems.push(format!(
+                "ai.routing.{}: model id must be 1..={MAX_MODEL_ID_LEN} characters",
+                category.key()
+            ));
+        }
+    }
 }
 
 /// Where the currently active settings came from.
@@ -392,6 +424,8 @@ async fn write_atomic(path: &Path, settings: &Settings) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::ModelRef;
+    use jarvis_ai::ProviderId;
 
     fn config_path(dir: &tempfile::TempDir) -> PathBuf {
         dir.path().join("config").join("config.toml")
@@ -409,8 +443,10 @@ mod tests {
         let mut settings = Settings::default();
         settings.ai.request_timeout_secs = 1;
         settings.ai.idle_timeout_secs = 5000;
-        settings.ai.default_model = Some("  ".into());
-        settings.ai.default_provider_id = Some(ProviderId::new("Bad Id!"));
+        settings.ai.routing.general = Some(ModelRef {
+            provider_id: ProviderId::new("nowhere"),
+            model: "  ".into(),
+        });
 
         let err = settings.validate().expect_err("invalid");
         let message = err.to_string();
@@ -419,8 +455,46 @@ mod tests {
             message.contains("idleTimeoutSecs must be between"),
             "{message}"
         );
-        assert!(message.contains("defaultModel"), "{message}");
-        assert!(message.contains("defaultProviderId"), "{message}");
+        assert!(
+            message.contains("unknown provider \"nowhere\""),
+            "{message}"
+        );
+        assert!(
+            message.contains("ai.routing.general: model id"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_bad_provider_lists() {
+        let mut settings = Settings::default();
+        let mut duplicate = settings.ai.providers[0].clone();
+        duplicate.base_url = "http://user:secret@127.0.0.1:11434".into();
+        settings.ai.providers.push(duplicate);
+        let mut reserved = settings.ai.providers[0].clone();
+        reserved.id = ProviderId::new(EchoProvider::ID);
+        settings.ai.providers.push(reserved);
+
+        let message = settings.validate().expect_err("invalid").to_string();
+        assert!(message.contains("duplicate id \"ollama\""), "{message}");
+        assert!(
+            message.contains("must not contain credentials"),
+            "{message}"
+        );
+        assert!(message.contains("is reserved"), "{message}");
+    }
+
+    #[test]
+    fn provider_lists_roundtrip_through_toml() {
+        let mut settings = Settings::default();
+        settings.ai.providers[1].enabled = false;
+        settings.ai.routing.coding = Some(ModelRef {
+            provider_id: ProviderId::new("ollama"),
+            model: "qwen2.5-coder:7b".into(),
+        });
+        let text = toml::to_string_pretty(&settings).expect("serialize");
+        assert!(text.contains("[[ai.providers]]"), "{text}");
+        assert_eq!(parse_settings(&text).expect("parse"), settings);
     }
 
     #[test]
@@ -463,7 +537,10 @@ mod tests {
         let mut settings = store.current();
         settings.general.assistant_language = AssistantLanguage::En;
         settings.privacy.allow_cloud_providers = true;
-        settings.ai.default_model = Some("llama3.2:3b".into());
+        settings.ai.routing.general = Some(ModelRef {
+            provider_id: ProviderId::new("ollama"),
+            model: "llama3.2:3b".into(),
+        });
         store.update(settings.clone()).await.expect("update");
 
         let reloaded = ConfigStore::load(path).await;

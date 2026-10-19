@@ -5,30 +5,36 @@
 //! API. It has no dependency on Tauri or any UI technology: the desktop shell
 //! is just one adapter on top of it.
 
+pub mod catalog;
 pub mod chat;
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod routing;
 mod ui_errors;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use jarvis_ai::{AiProvider, EchoProvider, ModelInfo, ProviderDescriptor, ProviderRegistry};
+use jarvis_ai::{
+    AiError, AiProvider, DataLocality, EchoProvider, HttpProviderFactory, ModelInfo,
+    ProviderConfig, ProviderFactory, ProviderRegistry,
+};
 use jarvis_events::{EventBus, EventCategory};
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::catalog::ModelCatalog;
+
+pub use catalog::ProviderModels;
 pub use chat::{ChatEventSink, ChatService, ChatStartRequest, ChatStreamEvent, SinkClosed};
 pub use config::{ConfigSource, ConfigStore, Settings};
 pub use error::{CoreError, ErrorCode, ErrorPayload};
 pub use health::{ComponentHealth, HealthReport, HealthStatus};
+pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
-
-/// Timeout for listing the models of one provider.
-const LIST_MODELS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Filesystem locations used by JARVIS. Resolved by the host application
 /// (e.g. via Tauri's path resolver) and passed in, so the core never guesses.
@@ -68,12 +74,15 @@ pub struct AppInfo {
     pub started_at_ms: u64,
 }
 
-/// Models offered by one provider, or the reason they could not be listed.
+/// Result of probing a provider configuration without saving it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "core.ts")]
-pub struct ProviderModels {
-    pub provider: ProviderDescriptor,
+pub struct ProviderTestResult {
+    pub reachable: bool,
+    /// Privacy class derived from the URL.
+    pub locality: DataLocality,
+    pub latency_ms: u32,
     pub models: Vec<ModelInfo>,
     pub error: Option<String>,
 }
@@ -83,22 +92,33 @@ pub struct ProviderModels {
 pub struct CoreOptions {
     pub paths: AppPaths,
     pub app_version: String,
-    pub providers: Vec<Arc<dyn AiProvider>>,
+    /// Providers that exist regardless of settings (the diagnostic provider).
+    pub static_providers: Vec<Arc<dyn AiProvider>>,
+    /// Builds providers from `ai.providers`; `None` disables configured
+    /// providers (used by tests that must not touch the network).
+    pub provider_factory: Option<Arc<dyn ProviderFactory>>,
 }
 
 impl CoreOptions {
-    /// Default options: only the diagnostic echo provider is registered.
+    /// Production defaults: the diagnostic echo provider plus HTTP providers
+    /// from settings.
     pub fn new(paths: AppPaths, app_version: impl Into<String>) -> Self {
         Self {
             paths,
             app_version: app_version.into(),
-            providers: vec![Arc::new(EchoProvider::new())],
+            static_providers: vec![Arc::new(EchoProvider::new())],
+            provider_factory: Some(Arc::new(HttpProviderFactory::new())),
         }
     }
 
-    /// Replaces the registered AI providers.
-    pub fn with_providers(mut self, providers: Vec<Arc<dyn AiProvider>>) -> Self {
-        self.providers = providers;
+    /// Replaces the providers that exist regardless of settings.
+    pub fn with_static_providers(mut self, providers: Vec<Arc<dyn AiProvider>>) -> Self {
+        self.static_providers = providers;
+        self
+    }
+
+    pub fn with_provider_factory(mut self, factory: Option<Arc<dyn ProviderFactory>>) -> Self {
+        self.provider_factory = factory;
         self
     }
 }
@@ -115,19 +135,24 @@ pub struct JarvisCore {
     /// Created lazily: the first CPU measurement setup takes ~1.5 s on
     /// Windows, which must not delay startup.
     monitor: Arc<MonitorCell>,
+    static_providers: Vec<Arc<dyn AiProvider>>,
+    provider_factory: Option<Arc<dyn ProviderFactory>>,
     providers: Arc<ProviderRegistry>,
+    catalog: Arc<ModelCatalog>,
     chat: ChatService,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
 impl JarvisCore {
     /// Initializes all core subsystems. Must be called inside a Tokio runtime.
+    /// Does not contact AI servers; they are probed on demand.
     pub async fn initialize(options: CoreOptions) -> Result<Arc<Self>, CoreError> {
         let started = Instant::now();
         let CoreOptions {
             paths,
             app_version,
-            providers,
+            static_providers,
+            provider_factory,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -178,14 +203,21 @@ impl JarvisCore {
         );
 
         let registry = Arc::new(ProviderRegistry::new());
-        for provider in providers {
-            let name = provider.descriptor().display_name.clone();
-            registry.register(provider)?;
-            events.info(EventCategory::Ai, format!("AI provider registered: {name}"));
-        }
+        registry.replace_all(build_providers(
+            &static_providers,
+            provider_factory.as_deref(),
+            &config.current().ai.providers,
+            &events,
+        ))?;
+        events.info(
+            EventCategory::Ai,
+            format!("AI providers: {}", provider_names(&registry)),
+        );
 
+        let catalog = Arc::new(ModelCatalog::default());
         let chat = ChatService::new(
             Arc::clone(&registry),
+            Arc::clone(&catalog),
             Arc::clone(&config),
             events.clone(),
             tokio::runtime::Handle::current(),
@@ -205,7 +237,10 @@ impl JarvisCore {
             config,
             platform,
             monitor,
+            static_providers,
+            provider_factory,
             providers: registry,
+            catalog,
             chat,
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
@@ -252,10 +287,29 @@ impl JarvisCore {
         self.config.current()
     }
 
-    /// Validates, persists and activates new settings.
+    /// Validates, persists and activates new settings. Provider changes take
+    /// effect immediately; running chats keep their provider.
     pub async fn update_settings(&self, settings: Settings) -> Result<Settings, CoreError> {
+        let previous = self.config.current();
         let saved = self.config.update(settings).await?;
         self.events.info(EventCategory::Config, "Settings saved");
+
+        if previous.ai.providers != saved.ai.providers {
+            // Always rebuild from the latest saved settings, so concurrent
+            // updates cannot leave an older provider set active.
+            let current = self.config.current();
+            self.providers.replace_all(build_providers(
+                &self.static_providers,
+                self.provider_factory.as_deref(),
+                &current.ai.providers,
+                &self.events,
+            ))?;
+            self.catalog.invalidate().await;
+            self.events.info(
+                EventCategory::Ai,
+                format!("AI providers reloaded: {}", provider_names(&self.providers)),
+            );
+        }
         Ok(saved)
     }
 
@@ -267,34 +321,67 @@ impl JarvisCore {
             .map_err(|err| CoreError::Internal(format!("metrics sampling failed: {err}")))
     }
 
-    /// Lists models of every registered provider. Provider failures are
-    /// reported per provider instead of failing the whole call.
-    pub async fn list_models(&self) -> Vec<ProviderModels> {
-        let lookups = self
-            .providers
-            .providers()
-            .into_iter()
-            .map(|provider| async move {
-                let descriptor = provider.descriptor().clone();
-                match tokio::time::timeout(LIST_MODELS_TIMEOUT, provider.list_models()).await {
-                    Ok(Ok(models)) => ProviderModels {
-                        provider: descriptor,
-                        models,
-                        error: None,
-                    },
-                    Ok(Err(err)) => ProviderModels {
-                        provider: descriptor,
-                        models: Vec::new(),
-                        error: Some(err.to_string()),
-                    },
-                    Err(_) => ProviderModels {
-                        provider: descriptor,
-                        models: Vec::new(),
-                        error: Some("listing models timed out".to_owned()),
-                    },
-                }
-            });
-        futures::future::join_all(lookups).await
+    /// Models of every registered provider (cached briefly; `refresh` forces
+    /// a new query). Provider failures are reported per provider.
+    pub async fn list_models(&self, refresh: bool) -> Vec<ProviderModels> {
+        self.catalog.get(&self.providers, refresh).await.to_vec()
+    }
+
+    /// How each task category is currently routed.
+    pub async fn resolve_routes(&self) -> Vec<RouteResolution> {
+        let settings = self.config.current();
+        let catalog = self.catalog.get(&self.providers, false).await;
+        routing::resolve_all(
+            &settings.ai.routing,
+            &catalog,
+            settings.privacy.allow_cloud_providers,
+        )
+    }
+
+    /// Connects to a provider configuration without saving it and lists its
+    /// models. No conversation data is sent.
+    pub async fn test_provider(
+        &self,
+        config: ProviderConfig,
+    ) -> Result<ProviderTestResult, CoreError> {
+        config.validate().map_err(CoreError::Validation)?;
+        let factory = self
+            .provider_factory
+            .as_ref()
+            .ok_or_else(|| AiError::Unsupported {
+                provider: config.id.clone(),
+                operation: "connection test",
+            })?;
+        let provider = factory.create(&config)?;
+        let locality = provider.descriptor().locality;
+
+        let started = Instant::now();
+        let result =
+            tokio::time::timeout(catalog::LIST_MODELS_TIMEOUT, provider.list_models()).await;
+        let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        let (models, error) = match result {
+            Ok(Ok(models)) => (models, None),
+            Ok(Err(err)) => (Vec::new(), Some(err.to_string())),
+            Err(_) => (Vec::new(), Some("connection test timed out".to_owned())),
+        };
+        self.events.info(
+            EventCategory::Ai,
+            match &error {
+                None => format!(
+                    "Provider test \"{}\": {} model(s) in {latency_ms} ms",
+                    config.display_name,
+                    models.len()
+                ),
+                Some(err) => format!("Provider test \"{}\" failed: {err}", config.display_name),
+            },
+        );
+        Ok(ProviderTestResult {
+            reachable: error.is_none(),
+            locality,
+            latency_ms,
+            models,
+            error,
+        })
     }
 
     /// Runs all component health probes concurrently.
@@ -304,21 +391,22 @@ impl JarvisCore {
         let display_server = self.platform.display_server;
 
         let (config, storage, events, platform, ai) = tokio::join!(
-            health::run_probe("config", "Configuration", async {
+            health::run_probe("config", "Configuration", health::PROBE_TIMEOUT, async {
                 health::config_health(&config_source)
             }),
             health::run_probe(
                 "storage",
                 "Local storage",
+                health::PROBE_TIMEOUT,
                 health::storage_health(&self.paths.data_dir)
             ),
-            health::run_probe("events", "Event bus", async {
+            health::run_probe("events", "Event bus", health::PROBE_TIMEOUT, async {
                 (
                     HealthStatus::Healthy,
                     format!("{subscribers} live subscriber(s)"),
                 )
             }),
-            health::run_probe("platform", "Platform layer", async {
+            health::run_probe("platform", "Platform layer", health::PROBE_TIMEOUT, async {
                 (
                     HealthStatus::Healthy,
                     format!("Display server: {display_server:?}"),
@@ -327,6 +415,7 @@ impl JarvisCore {
             health::run_probe(
                 "ai",
                 "AI providers",
+                health::AI_PROBE_TIMEOUT,
                 health::ai_health(self.providers.providers())
             ),
         );
@@ -363,6 +452,40 @@ impl JarvisCore {
         self.events
             .info(EventCategory::Lifecycle, "JARVIS core shutting down");
     }
+}
+
+/// Static providers followed by the enabled configured providers, in
+/// configuration order. Invalid configurations are skipped with a warning.
+fn build_providers(
+    static_providers: &[Arc<dyn AiProvider>],
+    factory: Option<&dyn ProviderFactory>,
+    configs: &[ProviderConfig],
+    events: &EventBus,
+) -> Vec<Arc<dyn AiProvider>> {
+    let mut providers = static_providers.to_vec();
+    if let Some(factory) = factory {
+        for config in configs.iter().filter(|c| c.enabled) {
+            match factory.create(config) {
+                Ok(provider) => providers.push(provider),
+                Err(err) => {
+                    events.warning(
+                        EventCategory::Ai,
+                        format!("AI provider \"{}\" skipped: {err}", config.display_name),
+                    );
+                }
+            }
+        }
+    }
+    providers
+}
+
+fn provider_names(registry: &ProviderRegistry) -> String {
+    registry
+        .descriptors()
+        .into_iter()
+        .map(|d| d.display_name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 type MonitorCell = tokio::sync::OnceCell<Arc<SystemMonitor>>;

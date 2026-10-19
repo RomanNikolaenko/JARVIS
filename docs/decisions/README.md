@@ -11,5 +11,7 @@ earlier one instead of editing it.
 | [0003](0003-ai-provider-abstraction.md) | Provider-agnostic AI abstraction, streaming and cancellation | Accepted |
 | [0004](0004-settings-storage.md) | Settings in a validated TOML file with atomic writes | Accepted |
 | [0005](0005-logging-and-events.md) | Diagnostic logging vs. user-facing system events | Accepted |
+| [0006](0006-http-ai-providers.md) | HTTP AI providers and URL-based privacy classification | Accepted |
+| [0007](0007-model-routing.md) | Model routing by task category | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.

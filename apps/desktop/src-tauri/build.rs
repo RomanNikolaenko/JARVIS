@@ -15,6 +15,8 @@ const COMMANDS: &[&str] = &[
     "update_settings",
     "get_recent_events",
     "list_ai_models",
+    "get_model_routes",
+    "test_ai_provider",
     "start_chat",
     "cancel_chat",
     "report_ui_error",

@@ -4,19 +4,24 @@
     <div class="controls">
       <label class="model-select">
         <span>Model</span>
-        <select
-          [disabled]="store.busy() || store.modelOptions().length === 0"
-          (change)="onModelChange($event)"
-        >
-          @for (option of store.modelOptions(); track optionKey(option)) {
-            <option [value]="optionKey(option)" [selected]="optionKey(option) === selectedKey()">
-              {{ option.model.displayName }} — {{ option.provider.displayName }}
-            </option>
-          } @empty {
-            <option value="">No models available</option>
+        <select [disabled]="store.busy()" (change)="onModelChange($event)">
+          <option [value]="automatic" [selected]="selectedKey() === automatic">
+            {{ automaticLabel() }}
+          </option>
+          @for (group of groups(); track group.label) {
+            <optgroup [label]="group.label">
+              @for (option of group.options; track keyOf(option)) {
+                <option [value]="keyOf(option)" [selected]="keyOf(option) === selectedKey()">
+                  {{ option.model.displayName }}
+                </option>
+              }
+            </optgroup>
           }
         </select>
       </label>
+      <button type="button" class="ghost" (click)="refreshModels()" title="Reload models">
+        <jv-icon name="refresh" [size]="16" />
+      </button>
       <button
         type="button"
         class="ghost"
@@ -33,9 +38,9 @@
     <div class="notice">
       <jv-icon name="warning" [size]="16" />
       <span>
-        No AI model is connected yet. The <strong>diagnostic echo</strong> provider repeats your
-        message to verify streaming and cancellation. Local models (Ollama, LM Studio, llama.cpp)
-        are added in Phase 2.
+        No AI model is reachable. Start <strong>Ollama</strong> or <strong>LM Studio</strong>, or
+        configure a server on the <a routerLink="/models">Models</a> screen. Until then the
+        diagnostic echo provider answers by repeating your message.
       </span>
     </div>
   }
@@ -75,12 +80,18 @@
           }
         </div>
         @if (entry.content) {
-          <div class="bubble">
-            <span class="text">{{ entry.content }}</span>
-            @if (entry.status === 'streaming') {
-              <span class="cursor"></span>
-            }
-          </div>
+          @if (entry.role === 'assistant') {
+            <div class="bubble">
+              <div class="jv-markdown" [innerHTML]="entry.content | markdown"></div>
+              @if (entry.status === 'streaming') {
+                <span class="cursor"></span>
+              }
+            </div>
+          } @else {
+            <div class="bubble">
+              <span class="text">{{ entry.content }}</span>
+            </div>
+          }
         } @else if (entry.status === 'streaming') {
           <div class="bubble thinking"><span></span><span></span><span></span></div>
         }
@@ -92,7 +103,7 @@
       <div class="empty">
         <div class="empty-title">How can I help?</div>
         <div class="dim">
-          Messages stay on this device. Enter sends, Shift+Enter adds a new line.
+          Conversations are not saved yet. Enter sends, Shift+Enter adds a new line.
         </div>
       </div>
     }

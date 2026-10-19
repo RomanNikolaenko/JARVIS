@@ -31,8 +31,8 @@ crates with explicit interfaces) instead of services. See
                │ Rust API (no Tauri types)   │
 ┌──────────────┴─────────────────────────────▼──────────────────┐
 │ Domain — Rust core crates (crates/*)                          │
-│ jarvis-core  → composition root: config, health, chat         │
-│ jarvis-ai    → AiProvider trait, registry, providers          │
+│ jarvis-core  → composition root: config, health, chat, router │
+│ jarvis-ai    → AiProvider trait, Ollama/OpenAI-compatible     │
 │ jarvis-events→ event bus + system event log                   │
 │ jarvis-platform → OS adapters, system monitor                 │
 └───────────────────────────────────────────────────────────────┘
@@ -50,16 +50,19 @@ crates/
   jarvis-events/              EventBus, SystemEvent, bounded history
   jarvis-platform/            PlatformAdapter trait, Windows/Linux adapters,
                               PlatformInfo, SystemMonitor (sysinfo)
-  jarvis-ai/                  AiProvider trait, ProviderRegistry, EchoProvider
+  jarvis-ai/                  AiProvider trait, ProviderRegistry, ProviderFactory,
+                              Ollama + OpenAI-compatible HTTP providers,
+                              EchoProvider, provider config + URL privacy class
   jarvis-core/                JarvisCore, Settings/ConfigStore, health checks,
-                              ChatService, error codes
+                              ChatService, model catalog + router, error codes
 apps/desktop/
   src/                        Angular UI
     app/core/ipc/             TauriBridge (only user of @tauri-apps/api), JarvisApi
     app/core/state/           signal stores (system, events, settings, chat)
     app/core/errors/          global error handler → core log
-    app/features/             dashboard, chat, events, settings (lazy loaded)
-    app/shared/               HUD panel, AI core, icons, status badge, formatters
+    app/features/             dashboard, chat, models, events, settings (lazy)
+    app/shared/               HUD panel, AI core, icons, status badge, Markdown,
+                              formatters
   src-tauri/                  Tauri 2 shell (crate jarvis-desktop)
     capabilities/             IPC permissions per window
     build.rs                  app command manifest, Windows manifest
@@ -87,7 +90,9 @@ Its public API is UI-agnostic:
 | `health()` | concurrent component probes with timeouts → `HealthReport` |
 | `settings()` / `update_settings()` | validated, persisted settings |
 | `system_metrics()` | CPU/RAM sample on a blocking thread |
-| `list_models()` | models per provider; per-provider errors, 5 s timeout |
+| `list_models(refresh)` | models per provider from the cached catalog; per-provider errors |
+| `resolve_routes()` | which model each task category currently uses |
+| `test_provider(config)` | connect to an unsaved provider config and list its models |
 | `chat()` | `ChatService`: start / cancel streamed chats |
 | `record_ui_error()` | truncated, rate-limited UI error reports |
 | `shutdown()` | cancels running work |
@@ -105,9 +110,11 @@ the file is backed up before the next save. See
 [ADR 0004](docs/decisions/0004-settings-storage.md).
 
 **Health.** Probes: configuration, local storage, event bus, platform layer,
-AI providers. Each probe has a 3 s timeout. The AI component is `healthy` only
-if at least one *real* provider answers; with only the diagnostic provider it
-is honestly `degraded`.
+AI providers. Probes time out after 3 s (AI: 6 s, 5 s per provider, because a
+refused local connection alone takes ~2 s on Windows). The AI component is
+`healthy` if at least one *real* provider answers (unreachable optional
+providers are listed in the message); with only the diagnostic provider it is
+honestly `degraded`.
 
 ### 4.2 `jarvis-ai` — provider abstraction
 
@@ -136,9 +143,36 @@ pub trait AiProvider: Send + Sync + Debug {
 - **Tool calling** is represented in the capability model; its API arrives with
   the agent system (Phase 5).
 
-Only `EchoProvider` exists today: a clearly labelled *diagnostic* provider that
-streams the user's message back word by word to exercise streaming,
-cancellation and error paths. See [ADR 0003](docs/decisions/0003-ai-provider-abstraction.md).
+Implementations ([ADR 0006](docs/decisions/0006-http-ai-providers.md)):
+
+| Provider | Protocol | Capabilities |
+| --- | --- | --- |
+| `OllamaProvider` | `/api/chat` (NDJSON stream), `/api/tags`, `/api/show`, `/api/embed` | reported by the server (`completion`, `vision`, `tools`, `embedding`), context length from `model_info` |
+| `OpenAiCompatibleProvider` | `/chat/completions` (SSE), `/models`, `/embeddings` | inferred conservatively from the model id (chat or embeddings; never vision/tools) |
+| `EchoProvider` | none | diagnostic only: streams the user's message back |
+
+Configured providers (`ai.providers` in settings) are turned into providers by
+a `ProviderFactory` (injected; tests use fakes). Their `DataLocality` is
+derived from the URL: loopback → `onDevice`; private/link-local/CGNAT,
+single-label hosts and `.local`/`.lan`/`.home.arpa`/`.internal` →
+`localNetwork`; anything else → `thirdPartyCloud`. The shared HTTP client has
+no proxy, a 5 s connect timeout and retries idempotent requests once after
+timeouts or 502–504. Streaming decoders handle lines and UTF-8 sequences split
+across network chunks. See also [ADR 0003](docs/decisions/0003-ai-provider-abstraction.md).
+
+### 4.2a Model catalog and router (`jarvis-core::catalog`, `::routing`)
+
+- **Catalog:** cached snapshot of every provider's models (30 s; 5 s if a
+  provider failed), refreshed on demand, invalidated when providers change.
+  Concurrent callers share one refresh.
+- **Router:** task categories `general`, `reasoning`, `coding`, `vision`,
+  `embeddings`, `toolCalling` with required capabilities. Explicit choices in
+  `ai.routing` win (`reasoning`/`coding` inherit `general`); otherwise the
+  router ranks real before diagnostic, on-device before LAN before cloud, then
+  provider and model order. Cloud models are candidates only when allowed. See
+  [ADR 0007](docs/decisions/0007-model-routing.md).
+- **Reload:** saving settings with changed providers rebuilds the registry
+  atomically; running chats keep their provider handle.
 
 ### 4.3 Chat orchestration (`jarvis-core::chat`)
 
@@ -146,10 +180,13 @@ cancellation and error paths. See [ADR 0003](docs/decisions/0003-ai-provider-abs
 
 1. validates input (≤ 200 messages, ≤ 32 000 chars each, ≤ 256 000 total,
    at least one user message, temperature 0–2, …);
-2. resolves provider (request → settings → first real provider → diagnostic);
-3. **privacy policy:** rejects `thirdPartyCloud` providers unless
-   `privacy.allowCloudProviders` is enabled (logged as a security event);
-4. resolves the model and checks its `chat` capability;
+2. resolves provider and model: an explicit `providerId` + `model` pair is
+   used as is; otherwise the catalog and the router (`general` category)
+   decide;
+3. **privacy policy:** `thirdPartyCloud` providers are rejected unless
+   `privacy.allowCloudProviders` is enabled — for explicit pairs before any
+   network request (blocked attempts are logged as security events);
+4. checks the model's `chat` capability;
 5. enforces ≤ 4 concurrent requests;
 6. spawns a task that streams `ChatStreamEvent`s to the sink with an overall
    timeout (`ai.requestTimeoutSecs`) and an idle timeout between chunks
@@ -205,7 +242,9 @@ notification instead of blocking publishers.
 | `get_settings` | – | `Settings` |
 | `update_settings` | `settings: Settings` | `Settings` |
 | `get_recent_events` | `limit?: number` (1–500) | `SystemEvent[]` |
-| `list_ai_models` | – | `ProviderModels[]` |
+| `list_ai_models` | `refresh?: boolean` | `ProviderModels[]` |
+| `get_model_routes` | – | `RouteResolution[]` |
+| `test_ai_provider` | `config: ProviderConfig` | `ProviderTestResult` |
 | `start_chat` | `request: ChatStartRequest`, `onEvent: Channel<ChatStreamEvent>` | request id |
 | `cancel_chat` | `requestId: string` | `boolean` |
 | `report_ui_error` | `report: UiErrorReport` | – |
@@ -229,7 +268,16 @@ must be granted by a capability; anything not granted is denied. See
 - Stores: `SystemStore` (info, health every 15 s, metrics every 2 s on the
   dashboard only, paused while the window is hidden), `EventLogStore`
   (subscribe first, then load history, dedupe by id), `SettingsStore`,
-  `ChatStore` (streaming state machine `idle → connecting → streaming → idle`).
+  `ModelsStore` (providers, catalog, routes, provider tests), `ChatStore`
+  (streaming state machine `idle → connecting → streaming → idle`;
+  "Automatic" lets the core route).
+- **Models screen** (AI Model Manager): add/edit/enable/remove providers with
+  a connection test, model list with capabilities and context length,
+  per-category routing.
+- **Markdown** in assistant messages (`marked` + `highlight.js`, lazy-loaded
+  with the chat). Model output is untrusted: raw HTML is shown as text, links
+  are inert (no navigation), images become alt text, and Angular sanitizes the
+  result again; the CSP blocks scripts and remote images regardless.
 - Unhandled UI errors are reported to the core (throttled) so they appear in
   logs and the event log.
 - Design tokens in `styles.scss` (graphite background, blue/teal accents),
@@ -250,7 +298,13 @@ must be granted by a capability; anything not granted is denied. See
 
 ## 6. Known limitations (Phase 1)
 
-- No real AI provider yet; only the diagnostic echo provider.
+- No API keys yet: servers that require authentication cannot be used; cloud
+  providers (OpenAI, Anthropic, Gemini) need keychain-backed secrets first.
+- No embedded runtime yet (Phase 3): a local server (Ollama, LM Studio, …)
+  must be installed and running.
+- Capabilities of OpenAI-compatible models are inferred, not reported.
+- Tested against protocol mocks; compatibility with every server version is
+  not guaranteed.
 - Conversations live in UI memory only; nothing is persisted (Phase 4).
 - The UI sends up to the last 40 messages as context; token-aware context
   management arrives with the Memory Engine.

@@ -3,17 +3,22 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 1 — Foundation.** The application shell, Rust core, typed
-> IPC, health checks, settings, logging, system event log, dashboard and a
-> streaming chat UI work. **No real AI model is connected yet**: chat uses a
-> clearly labelled *diagnostic echo* provider that verifies streaming and
-> cancellation. Local AI (Ollama, LM Studio, llama.cpp) is the next phase.
-> See [ROADMAP.md](ROADMAP.md).
+> **Status: Phase 2 — AI integration (in progress).** JARVIS chats with local
+> models served by **Ollama** or any **OpenAI-compatible** server (LM Studio,
+> llama.cpp server, vLLM, …) on this machine or the local network, with
+> streaming, cancellation, Markdown and per-task model routing. Not yet: API
+> keys / cloud providers, the embedded llama.cpp runtime, memory, agents,
+> voice. See [ROADMAP.md](ROADMAP.md).
 
 ## What works today
 
 - Desktop app (Tauri 2 + Angular 22) with a dark HUD-style UI:
-  Dashboard, Chat, Event log, Settings.
+  Dashboard, Chat (Markdown, code highlighting, stop), Models, Event log,
+  Settings.
+- Local AI: Ollama and OpenAI-compatible servers, auto-detected on their
+  default ports; add servers on the Models screen with a connection test.
+- Model routing per task (general, reasoning, coding, vision, embeddings,
+  tool calling), automatic or explicit; cloud hosts blocked unless allowed.
 - Rust core (`jarvis-core`) independent of the UI shell:
   - health check of all core components with timeouts;
   - settings in `config.toml` with validation, atomic writes and safe recovery;
@@ -37,6 +42,10 @@ cd apps/desktop
 npm ci
 npm run tauri dev
 ```
+
+To chat with a real model, run [Ollama](https://ollama.com) (`ollama pull
+llama3.2`) or LM Studio's local server; JARVIS finds both on their default
+ports. Details: [DEVELOPMENT.md → Local AI](DEVELOPMENT.md#local-ai).
 
 Full instructions (Linux packages, tests, release builds, troubleshooting):
 [DEVELOPMENT.md](DEVELOPMENT.md).

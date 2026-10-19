@@ -1,12 +1,12 @@
-use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::{AiError, AiProvider, ProviderDescriptor, ProviderId};
 
-/// Thread-safe registry of available AI providers, keyed by [`ProviderId`].
+/// Thread-safe registry of available AI providers. Keeps registration order,
+/// which is the user's configuration order.
 #[derive(Debug, Default)]
 pub struct ProviderRegistry {
-    providers: RwLock<BTreeMap<ProviderId, Arc<dyn AiProvider>>>,
+    providers: RwLock<Vec<Arc<dyn AiProvider>>>,
 }
 
 impl ProviderRegistry {
@@ -16,15 +16,31 @@ impl ProviderRegistry {
 
     /// Registers a provider. Fails if a provider with the same id exists.
     pub fn register(&self, provider: Arc<dyn AiProvider>) -> Result<(), AiError> {
-        let id = provider.descriptor().id.clone();
         let mut providers = self
             .providers
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        if providers.contains_key(&id) {
-            return Err(AiError::AlreadyRegistered(id));
+        let id = &provider.descriptor().id;
+        if providers.iter().any(|p| p.descriptor().id == *id) {
+            return Err(AiError::AlreadyRegistered(id.clone()));
         }
-        providers.insert(id, provider);
+        providers.push(provider);
+        Ok(())
+    }
+
+    /// Atomically replaces all providers. Requests already running keep
+    /// their provider handle and are not affected.
+    pub fn replace_all(&self, providers: Vec<Arc<dyn AiProvider>>) -> Result<(), AiError> {
+        for (index, provider) in providers.iter().enumerate() {
+            let id = &provider.descriptor().id;
+            if providers[..index].iter().any(|p| p.descriptor().id == *id) {
+                return Err(AiError::AlreadyRegistered(id.clone()));
+            }
+        }
+        *self
+            .providers
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = providers;
         Ok(())
     }
 
@@ -32,19 +48,18 @@ impl ProviderRegistry {
         self.providers
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(id)
+            .iter()
+            .find(|p| p.descriptor().id == *id)
             .cloned()
             .ok_or_else(|| AiError::ProviderNotFound(id.clone()))
     }
 
-    /// All providers, ordered by id.
+    /// All providers in registration order.
     pub fn providers(&self) -> Vec<Arc<dyn AiProvider>> {
         self.providers
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect()
+            .clone()
     }
 
     pub fn descriptors(&self) -> Vec<ProviderDescriptor> {
@@ -69,7 +84,7 @@ impl ProviderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::EchoProvider;
+    use crate::{EchoProvider, HttpProviderFactory, ProviderConfig, ProviderFactory};
 
     #[test]
     fn registers_and_looks_up_providers() {
@@ -99,5 +114,36 @@ mod tests {
 
         let missing = registry.get(&ProviderId::new("missing"));
         assert!(matches!(missing, Err(AiError::ProviderNotFound(_))));
+    }
+
+    #[test]
+    fn replace_all_keeps_order_and_rejects_duplicates() {
+        let registry = ProviderRegistry::new();
+        let factory = HttpProviderFactory::new();
+        let configured: Vec<Arc<dyn AiProvider>> = ProviderConfig::defaults()
+            .iter()
+            .map(|c| factory.create(c).expect("provider"))
+            .collect();
+        let mut all: Vec<Arc<dyn AiProvider>> = vec![Arc::new(EchoProvider::new())];
+        all.extend(configured);
+        registry.replace_all(all).expect("replace");
+
+        let ids: Vec<String> = registry
+            .descriptors()
+            .into_iter()
+            .map(|d| d.id.to_string())
+            .collect();
+        assert_eq!(ids, vec![EchoProvider::ID, "ollama", "lm-studio"]);
+
+        let duplicate = registry.replace_all(vec![
+            Arc::new(EchoProvider::new()),
+            Arc::new(EchoProvider::new()),
+        ]);
+        assert!(matches!(duplicate, Err(AiError::AlreadyRegistered(_))));
+        assert_eq!(
+            registry.len(),
+            3,
+            "a failed replace must not change the registry"
+        );
     }
 }

@@ -1,0 +1,268 @@
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--jv-text-muted);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.catalog {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1240px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+button.small {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+.provider-list,
+.route-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.provider-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--jv-border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  &.disabled .provider-main {
+    opacity: 0.55;
+  }
+}
+
+.provider-main {
+  min-width: 0;
+}
+
+.provider-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tag {
+  padding: 1px 6px;
+  border: 1px solid var(--jv-border-strong);
+  border-radius: 4px;
+  font: 500 10.5px/1.5 var(--jv-mono);
+  color: var(--jv-text-muted);
+
+  &.cloud {
+    border-color: rgba(251, 191, 36, 0.5);
+    color: var(--jv-warning);
+  }
+}
+
+.provider-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--jv-danger);
+  overflow-wrap: anywhere;
+}
+
+.provider-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.provider-form {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--jv-border-strong);
+  border-radius: var(--jv-radius-sm);
+  background: var(--jv-bg-elevated);
+
+  h3 {
+    margin: 0 0 10px;
+    font-size: 14px;
+  }
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+
+  &.wide {
+    grid-column: 1 / -1;
+  }
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--jv-text-muted);
+}
+
+.field-error,
+.route-error {
+  font-size: 11.5px;
+  color: var(--jv-danger);
+}
+
+.hint {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--jv-text-dim);
+}
+
+.test-result {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--jv-success);
+
+  &.bad {
+    color: var(--jv-danger);
+  }
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.route-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--jv-border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  .route-error {
+    grid-column: 2;
+  }
+}
+
+.route-label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13.5px;
+
+  .dim {
+    font-size: 11.5px;
+  }
+}
+
+.catalog-provider {
+  margin: 4px 0 8px;
+  font: 600 11px/1.2 var(--jv-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--jv-accent);
+}
+
+.model-table {
+  width: 100%;
+  margin-bottom: 14px;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th {
+    padding: 6px 8px;
+    text-align: left;
+    font: 600 10.5px var(--jv-mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--jv-text-dim);
+    border-bottom: 1px solid var(--jv-border-strong);
+  }
+
+  td {
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--jv-border);
+    vertical-align: top;
+  }
+
+  .num {
+    text-align: right;
+    white-space: nowrap;
+  }
+}
+
+.cap {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.1);
+  font: 500 10.5px/1.7 var(--jv-mono);
+  color: var(--jv-accent);
+}
+
+.error {
+  font-size: 13px;
+  color: var(--jv-danger);
+}
+
+.mono {
+  font: 11.5px/1.5 var(--jv-mono);
+  overflow-wrap: anywhere;
+}
+
+.dim {
+  color: var(--jv-text-dim);
+}

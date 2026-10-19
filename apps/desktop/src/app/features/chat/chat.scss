@@ -233,3 +233,9 @@
     opacity: 1;
   }
 }
+
+.notice a,
+.note a {
+  color: inherit;
+  text-decoration: underline;
+}

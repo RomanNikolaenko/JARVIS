@@ -12,12 +12,13 @@ use futures::StreamExt;
 use futures::stream;
 use jarvis_ai::{
     AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatStream, DataLocality,
-    EchoProvider, FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, ProviderId,
-    ProviderKind,
+    EchoProvider, FinishReason, ModelCapabilities, ModelInfo, ProviderBackend, ProviderConfig,
+    ProviderDescriptor, ProviderFactory, ProviderId, ProviderKind, classify_locality,
+    parse_base_url,
 };
 use jarvis_core::{
     AppPaths, ChatStartRequest, ChatStreamEvent, CoreOptions, ErrorCode, HealthStatus, JarvisCore,
-    SinkClosed,
+    ModelRef, SinkClosed, TaskCategory,
 };
 use jarvis_events::EventCategory;
 use tokio::sync::mpsc;
@@ -112,10 +113,13 @@ fn paths_in(dir: &tempfile::TempDir) -> AppPaths {
 async fn start_core(providers: Vec<Arc<dyn AiProvider>>) -> TestCore {
     let dir = tempfile::tempdir().expect("tempdir");
     let paths = paths_in(&dir);
-    let core =
-        JarvisCore::initialize(CoreOptions::new(paths.clone(), "9.9.9").with_providers(providers))
-            .await
-            .expect("core initializes");
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths.clone(), "9.9.9")
+            .with_static_providers(providers)
+            .with_provider_factory(None),
+    )
+    .await
+    .expect("core initializes");
     TestCore {
         core,
         paths,
@@ -189,9 +193,11 @@ async fn settings_persist_across_restarts() {
     let dir = tempfile::tempdir().expect("tempdir");
     let paths = paths_in(&dir);
 
-    let first = JarvisCore::initialize(CoreOptions::new(paths.clone(), "1.0.0"))
-        .await
-        .expect("first start");
+    let first = JarvisCore::initialize(
+        CoreOptions::new(paths.clone(), "1.0.0").with_provider_factory(None),
+    )
+    .await
+    .expect("first start");
     let mut settings = first.settings();
     settings.ai.idle_timeout_secs = 42;
     settings.interface.reduced_motion = true;
@@ -199,9 +205,10 @@ async fn settings_persist_across_restarts() {
     first.shutdown();
     drop(first);
 
-    let second = JarvisCore::initialize(CoreOptions::new(paths, "1.0.0"))
-        .await
-        .expect("second start");
+    let second =
+        JarvisCore::initialize(CoreOptions::new(paths, "1.0.0").with_provider_factory(None))
+            .await
+            .expect("second start");
     assert_eq!(second.settings(), settings);
 }
 
@@ -305,7 +312,7 @@ async fn model_listing_reports_failures_per_provider() {
     broken.list_models_fails = true;
     let test = start_core(vec![Arc::new(broken), Arc::new(EchoProvider::new())]).await;
 
-    let listing = test.core.list_models().await;
+    let listing = test.core.list_models(false).await;
     assert_eq!(listing.len(), 2);
     let broken = listing
         .iter()
@@ -334,4 +341,145 @@ async fn system_metrics_initialize_lazily_and_concurrently() {
     let (a, b) = (a.expect("metrics"), b.expect("metrics"));
     assert!(a.memory_total_bytes > 0);
     assert_eq!(a.memory_total_bytes, b.memory_total_bytes);
+}
+
+/// Builds [`FakeProvider`]s from configuration, deriving locality from the
+/// URL like the real factory. Never touches the network.
+#[derive(Debug)]
+struct FakeFactory;
+
+impl ProviderFactory for FakeFactory {
+    fn create(&self, config: &ProviderConfig) -> Result<Arc<dyn AiProvider>, AiError> {
+        let url = parse_base_url(&config.base_url).map_err(AiError::InvalidRequest)?;
+        let locality = classify_locality(&url);
+        let kind = if locality == DataLocality::ThirdPartyCloud {
+            ProviderKind::Cloud
+        } else {
+            ProviderKind::LocalServer
+        };
+        let mut provider = FakeProvider::new(config.id.as_str(), kind, locality);
+        provider.descriptor.display_name = config.display_name.clone();
+        Ok(Arc::new(provider))
+    }
+}
+
+async fn start_with_factory() -> TestCore {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = paths_in(&dir);
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths.clone(), "9.9.9").with_provider_factory(Some(Arc::new(FakeFactory))),
+    )
+    .await
+    .expect("core initializes");
+    TestCore {
+        core,
+        paths,
+        _dir: dir,
+    }
+}
+
+fn provider_ids(listing: &[jarvis_core::ProviderModels]) -> Vec<String> {
+    listing.iter().map(|p| p.provider.id.to_string()).collect()
+}
+
+#[tokio::test]
+async fn configured_providers_follow_settings() {
+    let test = start_with_factory().await;
+    let listing = test.core.list_models(false).await;
+    assert_eq!(
+        provider_ids(&listing),
+        vec![EchoProvider::ID, "ollama", "lm-studio"],
+        "defaults: echo + Ollama + LM Studio"
+    );
+
+    let mut settings = test.core.settings();
+    settings.ai.providers[1].enabled = false;
+    settings.ai.providers.push(ProviderConfig {
+        id: ProviderId::new("gpu-box"),
+        backend: ProviderBackend::OpenAiCompatible,
+        display_name: "GPU box".into(),
+        base_url: "http://192.168.1.50:8000/v1".into(),
+        enabled: true,
+    });
+    test.core.update_settings(settings).await.expect("save");
+
+    let listing = test.core.list_models(false).await;
+    assert_eq!(
+        provider_ids(&listing),
+        vec![EchoProvider::ID, "ollama", "gpu-box"],
+        "the model cache must be invalidated when providers change"
+    );
+    let gpu = listing
+        .iter()
+        .find(|p| p.provider.id.as_str() == "gpu-box")
+        .expect("gpu");
+    assert_eq!(gpu.provider.locality, DataLocality::LocalNetwork);
+}
+
+#[tokio::test]
+async fn routing_uses_explicit_choices_and_reports_resolutions() {
+    let test = start_with_factory().await;
+    let routes = test.core.resolve_routes().await;
+    let general = routes
+        .iter()
+        .find(|r| r.category == TaskCategory::General)
+        .expect("general");
+    assert!(general.automatic);
+    assert_eq!(
+        general.provider_id.as_ref().map(ProviderId::as_str),
+        Some("ollama")
+    );
+
+    let mut settings = test.core.settings();
+    settings.ai.routing.general = Some(ModelRef {
+        provider_id: ProviderId::new("lm-studio"),
+        model: "model".into(),
+    });
+    test.core.update_settings(settings).await.expect("save");
+
+    let (sink, rx) = channel_sink();
+    test.core
+        .chat()
+        .start(user_request("hi"), sink)
+        .await
+        .expect("start");
+    let events = collect(rx).await;
+    match &events[0] {
+        ChatStreamEvent::Started { provider_id, .. } => {
+            assert_eq!(provider_id.as_str(), "lm-studio")
+        }
+        other => panic!("expected started, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn provider_connection_test_reports_models_and_locality() {
+    let test = start_with_factory().await;
+    let result = test
+        .core
+        .test_provider(ProviderConfig {
+            id: ProviderId::new("candidate"),
+            backend: ProviderBackend::Ollama,
+            display_name: "Candidate".into(),
+            base_url: "http://127.0.0.1:11434".into(),
+            enabled: true,
+        })
+        .await
+        .expect("test");
+    assert!(result.reachable);
+    assert_eq!(result.locality, DataLocality::OnDevice);
+    assert_eq!(result.models.len(), 1);
+
+    let invalid = test
+        .core
+        .test_provider(ProviderConfig {
+            id: ProviderId::new("candidate"),
+            backend: ProviderBackend::Ollama,
+            display_name: "Candidate".into(),
+            base_url: "http://user:pw@127.0.0.1".into(),
+            enabled: true,
+        })
+        .await
+        .expect_err("credentials in URL");
+    assert_eq!(invalid.code(), ErrorCode::Validation);
 }

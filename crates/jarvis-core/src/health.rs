@@ -11,6 +11,11 @@ use crate::config::ConfigSource;
 
 /// Upper bound for a single component probe.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Upper bound for the AI component, which contacts every provider. On
+/// Windows a refused local connection alone takes about two seconds.
+pub const AI_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
+/// Upper bound for one provider health check.
+pub const PROVIDER_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -58,16 +63,21 @@ impl HealthReport {
 }
 
 /// Runs a probe with a timeout and measures its latency.
-pub(crate) async fn run_probe<F>(id: &str, label: &str, probe: F) -> ComponentHealth
+pub(crate) async fn run_probe<F>(
+    id: &str,
+    label: &str,
+    timeout: Duration,
+    probe: F,
+) -> ComponentHealth
 where
     F: Future<Output = (HealthStatus, String)>,
 {
     let started = Instant::now();
-    let (status, message) = match tokio::time::timeout(PROBE_TIMEOUT, probe).await {
+    let (status, message) = match tokio::time::timeout(timeout, probe).await {
         Ok(result) => result,
         Err(_) => (
             HealthStatus::Unhealthy,
-            format!("health probe timed out after {}s", PROBE_TIMEOUT.as_secs()),
+            format!("health probe timed out after {}s", timeout.as_secs()),
         ),
     };
     ComponentHealth {
@@ -106,8 +116,8 @@ pub(crate) async fn storage_health(dir: &std::path::Path) -> (HealthStatus, Stri
     }
 }
 
-/// AI health: healthy only if at least one real (non-diagnostic) provider
-/// answers its health check.
+/// AI health: healthy if at least one real (non-diagnostic) provider answers
+/// its health check.
 pub(crate) async fn ai_health(
     providers: Vec<std::sync::Arc<dyn AiProvider>>,
 ) -> (HealthStatus, String) {
@@ -119,7 +129,7 @@ pub(crate) async fn ai_health(
     }
 
     let checks = providers.iter().map(|provider| async move {
-        let result = tokio::time::timeout(PROBE_TIMEOUT, provider.health_check()).await;
+        let result = tokio::time::timeout(PROVIDER_CHECK_TIMEOUT, provider.health_check()).await;
         (provider.descriptor().clone(), result)
     });
     let results = futures::future::join_all(checks).await;
@@ -157,10 +167,12 @@ pub(crate) async fn ai_health(
             format!("Available: {}", healthy_real.join(", ")),
         )
     } else {
+        // One working provider is enough; unreachable optional providers
+        // (e.g. LM Studio not started) are reported but do not degrade.
         (
-            HealthStatus::Degraded,
+            HealthStatus::Healthy,
             format!(
-                "Available: {}; failing: {}",
+                "Available: {}; unreachable: {}",
                 healthy_real.join(", "),
                 failing.join("; ")
             ),
@@ -224,7 +236,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn slow_probes_time_out() {
-        let health = run_probe("slow", "Slow", async {
+        let health = run_probe("slow", "Slow", PROBE_TIMEOUT, async {
             tokio::time::sleep(PROBE_TIMEOUT * 2).await;
             (HealthStatus::Healthy, String::new())
         })

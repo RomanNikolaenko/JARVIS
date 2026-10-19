@@ -35,6 +35,11 @@ toml = "1.0"
 ts-rs = { version = "12.0", features = ["uuid-impl"] }
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
+# Networking (AI provider HTTP APIs). No system proxy: local AI traffic must
+# never be routed through a proxy implicitly.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+url = "2.5"
+
 # Observability
 tracing = "0.1.41"
 tracing-appender = "0.2.3"

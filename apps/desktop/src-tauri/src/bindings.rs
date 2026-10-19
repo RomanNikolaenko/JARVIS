@@ -5,9 +5,10 @@
 //! only within one process). The list below is the IPC contract: every type
 //! that crosses the IPC boundary must be reachable from one of these roots.
 
+use jarvis_ai::ProviderConfig;
 use jarvis_core::{
     AppInfo, ChatStartRequest, ChatStreamEvent, ErrorPayload, HealthReport, ProviderModels,
-    Settings, UiErrorReport,
+    ProviderTestResult, RouteResolution, Settings, UiErrorReport,
 };
 use jarvis_events::SystemEvent;
 use jarvis_platform::{PlatformInfo, SystemMetrics};
@@ -35,6 +36,9 @@ fn export_typescript_bindings() {
         Settings,
         SystemEvent,
         ProviderModels,
+        RouteResolution,
+        ProviderConfig,
+        ProviderTestResult,
         ChatStartRequest,
         ChatStreamEvent,
         ErrorPayload,

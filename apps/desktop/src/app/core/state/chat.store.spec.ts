@@ -1,5 +1,10 @@
 import { TestBed } from '@angular/core/testing';
-import type { ChatStartRequest, ChatStreamEvent, ProviderModels } from '@jarvis/shared-types';
+import type {
+  ChatStartRequest,
+  ChatStreamEvent,
+  ProviderModels,
+  RouteResolution,
+} from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
@@ -38,6 +43,15 @@ class FakeApi {
   startError: IpcError | null = null;
 
   listAiModels = vi.fn(async () => [ECHO]);
+  getModelRoutes = vi.fn(async (): Promise<RouteResolution[]> => [
+    {
+      category: 'general',
+      providerId: 'diagnostic-echo',
+      model: 'echo',
+      automatic: true,
+      error: null,
+    },
+  ]);
   getSettings = vi.fn();
 
   async startChat(
@@ -69,16 +83,29 @@ describe('ChatStore', () => {
     await store.loadModels();
   });
 
-  it('selects the only available model and flags diagnostic-only mode', () => {
-    expect(store.selected()?.model.id).toBe('echo');
+  it('defaults to automatic routing and flags diagnostic-only mode', () => {
+    expect(store.selected()).toBeNull();
+    expect(store.automaticRoute()?.model).toBe('echo');
     expect(store.diagnosticOnly()).toBe(true);
+  });
+
+  it('sends the explicitly selected model', async () => {
+    store.select(store.modelOptions()[0]);
+    expect(store.selected()?.model.id).toBe('echo');
+    await store.send('hi');
+    expect(api.requests[0]).toMatchObject({ providerId: 'diagnostic-echo', model: 'echo' });
+
+    store.select(null);
+    api.emit({ type: 'finished', finishReason: 'stop', usage: null, elapsedMs: 1 });
+    await store.send('again');
+    expect(api.requests[1]).toMatchObject({ providerId: null, model: null });
   });
 
   it('streams deltas into the assistant entry and returns to idle', async () => {
     await store.send('  hello  ');
     expect(api.requests[0]).toMatchObject({
-      providerId: 'diagnostic-echo',
-      model: 'echo',
+      providerId: null,
+      model: null,
       messages: [{ role: 'user', content: 'hello' }],
     });
     expect(store.phase()).toBe('connecting');

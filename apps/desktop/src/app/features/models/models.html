@@ -1,0 +1,235 @@
+<header class="page-header">
+  <div>
+    <h1 class="title">Models</h1>
+    <p class="subtitle">
+      AI servers JARVIS talks to, their models, and which model handles which task.
+    </p>
+  </div>
+  <button type="button" class="ghost" (click)="refresh()" [disabled]="store.loading()">
+    <jv-icon name="refresh" [size]="16" />
+    {{ store.loading() ? 'Checking…' : 'Refresh' }}
+  </button>
+</header>
+
+@if (store.error(); as error) {
+  <p class="error" role="alert">{{ error.message }}</p>
+}
+@if (saveError(); as error) {
+  <p class="error" role="alert">{{ error.message }}</p>
+}
+
+<div class="layout">
+  <jv-hud-panel class="providers" heading="Providers">
+    <button panelActions type="button" class="ghost small" (click)="startAdd()">+ Add</button>
+
+    <ul class="provider-list">
+      @for (row of rows(); track row.config.id) {
+        <li [class.disabled]="!row.config.enabled">
+          <div class="provider-main">
+            <div class="provider-name">
+              {{ row.config.displayName }}
+              <span class="tag">{{ backendLabels[row.config.backend] }}</span>
+              @if (row.live) {
+                <span class="tag" [class.cloud]="row.live.provider.locality === 'thirdPartyCloud'">
+                  {{ localityLabels[row.live.provider.locality] }}
+                </span>
+              }
+            </div>
+            <div class="mono dim">{{ row.config.baseUrl }}</div>
+            @if (row.live?.error; as error) {
+              <div class="provider-error">{{ error }}</div>
+            }
+          </div>
+          <div class="provider-side">
+            <jv-status-badge
+              [status]="statusOf(row.live, row.config.enabled)"
+              [label]="statusLabel(row.live, row.config.enabled)"
+            />
+            <div class="row-actions">
+              @if (confirmingRemoval() === row.config.id) {
+                <span class="dim">Remove?</span>
+                <button type="button" class="danger small" (click)="remove(row.config)">Yes</button>
+                <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">
+                  No
+                </button>
+              } @else {
+                <button type="button" class="ghost small" (click)="toggle(row.config)">
+                  {{ row.config.enabled ? 'Disable' : 'Enable' }}
+                </button>
+                <button type="button" class="ghost small" (click)="startEdit(row.config)">
+                  Edit
+                </button>
+                <button type="button" class="ghost small" (click)="askRemove(row.config)">
+                  Remove
+                </button>
+              }
+            </div>
+          </div>
+        </li>
+      } @empty {
+        <li class="dim">No providers configured. Add Ollama or an OpenAI-compatible server.</li>
+      }
+    </ul>
+
+    @if (editingId() !== null) {
+      <form class="provider-form" [formGroup]="form" (ngSubmit)="saveProvider()">
+        <h3>{{ editingId() ? 'Edit provider' : 'Add provider' }}</h3>
+        <div class="form-grid">
+          <label class="field">
+            <span class="field-label">Name</span>
+            <input type="text" formControlName="displayName" placeholder="e.g. Ollama on GPU box" />
+          </label>
+          <label class="field">
+            <span class="field-label">Server type</span>
+            <select formControlName="backend" (change)="onBackendChange()">
+              <option value="ollama">Ollama</option>
+              <option value="openAiCompatible">
+                OpenAI-compatible (LM Studio, llama.cpp, vLLM…)
+              </option>
+            </select>
+          </label>
+          <label class="field wide">
+            <span class="field-label">Base URL</span>
+            <input type="url" formControlName="baseUrl" spellcheck="false" />
+            @if (form.controls.baseUrl.invalid && form.controls.baseUrl.touched) {
+              <span class="field-error">Enter an http:// or https:// URL</span>
+            }
+          </label>
+        </div>
+        <p class="hint">
+          <jv-icon name="shield" [size]="14" />
+          Addresses on this device or the local network are treated as local. Any other host is a
+          cloud provider and receives data only if allowed in Settings → Privacy. API keys are not
+          supported yet.
+        </p>
+
+        @if (testResult(); as result) {
+          <div class="test-result" [class.bad]="!result.reachable">
+            @if (result.reachable) {
+              <jv-icon name="check" [size]="15" />
+              Connected in {{ result.latencyMs }} ms · {{ result.models.length }} models ·
+              {{ localityLabels[result.locality] }}
+            } @else {
+              <jv-icon name="warning" [size]="15" />
+              {{ result.error }}
+            }
+          </div>
+        }
+        @if (testError(); as error) {
+          <div class="test-result bad"><jv-icon name="warning" [size]="15" /> {{ error }}</div>
+        }
+
+        <div class="form-actions">
+          <button type="button" class="ghost" (click)="cancelEdit()">Cancel</button>
+          <button type="button" (click)="test()" [disabled]="testing()">
+            {{ testing() ? 'Testing…' : 'Test connection' }}
+          </button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    }
+  </jv-hud-panel>
+
+  <jv-hud-panel class="routing" heading="Model routing">
+    @if (routing(); as current) {
+      <ul class="route-list">
+        @for (category of categories; track category.id) {
+          <li>
+            <div class="route-label">
+              <span>{{ category.label }}</span>
+              <span class="dim">{{ category.hint }}</span>
+            </div>
+            <select (change)="onRouteChange(category.id, $event)">
+              <option value="" [selected]="selectedKey(category.id) === ''">
+                Automatic
+                @if (resolution(category.id); as r) {
+                  @if (r.automatic && r.model) {
+                    — {{ r.model }}
+                  }
+                }
+              </option>
+              @for (
+                option of optionsFor(category.id);
+                track keyOf(option.provider.id, option.model.id)
+              ) {
+                <option
+                  [value]="keyOf(option.provider.id, option.model.id)"
+                  [selected]="
+                    selectedKey(category.id) === keyOf(option.provider.id, option.model.id)
+                  "
+                >
+                  {{ option.model.displayName }} — {{ option.provider.displayName }}
+                </option>
+              }
+            </select>
+            @if (resolution(category.id)?.error; as error) {
+              <span class="route-error">{{ error }}</span>
+            }
+          </li>
+        }
+      </ul>
+      <p class="hint">
+        Automatic prefers models on this device, then the local network; cloud models only when
+        allowed. The diagnostic echo provider is used only when nothing else is available.
+      </p>
+      @if (routingDirty()) {
+        <div class="form-actions">
+          <button type="button" class="ghost" (click)="discardRouting()">Discard</button>
+          <button type="button" class="primary" (click)="saveRouting()">Save routing</button>
+        </div>
+      }
+    }
+  </jv-hud-panel>
+
+  <jv-hud-panel class="catalog" heading="Available models">
+    @for (provider of availableProviders(); track provider.provider.id) {
+      <h3 class="catalog-provider">{{ provider.provider.displayName }}</h3>
+      <table class="model-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Capabilities</th>
+            <th class="num">Context</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (model of provider.models; track model.id) {
+            <tr>
+              <td>
+                <div>{{ model.displayName }}</div>
+                @if (model.displayName !== model.id) {
+                  <div class="mono dim">{{ model.id }}</div>
+                }
+              </td>
+              <td class="caps">
+                @if (model.capabilities.chat) {
+                  <span class="cap">chat</span>
+                }
+                @if (model.capabilities.vision) {
+                  <span class="cap">vision</span>
+                }
+                @if (model.capabilities.toolCalling) {
+                  <span class="cap">tools</span>
+                }
+                @if (model.capabilities.embeddings) {
+                  <span class="cap">embeddings</span>
+                }
+              </td>
+              <td class="num mono">
+                {{
+                  model.contextWindow ? (model.contextWindow / 1024 | number: '1.0-0') + 'K' : '—'
+                }}
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    } @empty {
+      <p class="dim">
+        {{
+          store.loaded() ? 'No models available. Start a provider and press Refresh.' : 'Loading…'
+        }}
+      </p>
+    }
+  </jv-hud-panel>
+</div>

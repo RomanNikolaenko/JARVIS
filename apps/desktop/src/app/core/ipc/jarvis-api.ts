@@ -6,7 +6,10 @@ import type {
   ChatStreamEvent,
   HealthReport,
   PlatformInfo,
+  ProviderConfig,
   ProviderModels,
+  ProviderTestResult,
+  RouteResolution,
   Settings,
   SystemEvent,
   SystemMetrics,
@@ -58,8 +61,18 @@ export class JarvisApi {
     return this.bridge.invoke('get_recent_events', { limit: limit ?? null });
   }
 
-  listAiModels(): Promise<ProviderModels[]> {
-    return this.bridge.invoke('list_ai_models');
+  /** Models of all providers; cached briefly by the core unless `refresh` is set. */
+  listAiModels(refresh = false): Promise<ProviderModels[]> {
+    return this.bridge.invoke('list_ai_models', { refresh });
+  }
+
+  getModelRoutes(): Promise<RouteResolution[]> {
+    return this.bridge.invoke('get_model_routes');
+  }
+
+  /** Connects to an unsaved provider configuration and lists its models. */
+  testAiProvider(config: ProviderConfig): Promise<ProviderTestResult> {
+    return this.bridge.invoke('test_ai_provider', { config });
   }
 
   /**

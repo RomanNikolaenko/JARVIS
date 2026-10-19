@@ -1,21 +1,36 @@
 //! Provider-agnostic AI layer.
 //!
 //! The rest of JARVIS talks to models exclusively through the [`AiProvider`]
-//! trait. Concrete providers (Ollama, OpenAI-compatible servers, the embedded
-//! llama.cpp runtime, cloud APIs) are added as separate implementations and
-//! registered in a [`ProviderRegistry`].
+//! trait. Concrete providers are registered in a [`ProviderRegistry`]:
 //!
-//! Phase 1 ships only the [`EchoProvider`], a clearly labelled diagnostic
-//! provider used to exercise streaming and cancellation end to end.
+//! - [`OllamaProvider`]: Ollama native API;
+//! - [`OpenAiCompatibleProvider`]: LM Studio, llama.cpp server, vLLM, ...;
+//! - [`EchoProvider`]: clearly labelled diagnostic provider without a model.
+//!
+//! User-configured endpoints ([`ProviderConfig`]) are turned into providers by
+//! a [`ProviderFactory`]; their privacy class ([`DataLocality`]) is derived
+//! from the endpoint URL, never from user input.
 
+mod config;
 mod echo;
 mod error;
+mod factory;
+mod http;
+mod ollama;
+mod openai;
 mod provider;
 mod registry;
 mod types;
 
+pub use config::{
+    ProviderBackend, ProviderConfig, classify_locality, is_valid_provider_id, parse_base_url,
+};
 pub use echo::EchoProvider;
 pub use error::AiError;
+pub use factory::{HttpProviderFactory, ProviderFactory};
+pub use http::HttpClient;
+pub use ollama::OllamaProvider;
+pub use openai::OpenAiCompatibleProvider;
 pub use provider::{AiProvider, ChatStream};
 pub use registry::ProviderRegistry;
 pub use types::{

@@ -78,19 +78,23 @@
   </jv-hud-panel>
 
   <jv-hud-panel class="model" heading="Active AI model">
-    @if (selectedModel(); as option) {
-      <div class="model-name">{{ option.model.displayName }}</div>
+    @if (activeModel(); as active) {
+      <div class="model-name">{{ active.model.displayName }}</div>
       <div class="model-meta">
-        {{ option.provider.displayName }} · {{ localityLabels[option.provider.locality] }}
+        {{ active.provider.displayName }} · {{ localityLabels[active.provider.locality] }} ·
+        {{ active.automatic ? 'automatic' : 'chosen' }}
       </div>
+    } @else if (generalRoute()?.error; as error) {
+      <div class="model-name dim">No model available</div>
+      <div class="model-meta">{{ error }}</div>
     } @else {
-      <div class="model-name dim">No model selected</div>
+      <div class="model-name dim">Checking providers…</div>
     }
     @if (diagnosticOnly()) {
       <p class="note">
         <jv-icon name="warning" [size]="15" />
-        No AI model is connected yet. The diagnostic echo provider verifies streaming and
-        cancellation; Ollama and OpenAI-compatible servers follow in Phase 2.
+        No AI model is reachable. Start Ollama or LM Studio, or add a server on the
+        <a routerLink="/models">Models</a> screen.
       </p>
     }
   </jv-hud-panel>

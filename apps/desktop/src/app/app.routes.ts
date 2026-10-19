@@ -13,6 +13,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/chat/chat').then((m) => m.Chat),
   },
   {
+    path: 'models',
+    title: 'Models · JARVIS',
+    loadComponent: () => import('./features/models/models').then((m) => m.Models),
+  },
+  {
     path: 'events',
     title: 'Event log · JARVIS',
     loadComponent: () => import('./features/events/events').then((m) => m.Events),

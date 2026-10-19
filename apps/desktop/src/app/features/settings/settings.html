@@ -23,17 +23,10 @@
     </jv-hud-panel>
 
     <jv-hud-panel heading="AI">
-      <label class="field">
-        <span class="field-label">Default model</span>
-        <select formControlName="defaultModel">
-          <option value="">Automatic (prefer a real model over diagnostics)</option>
-          @for (option of modelOptions(); track optionKey(option.provider.id, option.model.id)) {
-            <option [value]="optionKey(option.provider.id, option.model.id)">
-              {{ option.model.displayName }} — {{ option.provider.displayName }}
-            </option>
-          }
-        </select>
-      </label>
+      <p class="hint">
+        Providers and per-task model choices are managed on the
+        <a routerLink="/models">Models</a> screen.
+      </p>
       <div class="field-row">
         <label class="field">
           <span class="field-label">Request timeout (s)</span>

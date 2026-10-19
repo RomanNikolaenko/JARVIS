@@ -38,6 +38,8 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::update_settings,
         commands::get_recent_events,
         commands::list_ai_models,
+        commands::get_model_routes,
+        commands::test_ai_provider,
         commands::start_chat,
         commands::cancel_chat,
         commands::report_ui_error,

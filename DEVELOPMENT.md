@@ -83,6 +83,29 @@ change; CI fails if they differ.
 6. Add the typed method to `JarvisApi` (`src/app/core/ipc/jarvis-api.ts`).
 7. Extend the IPC tests (`src-tauri/src/ipc_tests.rs`).
 
+## Local AI
+
+JARVIS talks to AI servers over HTTP. Configure them on the **Models** screen
+(or in `config.toml` under `[[ai.providers]]`).
+
+| Server | Type | Default URL | Notes |
+| --- | --- | --- | --- |
+| [Ollama](https://ollama.com) | Ollama | `http://127.0.0.1:11434` | preconfigured; `ollama pull llama3.2` |
+| LM Studio (local server) | OpenAI-compatible | `http://127.0.0.1:1234/v1` | preconfigured; start the server in LM Studio |
+| llama.cpp `llama-server` | OpenAI-compatible | `http://127.0.0.1:8080/v1` | `llama-server -m model.gguf` |
+| vLLM / LocalAI / others | OpenAI-compatible | server-specific, usually ends in `/v1` | |
+
+- Servers on another machine work if the host is a private IP or a LAN name
+  (`gpu-box`, `nas.local`). Ollama listens on localhost only by default; set
+  `OLLAMA_HOST=0.0.0.0` on the server to expose it to the LAN.
+- Any other host is treated as **cloud** and receives conversations only if
+  *Settings → Privacy → Allow cloud providers* is on.
+- API keys are not supported yet.
+- Thinking models (`<think>…</think>`) are shown with a collapsible
+  "Reasoning" block.
+- First requests to a model can be slow while the server loads it; the idle
+  timeout (Settings → AI, default 120 s) also bounds that wait.
+
 ## Where JARVIS stores data
 
 | What | Windows | Linux |
@@ -117,9 +140,10 @@ The exact paths are shown on the Settings screen.
 
 ## Verified environments
 
-| Check | Windows 11 (local) | Linux |
+| Check | Windows 11 (local + CI `windows-latest`) | Linux (CI `ubuntu-24.04`) |
 | --- | --- | --- |
-| `cargo fmt --check`, `clippy -D warnings`, `cargo test` | ✔ | CI (`ubuntu-24.04`) |
-| Angular tests + production build | ✔ | CI |
-| `tauri build --no-bundle` | ✔ | CI |
-| App launch and manual UI check | ✔ | not yet verified |
+| `cargo fmt --check`, `clippy -D warnings`, `cargo test` | ✔ | ✔ |
+| Angular tests + production build | ✔ | ✔ |
+| `tauri build --no-bundle` | ✔ | ✔ |
+| App launch and UI check (CDP-driven, incl. mock Ollama server) | ✔ | not yet verified |
+| Real Ollama / LM Studio | not installed on the dev machine | not verified |

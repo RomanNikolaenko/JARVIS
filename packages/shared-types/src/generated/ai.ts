@@ -27,6 +27,22 @@ id: string, displayName: string, providerId: ProviderId,
 contextWindow: number | null, capabilities: ModelCapabilities, };
 
 /**
+ * Wire protocol spoken by a configured provider.
+ */
+export type ProviderBackend = "ollama" | "openAiCompatible";
+
+/**
+ * A provider endpoint configured by the user.
+ */
+export type ProviderConfig = { id: ProviderId, backend: ProviderBackend, displayName: string, 
+/**
+ * Base URL, e.g. `http://127.0.0.1:11434` (Ollama) or
+ * `http://127.0.0.1:1234/v1` (OpenAI-compatible). Must not contain
+ * credentials.
+ */
+baseUrl: string, enabled: boolean, };
+
+/**
  * Static description of a provider.
  */
 export type ProviderDescriptor = { id: ProviderId, displayName: string, kind: ProviderKind, locality: DataLocality, };

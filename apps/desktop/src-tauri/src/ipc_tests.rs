@@ -25,11 +25,9 @@ fn harness() -> Harness {
         data_dir: dir.path().join("data"),
         log_dir: dir.path().join("logs"),
     };
-    let core = tauri::async_runtime::block_on(JarvisCore::initialize(CoreOptions::new(
-        paths,
-        "0.0.0-test",
-    )))
-    .expect("core");
+    // No HTTP providers: tests must not depend on servers running locally.
+    let options = CoreOptions::new(paths, "0.0.0-test").with_provider_factory(None);
+    let core = tauri::async_runtime::block_on(JarvisCore::initialize(options)).expect("core");
 
     let app = with_commands(mock_builder())
         .manage(AppState::new(core, None))
@@ -81,6 +79,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "get_settings",
     "get_recent_events",
     "list_ai_models",
+    "get_model_routes",
 ];
 
 #[test]
@@ -97,6 +96,7 @@ fn every_command_is_denied_for_windows_without_a_capability() {
     let h = harness();
     let all = READ_ONLY_COMMANDS.iter().chain(&[
         "update_settings",
+        "test_ai_provider",
         "start_chat",
         "cancel_chat",
         "report_ui_error",
@@ -262,4 +262,44 @@ fn ui_errors_are_recorded_as_events() {
             .iter()
             .any(|e| e["category"] == "ui" && e["message"].as_str().unwrap_or("").contains("boom"))
     );
+}
+
+#[test]
+fn model_routes_cover_every_category() {
+    let h = harness();
+    let routes = invoke(&h.main, "get_model_routes", json!({})).expect("routes");
+    let routes = routes.as_array().expect("array");
+    assert_eq!(routes.len(), 6);
+    let general = routes
+        .iter()
+        .find(|r| r["category"] == "general")
+        .expect("general route");
+    // Only the diagnostic provider exists in tests.
+    assert_eq!(general["providerId"], "diagnostic-echo");
+    assert_eq!(general["automatic"], true);
+}
+
+#[test]
+fn listing_models_accepts_refresh() {
+    let h = harness();
+    let listing = invoke(&h.main, "list_ai_models", json!({ "refresh": true })).expect("models");
+    assert_eq!(listing[0]["provider"]["kind"], "diagnostic");
+}
+
+#[test]
+fn provider_test_validates_input_before_connecting() {
+    let h = harness();
+    let error = invoke(
+        &h.main,
+        "test_ai_provider",
+        json!({ "config": {
+            "id": "remote",
+            "backend": "openAiCompatible",
+            "displayName": "Remote",
+            "baseUrl": "http://user:secret@example.com/v1",
+            "enabled": true
+        }}),
+    )
+    .expect_err("credentials in URL are rejected");
+    assert_eq!(error["code"], "validation");
 }

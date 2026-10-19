@@ -28,8 +28,16 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 | Privacy policy enforced in the core: cloud AI providers are blocked unless the user enables them; blocked attempts are logged as security events. | `jarvis-core::chat` |
 | No `unsafe` code (`unsafe_code = "forbid"`), no `unwrap`/`expect` outside tests (clippy). | `Cargo.toml` |
 | Settings writes are atomic; invalid files are backed up, never silently overwritten. | `jarvis-core::config` |
-| No network access at runtime in Phase 1; system fonts only, no CDN assets. | UI |
+| AI servers are classified by URL: loopback = on device, private/LAN = local network, anything else = cloud (blocked unless allowed). Provider URLs with credentials, queries or non-HTTP schemes are rejected. | `jarvis-ai::config` |
+| No implicit proxies for AI traffic; connection timeouts; streaming line size cap (4 MiB). | `jarvis-ai::http` |
+| Model output is untrusted: rendered Markdown shows raw HTML as text, links are inert (no navigation), images are not loaded; Angular sanitizes again and the CSP blocks scripts and remote images. | `shared/markdown` |
+| The UI never contacts AI servers itself; all network access goes through the core. System fonts only, no CDN assets. | UI, CSP |
 | Microphone, camera and screen are not accessed at all. | — |
+
+Known trade-off: the *Test connection* action on the Models screen lets the
+main window make the core send a `GET` request to a URL the user typed (no
+conversation data). This is intended; the command is granted to the main
+window only.
 
 ## Planned controls (not implemented yet)
 
@@ -39,7 +47,7 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 - Tamper-evident audit log of tool executions (Phase 5).
 - Secrets (API keys, tokens) in the OS keychain (Windows Credential Manager,
   Secret Service on Linux); never in `config.toml`, logs or the UI
-  (Phase 2 for cloud providers).
+  (remaining Phase 2 work, required before cloud providers).
 - Separation of trusted instructions and untrusted content in prompts;
   prompt-injection mitigations for tool use (Phase 5).
 - Command execution without a shell (argument vectors), working-directory and

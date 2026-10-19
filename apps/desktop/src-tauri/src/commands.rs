@@ -5,9 +5,10 @@
 //! Every command must also be listed in `build.rs` and granted in
 //! `capabilities/main-window.json`.
 
+use jarvis_ai::ProviderConfig;
 use jarvis_core::{
     AppInfo, ChatStartRequest, ChatStreamEvent, ErrorPayload, HealthReport, ProviderModels,
-    Settings, SinkClosed, UiErrorReport,
+    ProviderTestResult, RouteResolution, Settings, SinkClosed, UiErrorReport,
 };
 use jarvis_events::SystemEvent;
 use jarvis_platform::{PlatformInfo, SystemMetrics};
@@ -65,9 +66,28 @@ pub fn get_recent_events(state: State<'_, AppState>, limit: Option<u32>) -> Vec<
     state.core().events().recent(limit as usize)
 }
 
+/// Lists models of all providers. Results are cached briefly; pass
+/// `refresh: true` to query the servers again.
 #[tauri::command]
-pub async fn list_ai_models(state: State<'_, AppState>) -> CommandResult<Vec<ProviderModels>> {
-    Ok(state.core().list_models().await)
+pub async fn list_ai_models(
+    state: State<'_, AppState>,
+    refresh: Option<bool>,
+) -> CommandResult<Vec<ProviderModels>> {
+    Ok(state.core().list_models(refresh.unwrap_or(false)).await)
+}
+
+#[tauri::command]
+pub async fn get_model_routes(state: State<'_, AppState>) -> CommandResult<Vec<RouteResolution>> {
+    Ok(state.core().resolve_routes().await)
+}
+
+/// Connects to an unsaved provider configuration and lists its models.
+#[tauri::command]
+pub async fn test_ai_provider(
+    state: State<'_, AppState>,
+    config: ProviderConfig,
+) -> CommandResult<ProviderTestResult> {
+    Ok(state.core().test_provider(config).await?)
 }
 
 /// Starts a chat request and streams [`ChatStreamEvent`]s through `on_event`.

@@ -8,20 +8,25 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
-import { ChatStore, MAX_MESSAGE_LENGTH, type ModelOption } from '../../core/state/chat.store';
+import { ChatStore, MAX_MESSAGE_LENGTH } from '../../core/state/chat.store';
+import { type ModelOption, optionKey } from '../../core/state/models.store';
 import { Icon } from '../../shared/icon/icon';
+import { MarkdownPipe } from '../../shared/markdown/markdown';
 
 /** Distance from the bottom (px) within which new content keeps the view pinned. */
 const STICKY_SCROLL_THRESHOLD = 80;
+const AUTOMATIC = 'auto';
 
-function optionKey(option: ModelOption): string {
-  return `${option.provider.id}::${option.model.id}`;
+interface OptionGroup {
+  readonly label: string;
+  readonly options: readonly ModelOption[];
 }
 
 @Component({
   selector: 'jv-chat',
-  imports: [Icon],
+  imports: [Icon, MarkdownPipe, RouterLink],
   templateUrl: './chat.html',
   styleUrl: './chat.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -31,12 +36,31 @@ export class Chat {
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private stickToBottom = true;
 
+  protected readonly automatic = AUTOMATIC;
   protected readonly maxLength = MAX_MESSAGE_LENGTH;
   protected readonly draft = signal('');
-  protected readonly optionKey = optionKey;
+  protected readonly keyOf = (option: ModelOption): string =>
+    optionKey(option.provider.id, option.model.id);
+
   protected readonly selectedKey = computed(() => {
     const selected = this.store.selected();
-    return selected ? optionKey(selected) : '';
+    return selected ? this.keyOf(selected) : AUTOMATIC;
+  });
+  protected readonly groups = computed<OptionGroup[]>(() => {
+    const groups = new Map<string, { label: string; options: ModelOption[] }>();
+    for (const option of this.store.modelOptions()) {
+      const group = groups.get(option.provider.id) ?? {
+        label: option.provider.displayName,
+        options: [],
+      };
+      group.options.push(option);
+      groups.set(option.provider.id, group);
+    }
+    return [...groups.values()];
+  });
+  protected readonly automaticLabel = computed(() => {
+    const route = this.store.automaticRoute();
+    return route?.model ? `Automatic — ${route.model}` : 'Automatic';
   });
   protected readonly canSend = computed(() => {
     const text = this.draft().trim();
@@ -45,6 +69,7 @@ export class Chat {
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
 
   constructor() {
+    void this.store.loadModels();
     afterRenderEffect(() => {
       this.store.entries();
       const element = this.scroller()?.nativeElement;
@@ -84,11 +109,12 @@ export class Chat {
     void this.store.cancel();
   }
 
+  protected refreshModels(): void {
+    void this.store.loadModels(true);
+  }
+
   protected onModelChange(event: Event): void {
     const key = (event.target as HTMLSelectElement).value;
-    const option = this.store.modelOptions().find((o) => optionKey(o) === key);
-    if (option) {
-      this.store.select(option);
-    }
+    this.store.select(this.store.modelOptions().find((o) => this.keyOf(o) === key) ?? null);
   }
 }

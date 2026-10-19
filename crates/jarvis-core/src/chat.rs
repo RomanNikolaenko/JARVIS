@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use jarvis_ai::{
-    AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatRole, DataLocality, FinishReason,
-    GenerationOptions, ProviderId, ProviderKind, ProviderRegistry, TokenUsage,
+    AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatRole, FinishReason,
+    GenerationOptions, ModelCapabilities, ModelInfo, ProviderId, ProviderRegistry, TokenUsage,
 };
 use jarvis_events::{EventBus, EventCategory, EventLevel};
 use serde::{Deserialize, Serialize};
@@ -20,23 +20,25 @@ use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::config::{ConfigStore, Settings};
-use crate::error::{CoreError, ErrorPayload};
+use crate::catalog::{ModelCatalog, ProviderModels};
+use crate::config::{ConfigStore, MAX_MODEL_ID_LEN, Settings};
+use crate::error::{CoreError, ErrorCode, ErrorPayload};
+use crate::routing::{self, TaskCategory};
 
 pub const MAX_MESSAGES: usize = 200;
 pub const MAX_MESSAGE_CHARS: usize = 32_000;
 pub const MAX_TOTAL_CHARS: usize = 256_000;
 pub const MAX_CONCURRENT_CHATS: usize = 4;
-const MAX_MODEL_ID_LEN: usize = 256;
 
 /// A chat request as sent by the UI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "core.ts")]
 pub struct ChatStartRequest {
-    /// Provider to use; falls back to settings, then to the first available provider.
+    /// Provider to use. Without it, the model router chooses (`TaskCategory::General`).
     pub provider_id: Option<ProviderId>,
-    /// Model to use; falls back to settings, then to the provider's first chat model.
+    /// Model to use. Without it, the provider's first chat model or the
+    /// router's choice is used.
     pub model: Option<String>,
     pub messages: Vec<ChatMessage>,
     pub temperature: Option<f32>,
@@ -112,6 +114,7 @@ impl Drop for ActiveGuard {
 #[derive(Debug)]
 pub struct ChatService {
     registry: Arc<ProviderRegistry>,
+    catalog: Arc<ModelCatalog>,
     config: Arc<ConfigStore>,
     events: EventBus,
     runtime: tokio::runtime::Handle,
@@ -120,15 +123,24 @@ pub struct ChatService {
     shutdown: CancellationToken,
 }
 
+/// Provider, model and capabilities chosen for a request.
+struct Resolved {
+    provider: Arc<dyn AiProvider>,
+    model: String,
+    capabilities: ModelCapabilities,
+}
+
 impl ChatService {
     pub(crate) fn new(
         registry: Arc<ProviderRegistry>,
+        catalog: Arc<ModelCatalog>,
         config: Arc<ConfigStore>,
         events: EventBus,
         runtime: tokio::runtime::Handle,
     ) -> Self {
         Self {
             registry,
+            catalog,
             config,
             events,
             runtime,
@@ -147,27 +159,16 @@ impl ChatService {
         validate_request(&request)?;
         let settings = self.config.current();
 
-        let provider = self.resolve_provider(request.provider_id.as_ref(), &settings)?;
-        let descriptor = provider.descriptor().clone();
-        if descriptor.locality == DataLocality::ThirdPartyCloud
-            && !settings.privacy.allow_cloud_providers
-        {
-            self.events.warning(
-                EventCategory::Security,
-                format!(
-                    "Blocked a chat request to cloud provider \"{}\": cloud providers are disabled in privacy settings",
-                    descriptor.display_name
-                ),
-            );
-            return Err(CoreError::PermissionDenied(format!(
-                "Sending conversations to the cloud provider \"{}\" is disabled in privacy settings",
-                descriptor.display_name
-            )));
-        }
-
-        let model = resolve_model(provider.as_ref(), request.model.as_deref(), &settings).await?;
-        let capabilities = provider.capabilities(&model).await?;
-        if !capabilities.chat {
+        let resolved = self.resolve(&request, &settings).await.inspect_err(|err| {
+            if err.code() == ErrorCode::PermissionDenied {
+                self.events.warning(
+                    EventCategory::Security,
+                    format!("Blocked a chat request: {err}"),
+                );
+            }
+        })?;
+        let descriptor = resolved.provider.descriptor().clone();
+        if !resolved.capabilities.chat {
             return Err(AiError::Unsupported {
                 provider: descriptor.id,
                 operation: "chat",
@@ -193,11 +194,11 @@ impl ChatService {
 
         let job = ChatJob {
             request_id,
-            provider,
+            provider: resolved.provider,
             provider_id: descriptor.id,
-            streaming: capabilities.streaming,
+            streaming: resolved.capabilities.streaming,
             request: ChatRequest {
-                model,
+                model: resolved.model,
                 messages: request.messages,
                 options: GenerationOptions {
                     temperature: request.temperature,
@@ -236,52 +237,95 @@ impl ChatService {
         self.shutdown.cancel();
     }
 
-    fn resolve_provider(
+    /// Chooses provider and model: an explicit pair is used as is (after the
+    /// privacy check, before any network call); otherwise the catalog and the
+    /// model router decide.
+    async fn resolve(
         &self,
-        requested: Option<&ProviderId>,
+        request: &ChatStartRequest,
         settings: &Settings,
-    ) -> Result<Arc<dyn AiProvider>, CoreError> {
-        if let Some(id) = requested.or(settings.ai.default_provider_id.as_ref()) {
-            return Ok(self.registry.get(id)?);
+    ) -> Result<Resolved, CoreError> {
+        let allow_cloud = settings.privacy.allow_cloud_providers;
+
+        if let (Some(provider_id), Some(model)) = (&request.provider_id, &request.model) {
+            let provider = self.registry.get(provider_id)?;
+            routing::check_privacy(provider.descriptor(), allow_cloud)?;
+            let capabilities = provider.capabilities(model).await?;
+            return Ok(Resolved {
+                provider,
+                model: model.clone(),
+                capabilities,
+            });
         }
-        // Prefer a real provider over the diagnostic one.
-        let providers = self.registry.providers();
-        providers
-            .iter()
-            .find(|p| p.descriptor().kind != ProviderKind::Diagnostic)
-            .or_else(|| providers.first())
-            .cloned()
-            .ok_or_else(|| CoreError::NotFound("No AI provider is available".to_owned()))
+
+        let catalog = self.catalog.get(&self.registry, false).await;
+        let (provider_id, model) = match (&request.provider_id, &request.model) {
+            (Some(provider_id), _) => first_chat_model(&catalog, provider_id, allow_cloud)?,
+            (None, Some(model)) => find_model(&catalog, model, allow_cloud)?,
+            (None, None) => {
+                let selection = routing::select(
+                    TaskCategory::General,
+                    &settings.ai.routing,
+                    &catalog,
+                    allow_cloud,
+                )?;
+                (selection.provider.id, selection.model)
+            }
+        };
+        Ok(Resolved {
+            provider: self.registry.get(&provider_id)?,
+            model: model.id,
+            capabilities: model.capabilities,
+        })
     }
 }
 
-async fn resolve_model(
-    provider: &dyn AiProvider,
-    requested: Option<&str>,
-    settings: &Settings,
-) -> Result<String, CoreError> {
-    if let Some(model) = requested {
-        return Ok(model.to_owned());
+fn first_chat_model(
+    catalog: &[ProviderModels],
+    provider_id: &ProviderId,
+    allow_cloud: bool,
+) -> Result<(ProviderId, ModelInfo), CoreError> {
+    let entry = catalog
+        .iter()
+        .find(|p| p.provider.id == *provider_id)
+        .ok_or_else(|| AiError::ProviderNotFound(provider_id.clone()))?;
+    routing::check_privacy(&entry.provider, allow_cloud)?;
+    if let Some(error) = &entry.error {
+        return Err(AiError::Unavailable(error.clone()).into());
     }
-    let default_applies = settings
-        .ai
-        .default_provider_id
-        .as_ref()
-        .is_none_or(|id| *id == provider.descriptor().id);
-    if default_applies && let Some(model) = &settings.ai.default_model {
-        return Ok(model.clone());
-    }
-    provider
-        .list_models()
-        .await?
-        .into_iter()
-        .find(|model| model.capabilities.chat)
-        .map(|model| model.id)
+    entry
+        .models
+        .iter()
+        .find(|m| m.capabilities.chat)
+        .map(|m| (entry.provider.id.clone(), m.clone()))
         .ok_or_else(|| {
             CoreError::NotFound(format!(
                 "AI provider \"{}\" has no chat-capable models",
-                provider.descriptor().display_name
+                entry.provider.display_name
             ))
+        })
+}
+
+fn find_model(
+    catalog: &[ProviderModels],
+    model: &str,
+    allow_cloud: bool,
+) -> Result<(ProviderId, ModelInfo), CoreError> {
+    catalog
+        .iter()
+        .filter(|p| p.error.is_none())
+        .filter(|p| routing::check_privacy(&p.provider, allow_cloud).is_ok())
+        .find_map(|p| {
+            p.models
+                .iter()
+                .find(|m| m.id == model)
+                .map(|m| (p.provider.id.clone(), m.clone()))
+        })
+        .ok_or_else(|| {
+            AiError::ModelNotFound {
+                model: model.to_owned(),
+            }
+            .into()
         })
 }
 
@@ -535,6 +579,7 @@ mod tests {
         ));
         ChatService::new(
             registry,
+            Arc::default(),
             config,
             EventBus::default(),
             tokio::runtime::Handle::current(),

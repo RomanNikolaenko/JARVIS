@@ -178,3 +178,191 @@ a:focus-visible {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
 }
+
+// Rendered Markdown (chat answers). Lives here because [innerHTML] content is
+// not reached by emulated component styles.
+.jv-markdown {
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+
+  > :first-child {
+    margin-top: 0;
+  }
+
+  > :last-child {
+    margin-bottom: 0;
+  }
+
+  p,
+  ul,
+  ol,
+  blockquote,
+  pre,
+  table {
+    margin: 0 0 10px;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    margin: 14px 0 8px;
+    line-height: 1.3;
+  }
+
+  h1 {
+    font-size: 18px;
+  }
+
+  h2 {
+    font-size: 16px;
+  }
+
+  h3,
+  h4 {
+    font-size: 14.5px;
+  }
+
+  ul,
+  ol {
+    padding-left: 22px;
+  }
+
+  blockquote {
+    padding: 2px 12px;
+    border-left: 3px solid var(--jv-border-strong);
+    color: var(--jv-text-muted);
+  }
+
+  code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--jv-surface-2);
+    font: 12.5px var(--jv-mono);
+  }
+
+  table {
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+  }
+
+  th,
+  td {
+    padding: 5px 10px;
+    border: 1px solid var(--jv-border-strong);
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--jv-border-strong);
+  }
+
+  .md-link {
+    color: var(--jv-accent);
+    border-bottom: 1px dotted currentColor;
+    cursor: help;
+  }
+
+  .md-image {
+    color: var(--jv-text-dim);
+  }
+
+  .md-think {
+    margin: 0 0 10px;
+    padding: 6px 10px;
+    border: 1px dashed var(--jv-border-strong);
+    border-radius: var(--jv-radius-sm);
+    color: var(--jv-text-muted);
+    font-size: 13px;
+
+    summary {
+      cursor: pointer;
+      font: 600 11px/1.6 var(--jv-mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--jv-text-dim);
+    }
+  }
+}
+
+.md-code {
+  position: relative;
+  padding: 12px 14px;
+  border: 1px solid var(--jv-border);
+  border-radius: var(--jv-radius-sm);
+  background: #070a0e;
+  overflow-x: auto;
+
+  code {
+    padding: 0;
+    background: none;
+    font: 12.5px/1.55 var(--jv-mono);
+    white-space: pre;
+  }
+}
+
+.md-code-lang {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font: 600 10px var(--jv-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--jv-text-dim);
+}
+
+// Syntax highlighting tokens (highlight.js classes), matched to the palette.
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-type {
+  color: #7dd3fc;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute {
+  color: #86efac;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol {
+  color: #fbbf24;
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: #5b6d7f;
+  font-style: italic;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: #5eead4;
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params,
+.hljs-attr,
+.hljs-property {
+  color: #c4b5fd;
+}
+
+.hljs-deletion {
+  color: #f87171;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}

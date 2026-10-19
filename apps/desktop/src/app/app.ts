@@ -41,6 +41,7 @@ export class App {
   protected readonly nav: readonly NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
     { path: '/chat', label: 'Chat', icon: 'chat' },
+    { path: '/models', label: 'Models', icon: 'spark' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];
