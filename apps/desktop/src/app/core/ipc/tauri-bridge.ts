@@ -12,7 +12,14 @@ import { IpcError } from './ipc-error';
 export class TauriBridge {
   /** Whether the page runs inside the JARVIS desktop shell. */
   get available(): boolean {
-    return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    // Checks `invoke` itself: a leftover global without it (e.g. after the
+    // Tauri test mocks are cleared) cannot reach the core.
+    const internals = (window as { __TAURI_INTERNALS__?: { invoke?: unknown } })
+      .__TAURI_INTERNALS__;
+    return typeof internals?.invoke === 'function';
   }
 
   async invoke<T>(command: string, args?: InvokeArgs): Promise<T> {

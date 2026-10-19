@@ -12,9 +12,24 @@ describe('JarvisApi', () => {
     api = TestBed.inject(JarvisApi);
   });
 
-  afterEach(() => clearMocks());
+  // clearMocks() leaves an empty `__TAURI_INTERNALS__` behind; remove the
+  // globals so later test files see a plain browser again.
+  afterEach(() => {
+    clearMocks();
+    const globals = window as unknown as Record<string, unknown>;
+    delete globals['__TAURI_INTERNALS__'];
+    delete globals['__TAURI_EVENT_PLUGIN_INTERNALS__'];
+  });
 
   it('reports unavailable outside the desktop shell', async () => {
+    expect(api.connected).toBe(false);
+    await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  it('treats a leftover Tauri global without invoke as unavailable', async () => {
+    mockIPC(() => null);
+    clearMocks();
+
     expect(api.connected).toBe(false);
     await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable' });
   });
