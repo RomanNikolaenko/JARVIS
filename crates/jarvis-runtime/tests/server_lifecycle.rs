@@ -30,13 +30,15 @@ struct Harness {
     events: EventBus,
     model_id: String,
     data_dir: PathBuf,
+    /// The fake `llama-server` (a copy of this test binary).
+    engine: PathBuf,
     _dir: tempfile::TempDir,
 }
 
 async fn harness(mode: &'static str) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().to_path_buf();
-    testing::install_fake_runtime(&data_dir, None)
+    let engine = testing::install_fake_runtime(&data_dir, None)
         .await
         .unwrap();
 
@@ -58,6 +60,7 @@ async fn harness(mode: &'static str) -> Harness {
         events,
         model_id: model.id,
         data_dir,
+        engine,
         _dir: dir,
     }
 }
@@ -214,6 +217,30 @@ async fn a_changed_binary_is_refused() {
         .await
         .expect_err("tampered binary");
     assert!(matches!(err, RuntimeError::BinaryChanged(_)), "{err:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_library_planted_next_to_the_server_is_refused() {
+    let h = harness("slow").await;
+    // The loader would pick this up from the server's directory.
+    let planted = h.engine.with_file_name("version.dll");
+    std::fs::write(&planted, b"not a real library").unwrap();
+    let err = h
+        .manager
+        .start(&h.model_id, &settings(30))
+        .await
+        .expect_err("planted library");
+    match err {
+        RuntimeError::BinaryChanged(path) => assert_eq!(path, planted),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    std::fs::remove_file(&planted).unwrap();
+    h.manager
+        .start(&h.model_id, &settings(30))
+        .await
+        .expect("starts again once the folder is clean");
+    h.manager.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

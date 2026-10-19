@@ -27,11 +27,17 @@ and a stuck or crashed engine must never take the UI down.
   symlinks are rejected), and runs `llama-server --version` once. Builds:
   CPU and Vulkan (Windows `.zip`, Linux `.tar.gz`, x64/arm64). Other backends
   (CUDA, ROCm, SYCL) can be used by selecting an existing `llama-server`.
-- **Tamper check.** The SHA-256 of the executable is recorded at install and
-  verified before every start.
+- **Tamper check.** The SHA-256 of the executable and of every shared library
+  in its directory (`.dll`, `.so`, `.dylib`) is recorded at install and
+  verified before every start; an added, removed or changed library blocks
+  the start. Windows builds ship `llama-server.exe` as a 9 KB launcher with
+  the server in `llama-server-impl.dll`, so hashing the executable alone
+  would not protect anything.
 - **Launch hardening.** The server listens on `127.0.0.1` only, on a free
-  port, with a random per-launch `--api-key`, so other local programs and web
-  pages in the user's browser cannot use it. After start-up JARVIS verifies
+  port, with a random per-launch API key, so other local programs and web
+  pages in the user's browser cannot use it. The key is passed in the
+  environment (`LLAMA_API_KEY`), not on the command line, which other users
+  can read (`/proc/<pid>/cmdline`). After start-up JARVIS verifies
   that an unauthenticated request is rejected and logs a security event if
   not. Only long-standing command-line options are used. On Windows the
   console window is suppressed.
@@ -48,6 +54,11 @@ and a stuck or crashed engine must never take the UI down.
   ≥ 4 GiB is credited when layers are offloaded). GPU layers are automatic
   (all if the model fits in VRAM, a proportional share otherwise) or set by
   the user. Threads default to physical cores.
+- **Backend choice.** The Vulkan build is recommended only when a GPU with at
+  least 4 GiB of dedicated memory is detected. Live testing on a Radeon Vega
+  8 (integrated, 2 GB) with llama.cpp b11739 gave garbled output with any
+  number of offloaded layers, while the same model on the CPU answered
+  correctly; integrated GPUs also share memory bandwidth with the CPU.
 - **Models.** GGUF headers are parsed with strict bounds before a file is
   accepted. Files imported from elsewhere stay in place and are never deleted
   by JARVIS; it deletes only files inside its models folder, comparing

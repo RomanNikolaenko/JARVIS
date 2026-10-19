@@ -111,10 +111,11 @@ JARVIS talks to AI servers over HTTP. Configure them on the **Models** screen
 The **Runtime** screen manages a llama.cpp `llama-server` that JARVIS starts
 itself:
 
-1. *Engine*: pick CPU or Vulkan (recommended when a GPU and the Vulkan loader
-   are present), press **Find build**, review tag, file, size and SHA-256,
-   then **Download & install**. Or use an existing `llama-server` (any
-   backend, e.g. CUDA).
+1. *Engine*: pick CPU or Vulkan (recommended when the Vulkan loader and a GPU
+   with at least 4 GB of dedicated memory are present), press **Find build**,
+   review tag, file, size and SHA-256, then **Download & install**. Or use an
+   existing `llama-server` (any backend, e.g. CUDA). If replies look garbled
+   with Vulkan (seen on a Radeon Vega 8), set *GPU offload* to *Off*.
 2. *Models*: download a curated model or any public GGUF from Hugging Face
    (`owner/repo` + file name), or import a local `.gguf` (stays in place).
 3. Press **Start**. The model appears as provider "JARVIS runtime" in Models
@@ -171,5 +172,5 @@ The exact paths are shown on the Settings screen.
 | App launch and UI check (CDP-driven, incl. mock Ollama server) | ✔ | not yet verified |
 | Runtime supervisor with real processes (fake `llama-server`) | ✔ | CI only |
 | Runtime screen: hardware detection, llama.cpp release lookup (no install) | ✔ | not yet verified |
-| Real llama.cpp build + GGUF model end to end | not yet verified | not yet verified |
+| Real llama.cpp build (b11739 Vulkan) + Qwen2.5 3B: install, start, chat, stop | ✔ CPU offload; Vulkan on Radeon Vega 8 gives garbled output | not yet verified |
 | Real Ollama / LM Studio | not installed on the dev machine | not verified |

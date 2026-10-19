@@ -28,7 +28,7 @@ mod types;
 pub use error::{Result, RuntimeError};
 pub use manager::{RUNTIME_PROVIDER_ID, RuntimeManager, RuntimeOptions, gpu_layers};
 pub use types::{
-    BinarySource, CuratedModel, DownloadKind, DownloadPhase, DownloadStatus, GgufInfo, GpuOffload,
-    LocalModel, MemoryEstimate, ModelDownloadRequest, ModelSource, RuntimeBackend, RuntimeBinary,
-    RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase, ServerState,
+    BinarySource, CuratedModel, DownloadKind, DownloadPhase, DownloadStatus, FileDigest, GgufInfo,
+    GpuOffload, LocalModel, MemoryEstimate, ModelDownloadRequest, ModelSource, RuntimeBackend,
+    RuntimeBinary, RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase, ServerState,
 };

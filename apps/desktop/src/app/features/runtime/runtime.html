@@ -87,6 +87,11 @@
         Use existing llama-server…
       </button>
     </div>
+    <p class="hint">
+      Vulkan is recommended for GPUs with 4 GB or more of dedicated memory. Integrated GPUs are
+      rarely faster than the CPU, and some older drivers produce garbled replies: if that happens,
+      set GPU offload to “Off” in the inference settings or use the CPU build.
+    </p>
 
     @if (store.release(); as release) {
       <div class="release">

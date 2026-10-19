@@ -15,9 +15,18 @@ import { JarvisApi } from '../ipc/jarvis-api';
 import { ModelsStore } from './models.store';
 import { SettingsStore } from './settings.store';
 
-/** Vulkan when a GPU and a Vulkan loader exist, otherwise CPU. */
+/** Dedicated GPU memory from which the Vulkan build is recommended. */
+export const VULKAN_MIN_VRAM_BYTES = 4 * 1024 ** 3;
+
+/**
+ * Vulkan when a Vulkan loader and a GPU with enough dedicated memory exist,
+ * otherwise CPU. Integrated GPUs share system memory, so they rarely beat the
+ * CPU build, and some older drivers compute wrong results (seen with Radeon
+ * Vega 8); users can still pick Vulkan.
+ */
 export function recommendedBackend(hardware: HardwareInfo | null): RuntimeBackend {
-  return hardware && hardware.vulkanAvailable && hardware.gpus.length > 0 ? 'vulkan' : 'cpu';
+  const capable = hardware?.gpus.some((gpu) => (gpu.vramTotalBytes ?? 0) >= VULKAN_MIN_VRAM_BYTES);
+  return hardware?.vulkanAvailable && capable ? 'vulkan' : 'cpu';
 }
 
 /** State of the embedded llama.cpp runtime (Runtime screen). */

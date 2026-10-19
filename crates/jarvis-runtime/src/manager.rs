@@ -25,7 +25,7 @@ use crate::installer;
 use crate::library::{self, ModelLibrary, now_ms};
 use crate::process::{self, CommandFactory, LaunchPlan, LogTail};
 use crate::types::{
-    BinarySource, CuratedModel, DownloadKind, DownloadPhase, GpuOffload, LocalModel,
+    BinarySource, CuratedModel, DownloadKind, DownloadPhase, FileDigest, GpuOffload, LocalModel,
     ModelDownloadRequest, ModelSource, RuntimeBackend, RuntimeBinary, RuntimeRelease,
     RuntimeSettings, RuntimeStatus, ServerPhase, ServerState,
 };
@@ -294,6 +294,7 @@ impl RuntimeManager {
                 url: release.download_url.clone(),
             },
             sha256: download::sha256_file(&server).await?,
+            libraries: installer::library_digests(&server).await?,
             installed_at_ms: now_ms(),
         };
         self.save_binary(binary.clone()).await?;
@@ -322,6 +323,7 @@ impl RuntimeManager {
             version,
             source: BinarySource::UserSelected,
             sha256: download::sha256_file(&path).await?,
+            libraries: installer::library_digests(&path).await?,
             installed_at_ms: now_ms(),
         };
         self.save_binary(binary.clone()).await?;
@@ -486,6 +488,14 @@ impl RuntimeManager {
             .map_err(|_| RuntimeError::BinaryChanged(binary_path.clone()))?;
         if actual != binary.sha256 {
             return Err(RuntimeError::BinaryChanged(binary_path));
+        }
+        let libraries = installer::library_digests(&binary_path)
+            .await
+            .map_err(|_| RuntimeError::BinaryChanged(binary_path.clone()))?;
+        if let Some(name) = changed_library(&binary.libraries, &libraries) {
+            return Err(RuntimeError::BinaryChanged(
+                binary_path.with_file_name(name),
+            ));
         }
         let model = self.library.get(model_id).ok_or_else(|| {
             RuntimeError::NotFound(format!("model \"{model_id}\" is not in the library"))
@@ -779,6 +789,16 @@ async fn load_install_record(runtime_dir: &Path) -> Option<RuntimeBinary> {
     }
 }
 
+/// Name of the first library that was added, removed or changed since the
+/// binary was recorded.
+fn changed_library(recorded: &[FileDigest], current: &[FileDigest]) -> Option<String> {
+    current
+        .iter()
+        .find(|f| !recorded.contains(f))
+        .or_else(|| recorded.iter().find(|f| !current.contains(f)))
+        .map(|f| f.name.clone())
+}
+
 /// Graceful stop where the OS supports it, then a hard kill.
 async fn terminate(child: &mut Child) {
     if let Some(pid) = child.id() {
@@ -887,6 +907,32 @@ mod tests {
             managed: false,
             available: true,
         }
+    }
+
+    #[test]
+    fn library_changes_are_named() {
+        let digest = |name: &str, sha: &str| FileDigest {
+            name: name.into(),
+            sha256: sha.into(),
+        };
+        let recorded = [digest("a.dll", "1"), digest("b.dll", "2")];
+        assert_eq!(changed_library(&recorded, &recorded), None);
+        let changed = [digest("a.dll", "1"), digest("b.dll", "3")];
+        assert_eq!(
+            changed_library(&recorded, &changed).as_deref(),
+            Some("b.dll")
+        );
+        let added = [
+            digest("a.dll", "1"),
+            digest("b.dll", "2"),
+            digest("c.dll", "4"),
+        ];
+        assert_eq!(changed_library(&recorded, &added).as_deref(), Some("c.dll"));
+        let removed = [digest("a.dll", "1")];
+        assert_eq!(
+            changed_library(&recorded, &removed).as_deref(),
+            Some("b.dll")
+        );
     }
 
     #[test]

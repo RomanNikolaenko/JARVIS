@@ -17,6 +17,11 @@ export type DownloadPhase = "downloading" | "verifying" | "installing" | "comple
 export type DownloadStatus = { id: string, kind: DownloadKind, label: string, receivedBytes: number, totalBytes: number | null, bytesPerSecond: number, phase: DownloadPhase, error: string | null, startedAtMs: number, };
 
 /**
+ * SHA-256 of a file, by name within its directory.
+ */
+export type FileDigest = { name: string, sha256: string, };
+
+/**
  * Metadata read from a GGUF header.
  */
 export type GgufInfo = { architecture: string | null, name: string | null, 
@@ -90,7 +95,13 @@ version: string, backend: RuntimeBackend, source: BinarySource,
 /**
  * SHA-256 of the executable, checked before every start.
  */
-sha256: string, installedAtMs: number, };
+sha256: string, 
+/**
+ * Shared libraries next to the executable, also checked before every
+ * start: the executable may be a thin launcher (Windows builds) and the
+ * loader picks libraries up from its directory.
+ */
+libraries: Array<FileDigest>, installedAtMs: number, };
 
 /**
  * A llama.cpp release asset offered for installation.

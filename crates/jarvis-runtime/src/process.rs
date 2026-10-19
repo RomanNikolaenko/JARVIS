@@ -35,7 +35,8 @@ pub struct LaunchPlan {
 }
 
 /// Command-line arguments for `llama-server`. Only long-standing options are
-/// used, so older and newer builds accept them.
+/// used, so older and newer builds accept them. The API key is not among
+/// them: see [`apply_api_key`].
 pub fn server_args(plan: &LaunchPlan) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     let mut push = |flag: &str, value: OsString| {
@@ -50,8 +51,16 @@ pub fn server_args(plan: &LaunchPlan) -> Vec<OsString> {
     push("--n-gpu-layers", plan.gpu_layers.to_string().into());
     push("--alias", plan.model_alias.clone().into());
     push("--parallel", "1".into());
-    push("--api-key", plan.api_key.clone().into());
     args
+}
+
+/// Passes the API key in the environment (`LLAMA_API_KEY`). Command lines
+/// are visible to other users (`/proc/<pid>/cmdline`); the environment of a
+/// process is not. An inherited key file would add keys, so it is dropped.
+pub fn apply_api_key(command: &mut std::process::Command, plan: &LaunchPlan) {
+    command
+        .env_remove("LLAMA_ARG_API_KEY_FILE")
+        .env("LLAMA_API_KEY", &plan.api_key);
 }
 
 /// Builds the OS command for a plan. Replaceable for tests.
@@ -61,6 +70,7 @@ pub fn default_command_factory() -> CommandFactory {
     Arc::new(|plan: &LaunchPlan| {
         let mut command = std::process::Command::new(&plan.binary);
         command.args(server_args(plan));
+        apply_api_key(&mut command, plan);
         if let Some(dir) = plan.binary.parent() {
             command.current_dir(dir);
             // Release builds keep their shared libraries next to the binary.
@@ -225,6 +235,8 @@ pub fn random_key() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
 
     fn plan() -> LaunchPlan {
@@ -256,8 +268,17 @@ mod tests {
         assert_eq!(value("--port").as_deref(), Some("4321"));
         assert_eq!(value("--ctx-size").as_deref(), Some("4096"));
         assert_eq!(value("--n-gpu-layers").as_deref(), Some("99"));
-        assert_eq!(value("--api-key").as_deref(), Some("k"));
         assert_eq!(value("--alias").as_deref(), Some("q"));
+        assert!(!args.iter().any(|a| a.contains("api-key") || a == "k"));
+    }
+
+    #[test]
+    fn the_api_key_is_passed_in_the_environment() {
+        let command = default_command_factory()(&plan());
+        assert!(!command.get_args().any(|a| a == "k"));
+        let env: Vec<_> = command.get_envs().collect();
+        assert!(env.contains(&(OsStr::new("LLAMA_API_KEY"), Some(OsStr::new("k")))));
+        assert!(env.contains(&(OsStr::new("LLAMA_ARG_API_KEY_FILE"), None)));
     }
 
     #[test]

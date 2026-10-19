@@ -17,12 +17,15 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::error::{Result, RuntimeError};
-use crate::types::{RuntimeBackend, RuntimeRelease};
+use crate::types::{FileDigest, RuntimeBackend, RuntimeRelease};
 
 pub const LLAMA_CPP_REPO: &str = "ggml-org/llama.cpp";
 const RELEASES_TO_SCAN: u32 = 10;
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// More shared libraries than this next to `llama-server` is not a llama.cpp
+/// build folder.
+const MAX_LIBRARIES: usize = 512;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Name of the server executable on this platform.
@@ -411,6 +414,53 @@ pub fn detect_backend(server: &Path) -> RuntimeBackend {
     }
 }
 
+/// Whether a loader may pick `name` up as a shared library.
+pub fn is_shared_library(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.ends_with(".dll")
+        || name.ends_with(".so")
+        || name.contains(".so.")
+        || name.ends_with(".dylib")
+}
+
+/// SHA-256 of the shared libraries in the directory of `server` (not
+/// recursive), sorted by name. Symlinks are followed, so retargeting one
+/// changes its digest.
+pub async fn library_digests(server: &Path) -> Result<Vec<FileDigest>> {
+    let dir = server.parent().ok_or_else(|| {
+        RuntimeError::InvalidInput(format!("{} has no parent directory", server.display()))
+    })?;
+    let context = || format!("reading {}", dir.display());
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|err| RuntimeError::io(context(), err))?;
+    let mut libraries = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|err| RuntimeError::io(context(), err))?
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if is_shared_library(&name) && tokio::fs::metadata(&path).await.is_ok_and(|m| m.is_file()) {
+            libraries.push((name, path));
+        }
+        if libraries.len() > MAX_LIBRARIES {
+            return Err(RuntimeError::InvalidInput(format!(
+                "{} contains more than {MAX_LIBRARIES} shared libraries; use llama-server from a llama.cpp build folder",
+                dir.display()
+            )));
+        }
+    }
+    libraries.sort();
+    let mut digests = Vec::with_capacity(libraries.len());
+    for (name, path) in libraries {
+        let sha256 = crate::download::sha256_file(&path).await?;
+        digests.push(FileDigest { name, sha256 });
+    }
+    Ok(digests)
+}
+
 /// Runs `llama-server --version` and returns the version line. This executes
 /// the binary, so it is only called after the user approved it.
 pub async fn probe_version(
@@ -457,7 +507,51 @@ pub async fn probe_version(
 mod tests {
     use std::io::Write;
 
+    use sha2::{Digest, Sha256};
+
     use super::*;
+
+    #[test]
+    fn shared_libraries_are_recognised() {
+        for name in [
+            "ggml-vulkan.dll",
+            "LLAMA.DLL",
+            "libllama.so",
+            "libggml.so.0.1",
+            "libomp.dylib",
+        ] {
+            assert!(is_shared_library(name), "{name}");
+        }
+        for name in [
+            "llama-server.exe",
+            "llama-server",
+            "LICENSE",
+            "model.gguf",
+            "notes.sol",
+        ] {
+            assert!(!is_shared_library(name), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn digests_cover_the_libraries_next_to_the_server() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = dir.path().join("llama-server.exe");
+        std::fs::write(&server, b"launcher").expect("write");
+        std::fs::write(dir.path().join("llama.dll"), b"engine").expect("write");
+        std::fs::write(dir.path().join("libggml.so.1"), b"ggml").expect("write");
+        std::fs::write(dir.path().join("README.md"), b"docs").expect("write");
+        std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+        std::fs::write(dir.path().join("sub").join("other.dll"), b"x").expect("write");
+
+        let digests = library_digests(&server).await.expect("digests");
+        let names: Vec<&str> = digests.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["libggml.so.1", "llama.dll"]);
+        assert_eq!(
+            digests[1].sha256,
+            crate::download::hex(&Sha256::digest(b"engine"))
+        );
+    }
 
     #[test]
     fn builds_asset_names_for_supported_platforms() {

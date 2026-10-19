@@ -51,7 +51,21 @@ pub struct RuntimeBinary {
     pub source: BinarySource,
     /// SHA-256 of the executable, checked before every start.
     pub sha256: String,
+    /// Shared libraries next to the executable, also checked before every
+    /// start: the executable may be a thin launcher (Windows builds) and the
+    /// loader picks libraries up from its directory.
+    #[serde(default)]
+    pub libraries: Vec<FileDigest>,
     pub installed_at_ms: u64,
+}
+
+/// SHA-256 of a file, by name within its directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "runtime.ts")]
+pub struct FileDigest {
+    pub name: String,
+    pub sha256: String,
 }
 
 /// A llama.cpp release asset offered for installation.

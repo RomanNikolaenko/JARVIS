@@ -63,9 +63,16 @@ describe('RuntimeStore', () => {
     store = TestBed.inject(RuntimeStore);
   });
 
-  it('recommends Vulkan only with a GPU and a Vulkan loader', () => {
-    expect(recommendedBackend(HARDWARE)).toBe('vulkan');
-    expect(recommendedBackend({ ...HARDWARE, vulkanAvailable: false })).toBe('cpu');
+  it('recommends Vulkan only with a Vulkan loader and a GPU with 4 GB or more', () => {
+    const gpu = HARDWARE.gpus[0];
+    const discrete = { ...HARDWARE, gpus: [{ ...gpu, vramTotalBytes: 8 * 1024 ** 3 }] };
+    expect(recommendedBackend(discrete)).toBe('vulkan');
+    expect(recommendedBackend({ ...discrete, vulkanAvailable: false })).toBe('cpu');
+    // A small integrated GPU (Radeon Vega 8: 2 GB) or unknown memory: CPU.
+    expect(recommendedBackend(HARDWARE)).toBe('cpu');
+    expect(recommendedBackend({ ...HARDWARE, gpus: [{ ...gpu, vramTotalBytes: null }] })).toBe(
+      'cpu',
+    );
     expect(recommendedBackend({ ...HARDWARE, gpus: [] })).toBe('cpu');
     expect(recommendedBackend(null)).toBe('cpu');
   });

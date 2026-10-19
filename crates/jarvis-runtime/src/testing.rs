@@ -14,9 +14,10 @@
 //! current test binary with `fake_llama_server --exact`, and the entry point
 //! serves a minimal llama.cpp-compatible API when `JARVIS_FAKE_LLAMA` is set.
 
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -53,8 +54,9 @@ pub fn fake_command_factory(mode: &'static str) -> CommandFactory {
             ])
             .env(FAKE_ENV, mode)
             .env("FAKE_PORT", plan.port.to_string())
-            .env("FAKE_KEY", &plan.api_key)
             .env("FAKE_ALIAS", &plan.model_alias);
+        // The key reaches the fake exactly as it reaches llama-server.
+        crate::process::apply_api_key(&mut command, plan);
         command
     })
 }
@@ -75,27 +77,42 @@ pub fn fake_gguf_bytes() -> Vec<u8> {
     out
 }
 
-/// Registers the current test binary as the installed runtime in `data_dir`.
-pub async fn install_fake_runtime(data_dir: &Path, sha256: Option<String>) -> std::io::Result<()> {
+/// Registers a copy of the current test binary as the installed runtime in
+/// `data_dir` and returns its path. The copy sits alone in `data_dir/engine`
+/// like a real build folder (the test binary's own folder is full of
+/// unrelated libraries).
+pub async fn install_fake_runtime(
+    data_dir: &Path,
+    sha256: Option<String>,
+) -> std::io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
+    let engine_dir = data_dir.join("engine");
+    tokio::fs::create_dir_all(&engine_dir).await?;
+    let binary = engine_dir.join(exe.file_name().unwrap_or(OsStr::new("fake-llama-server")));
+    if !binary.exists() && std::fs::hard_link(&exe, &binary).is_err() {
+        tokio::fs::copy(&exe, &binary).await?;
+    }
+    let to_io = |err: crate::RuntimeError| std::io::Error::other(err.to_string());
     let sha256 = match sha256 {
         Some(sha256) => sha256,
-        None => crate::download::sha256_file(&exe)
-            .await
-            .map_err(|err| std::io::Error::other(err.to_string()))?,
+        None => crate::download::sha256_file(&binary).await.map_err(to_io)?,
     };
-    let binary = RuntimeBinary {
-        path: exe.display().to_string(),
+    let record = RuntimeBinary {
+        path: binary.display().to_string(),
         version: "version: 0 (fake)".into(),
         backend: RuntimeBackend::Cpu,
         source: BinarySource::UserSelected,
         sha256,
+        libraries: crate::installer::library_digests(&binary)
+            .await
+            .map_err(to_io)?,
         installed_at_ms: 0,
     };
     let runtime_dir = data_dir.join("runtime");
     tokio::fs::create_dir_all(&runtime_dir).await?;
-    let json = serde_json::to_vec(&binary).map_err(std::io::Error::other)?;
-    tokio::fs::write(runtime_dir.join("install.json"), json).await
+    let json = serde_json::to_vec(&record).map_err(std::io::Error::other)?;
+    tokio::fs::write(runtime_dir.join("install.json"), json).await?;
+    Ok(binary)
 }
 
 /// Entry point of the fake server. Returns immediately unless the test binary
@@ -109,7 +126,7 @@ pub fn fake_server_entry() {
         .ok()
         .and_then(|p| p.parse().ok())
         .expect("FAKE_PORT");
-    let key = std::env::var("FAKE_KEY").unwrap_or_default();
+    let key = std::env::var("LLAMA_API_KEY").unwrap_or_default();
     let alias = std::env::var("FAKE_ALIAS").unwrap_or_default();
     if mode == mode::EXIT_EARLY {
         eprintln!("llama_model_load: error loading model: fake failure");
