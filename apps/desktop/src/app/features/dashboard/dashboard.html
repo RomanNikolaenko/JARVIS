@@ -1,0 +1,160 @@
+<div class="grid">
+  <jv-hud-panel class="hero">
+    <div class="hero-body">
+      <jv-ai-core [state]="coreState()" [size]="230" />
+      <div class="hero-text">
+        <div class="eyebrow">J.A.R.V.I.S. status</div>
+        <h1 class="headline">{{ headline() }}</h1>
+        @if (health(); as report) {
+          <p class="sub">
+            Uptime {{ formatUptime(report.uptimeSecs) }} · core v{{ report.version }}
+          </p>
+        }
+        <a class="primary-action" routerLink="/chat">
+          <jv-icon name="chat" />
+          Open chat
+        </a>
+      </div>
+    </div>
+  </jv-hud-panel>
+
+  <jv-hud-panel class="health" heading="Core components">
+    @if (health(); as report) {
+      <ul class="component-list">
+        @for (component of report.components; track component.id) {
+          <li>
+            <div class="component-head">
+              <span class="component-name">{{ component.label }}</span>
+              <jv-status-badge [status]="component.status" />
+            </div>
+            <div class="component-message">{{ component.message }}</div>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="placeholder">Waiting for the first health check…</p>
+    }
+  </jv-hud-panel>
+
+  <jv-hud-panel class="resources" heading="Resources">
+    @if (metrics(); as m) {
+      <div class="meter">
+        <div class="meter-label">
+          <span><jv-icon name="cpu" [size]="15" /> CPU</span>
+          <span class="mono">{{ formatPercent(m.cpuUsagePercent) }}</span>
+        </div>
+        <div class="meter-track">
+          <div class="meter-fill" [style.width]="meterWidth(m.cpuUsagePercent)"></div>
+        </div>
+      </div>
+      <div class="meter">
+        <div class="meter-label">
+          <span><jv-icon name="memory" [size]="15" /> Memory</span>
+          <span class="mono"
+            >{{ formatBytes(m.memoryUsedBytes) }} / {{ formatBytes(m.memoryTotalBytes) }}</span
+          >
+        </div>
+        <div class="meter-track">
+          <div class="meter-fill" [style.width]="meterWidth(memoryPercent())"></div>
+        </div>
+      </div>
+      <dl class="facts">
+        <div>
+          <dt>JARVIS memory</dt>
+          <dd>{{ formatBytes(m.processMemoryBytes) }}</dd>
+        </div>
+        <div>
+          <dt>JARVIS CPU</dt>
+          <dd>{{ formatPercent(m.processCpuPercent) }}</dd>
+        </div>
+        <div>
+          <dt>System uptime</dt>
+          <dd>{{ formatUptime(m.uptimeSecs) }}</dd>
+        </div>
+      </dl>
+    } @else {
+      <p class="placeholder">No measurements yet.</p>
+    }
+  </jv-hud-panel>
+
+  <jv-hud-panel class="model" heading="Active AI model">
+    @if (selectedModel(); as option) {
+      <div class="model-name">{{ option.model.displayName }}</div>
+      <div class="model-meta">
+        {{ option.provider.displayName }} · {{ localityLabels[option.provider.locality] }}
+      </div>
+    } @else {
+      <div class="model-name dim">No model selected</div>
+    }
+    @if (diagnosticOnly()) {
+      <p class="note">
+        <jv-icon name="warning" [size]="15" />
+        No AI model is connected yet. The diagnostic echo provider verifies streaming and
+        cancellation; Ollama and OpenAI-compatible servers follow in Phase 2.
+      </p>
+    }
+  </jv-hud-panel>
+
+  <jv-hud-panel class="voice" heading="Voice">
+    <div class="voice-row">
+      <span class="voice-icon"><jv-icon name="micOff" [size]="22" /></span>
+      <div>
+        <div class="voice-state">Microphone off</div>
+        <div class="model-meta">
+          Voice engine is not installed yet (Phase 6). JARVIS never listens without a visible
+          indicator.
+        </div>
+      </div>
+    </div>
+  </jv-hud-panel>
+
+  <jv-hud-panel class="events" heading="Recent events">
+    <a panelActions class="link" routerLink="/events">View all</a>
+    @if (recentEvents().length) {
+      <ul class="event-list">
+        @for (event of recentEvents(); track event.id) {
+          <li>
+            <time class="mono dim">{{ formatClock(event.timestampMs) }}</time>
+            <jv-status-badge [status]="event.level" />
+            <span class="event-message">{{ event.message }}</span>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="placeholder">No events yet.</p>
+    }
+  </jv-hud-panel>
+
+  <jv-hud-panel class="platform" heading="Platform">
+    @if (platform(); as p) {
+      <dl class="facts">
+        <div>
+          <dt>OS</dt>
+          <dd>{{ p.osName ?? p.osFamily }}</dd>
+        </div>
+        <div>
+          <dt>Display server</dt>
+          <dd>{{ p.displayServer }}</dd>
+        </div>
+        <div>
+          <dt>Architecture</dt>
+          <dd>{{ p.arch }}</dd>
+        </div>
+        <div>
+          <dt>CPU</dt>
+          <dd>{{ p.cpuBrand ?? 'unknown' }}</dd>
+        </div>
+        <div>
+          <dt>Cores / threads</dt>
+          <dd>{{ p.physicalCores ?? '?' }} / {{ p.logicalCpus }}</dd>
+        </div>
+        <div>
+          <dt>RAM</dt>
+          <dd>{{ formatBytes(p.totalMemoryBytes) }}</dd>
+        </div>
+      </dl>
+    } @else {
+      <p class="placeholder">Platform information unavailable.</p>
+    }
+  </jv-hud-panel>
+</div>

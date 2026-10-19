@@ -1,0 +1,265 @@
+//! IPC tests: commands are invoked through Tauri's real IPC pipeline (mock
+//! runtime, real `tauri.conf.json` and capabilities), so argument naming,
+//! serialization and the permission system are all exercised.
+
+use jarvis_core::{AppPaths, CoreOptions, JarvisCore};
+use serde_json::{Value, json};
+use tauri::ipc::{CallbackFn, InvokeBody};
+use tauri::test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder};
+use tauri::webview::InvokeRequest;
+use tauri::{App, WebviewWindow, WebviewWindowBuilder};
+
+use crate::{AppState, MAIN_WINDOW, with_commands};
+
+struct Harness {
+    _app: App<MockRuntime>,
+    main: WebviewWindow<MockRuntime>,
+    other: WebviewWindow<MockRuntime>,
+    dir: tempfile::TempDir,
+}
+
+fn harness() -> Harness {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = AppPaths {
+        config_dir: dir.path().join("config"),
+        data_dir: dir.path().join("data"),
+        log_dir: dir.path().join("logs"),
+    };
+    let core = tauri::async_runtime::block_on(JarvisCore::initialize(CoreOptions::new(
+        paths,
+        "0.0.0-test",
+    )))
+    .expect("core");
+
+    let app = with_commands(mock_builder())
+        .manage(AppState::new(core, None))
+        .build(tauri::generate_context!())
+        .expect("app");
+    let main = WebviewWindowBuilder::new(&app, MAIN_WINDOW, Default::default())
+        .build()
+        .expect("main window");
+    // A window that no capability applies to.
+    let other = WebviewWindowBuilder::new(&app, "untrusted", Default::default())
+        .build()
+        .expect("other window");
+
+    Harness {
+        _app: app,
+        main,
+        other,
+        dir,
+    }
+}
+
+fn invoke(window: &WebviewWindow<MockRuntime>, cmd: &str, args: Value) -> Result<Value, Value> {
+    let url = if cfg!(windows) {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    };
+    get_ipc_response(
+        window,
+        InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: url.parse().expect("url"),
+            body: InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        },
+    )
+    .map(|body| body.deserialize::<Value>().expect("json response"))
+}
+
+/// Commands that must be callable from the main window without arguments.
+const READ_ONLY_COMMANDS: &[&str] = &[
+    "get_app_info",
+    "get_health",
+    "get_platform_info",
+    "get_system_metrics",
+    "get_settings",
+    "get_recent_events",
+    "list_ai_models",
+];
+
+#[test]
+fn read_only_commands_are_allowed_for_the_main_window() {
+    let h = harness();
+    for cmd in READ_ONLY_COMMANDS {
+        let result = invoke(&h.main, cmd, json!({}));
+        assert!(result.is_ok(), "{cmd} failed: {result:?}");
+    }
+}
+
+#[test]
+fn every_command_is_denied_for_windows_without_a_capability() {
+    let h = harness();
+    let all = READ_ONLY_COMMANDS.iter().chain(&[
+        "update_settings",
+        "start_chat",
+        "cancel_chat",
+        "report_ui_error",
+    ]);
+    for cmd in all {
+        let result = invoke(&h.other, cmd, json!({}));
+        let error = result.expect_err(cmd);
+        assert!(
+            error.to_string().contains("not allowed"),
+            "{cmd}: unexpected error {error}"
+        );
+    }
+}
+
+#[test]
+fn unknown_commands_are_rejected() {
+    let h = harness();
+    assert!(invoke(&h.main, "delete_everything", json!({})).is_err());
+}
+
+#[test]
+fn health_report_lists_components() {
+    let h = harness();
+    let report = invoke(&h.main, "get_health", json!({})).expect("health");
+    assert_eq!(report["version"], "0.0.0-test");
+    let ids: Vec<&str> = report["components"]
+        .as_array()
+        .expect("components")
+        .iter()
+        .filter_map(|c| c["id"].as_str())
+        .collect();
+    for expected in ["config", "storage", "events", "platform", "ai"] {
+        assert!(ids.contains(&expected), "missing component {expected}");
+    }
+    // Only the diagnostic provider is registered.
+    assert_eq!(report["status"], "degraded");
+}
+
+#[test]
+fn settings_roundtrip_and_validation_errors() {
+    let h = harness();
+    let mut settings = invoke(&h.main, "get_settings", json!({})).expect("settings");
+    assert_eq!(settings["general"]["assistantLanguage"], "uk");
+
+    settings["general"]["assistantLanguage"] = json!("en");
+    let saved =
+        invoke(&h.main, "update_settings", json!({ "settings": settings })).expect("update");
+    assert_eq!(saved["general"]["assistantLanguage"], "en");
+    let file = std::fs::read_to_string(h.dir.path().join("config").join("config.toml"))
+        .expect("config file");
+    assert!(file.contains("assistantLanguage = \"en\""), "{file}");
+
+    let mut invalid = saved.clone();
+    invalid["ai"]["requestTimeoutSecs"] = json!(1);
+    let error = invoke(&h.main, "update_settings", json!({ "settings": invalid }))
+        .expect_err("validation error");
+    assert_eq!(error["code"], "validation");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("requestTimeoutSecs")
+    );
+}
+
+#[test]
+fn malformed_arguments_are_rejected() {
+    let h = harness();
+    let result = invoke(
+        &h.main,
+        "update_settings",
+        json!({ "settings": { "ai": { "requestTimeoutSecs": "soon" } } }),
+    );
+    assert!(result.is_err());
+
+    let result = invoke(&h.main, "cancel_chat", json!({ "requestId": "not-a-uuid" }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn recent_events_include_startup() {
+    let h = harness();
+    let events = invoke(&h.main, "get_recent_events", json!({ "limit": 50 })).expect("events");
+    let messages: Vec<&str> = events
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter_map(|e| e["message"].as_str())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("core ready")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn chat_can_be_started_and_unknown_requests_are_not_cancelled() {
+    let h = harness();
+    let request_id = invoke(
+        &h.main,
+        "start_chat",
+        json!({
+            "request": {
+                "providerId": null,
+                "model": null,
+                "messages": [{ "role": "user", "content": "hello" }],
+                "temperature": null,
+                "maxOutputTokens": null
+            },
+            "onEvent": "__CHANNEL__:1"
+        }),
+    )
+    .expect("start chat");
+    assert!(
+        request_id.as_str().is_some_and(|id| id.len() == 36),
+        "{request_id}"
+    );
+
+    let cancelled = invoke(
+        &h.main,
+        "cancel_chat",
+        json!({ "requestId": "00000000-0000-4000-8000-000000000000" }),
+    )
+    .expect("cancel");
+    assert_eq!(cancelled, json!(false));
+}
+
+#[test]
+fn invalid_chat_requests_return_validation_errors() {
+    let h = harness();
+    let error = invoke(
+        &h.main,
+        "start_chat",
+        json!({
+            "request": {
+                "providerId": null,
+                "model": null,
+                "messages": [],
+                "temperature": null,
+                "maxOutputTokens": null
+            },
+            "onEvent": "__CHANNEL__:2"
+        }),
+    )
+    .expect_err("empty chat");
+    assert_eq!(error["code"], "validation");
+}
+
+#[test]
+fn ui_errors_are_recorded_as_events() {
+    let h = harness();
+    invoke(
+        &h.main,
+        "report_ui_error",
+        json!({ "report": { "message": "boom", "context": "test" } }),
+    )
+    .expect("report");
+    let events = invoke(&h.main, "get_recent_events", json!({})).expect("events");
+    assert!(
+        events
+            .as_array()
+            .expect("array")
+            .iter()
+            .any(|e| e["category"] == "ui" && e["message"].as_str().unwrap_or("").contains("boom"))
+    );
+}

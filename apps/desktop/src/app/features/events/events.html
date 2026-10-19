@@ -1,0 +1,55 @@
+<header class="page-header">
+  <div>
+    <h1 class="title">Event log</h1>
+    <p class="subtitle">
+      System events of the current session. Diagnostic logs are written to the log directory.
+    </p>
+  </div>
+  <div class="filters">
+    <label>
+      <span>Level</span>
+      <select (change)="onLevel($event)" aria-label="Minimum level">
+        @for (level of levels; track level) {
+          <option [value]="level" [selected]="level === minLevel()">{{ level }}+</option>
+        }
+      </select>
+    </label>
+    <label>
+      <span>Category</span>
+      <select (change)="onCategory($event)" aria-label="Category">
+        <option value="all" [selected]="category() === 'all'">all</option>
+        @for (c of categories; track c) {
+          <option [value]="c" [selected]="c === category()">{{ c }}</option>
+        }
+      </select>
+    </label>
+    <input
+      type="search"
+      placeholder="Search…"
+      aria-label="Search events"
+      [value]="query()"
+      (input)="onQuery($event)"
+    />
+  </div>
+</header>
+
+@if (error(); as e) {
+  <p class="error">Cannot subscribe to events: {{ e.message }}</p>
+}
+
+<jv-hud-panel [heading]="filtered().length + ' of ' + total() + ' events'">
+  @if (filtered().length) {
+    <ul class="event-list">
+      @for (event of filtered(); track event.id) {
+        <li>
+          <time class="mono dim">{{ formatClock(event.timestampMs) }}</time>
+          <jv-status-badge [status]="event.level" />
+          <span class="category mono">{{ event.category }}</span>
+          <span class="message">{{ event.message }}</span>
+        </li>
+      }
+    </ul>
+  } @else {
+    <p class="placeholder">No events match the current filters.</p>
+  }
+</jv-hud-panel>

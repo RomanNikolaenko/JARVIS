@@ -1,0 +1,53 @@
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <div class="brand-name">J.A.R.V.I.S.</div>
+        <div class="brand-sub">Personal AI assistant</div>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="Main navigation">
+      @for (item of nav; track item.path) {
+        <a
+          class="nav-link"
+          [routerLink]="item.path"
+          routerLinkActive="active"
+          ariaCurrentWhenActive="page"
+        >
+          <jv-icon [name]="item.icon" />
+          <span>{{ item.label }}</span>
+        </a>
+      }
+    </nav>
+
+    <div class="sidebar-footer">
+      @if (appInfo(); as info) {
+        <span>v{{ info.version }}</span>
+        <span class="dim">{{ info.buildProfile }}</span>
+      }
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-label">System</span>
+        <jv-status-badge [status]="status()" [label]="statusLabel()" />
+      </div>
+      <time class="clock">{{ clock() }}</time>
+    </header>
+
+    @if (connectionError(); as error) {
+      <div class="banner" role="alert">
+        <jv-icon name="warning" />
+        <span>{{ error.message }}</span>
+      </div>
+    }
+
+    <main class="content">
+      <router-outlet />
+    </main>
+  </div>
+</div>

@@ -1,0 +1,180 @@
+// Global design tokens and base styles. Component styles use these tokens only.
+
+:root {
+  color-scheme: dark;
+
+  --jv-bg: #0a0e13;
+  --jv-bg-elevated: #0d1218;
+  --jv-surface: #111922;
+  --jv-surface-2: #17212c;
+  --jv-border: #1c2733;
+  --jv-border-strong: #273646;
+
+  --jv-text: #d6e2ed;
+  --jv-text-muted: #8a9cae;
+  --jv-text-dim: #5b6d7f;
+
+  --jv-accent: #38bdf8;
+  --jv-accent-2: #2dd4bf;
+  --jv-accent-glow: rgba(56, 189, 248, 0.35);
+
+  --jv-success: #34d399;
+  --jv-warning: #fbbf24;
+  --jv-danger: #f87171;
+
+  --jv-radius: 10px;
+  --jv-radius-sm: 6px;
+
+  // System fonts only: nothing is downloaded at runtime (privacy, offline use).
+  --jv-font:
+    'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
+  --jv-mono:
+    'Cascadia Mono', 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', ui-monospace, Consolas,
+    monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 600px at 70% -10%, rgba(56, 189, 248, 0.06), transparent 60%),
+    var(--jv-bg);
+  color: var(--jv-text);
+  font: 14px/1.45 var(--jv-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+input:not([type='checkbox']),
+select,
+textarea {
+  padding: 7px 10px;
+  border: 1px solid var(--jv-border-strong);
+  border-radius: var(--jv-radius-sm);
+  background: var(--jv-bg-elevated);
+  color: var(--jv-text);
+
+  &:focus-visible {
+    outline: none;
+    border-color: var(--jv-accent);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+  }
+}
+
+select option {
+  background: var(--jv-bg-elevated);
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--jv-radius-sm);
+  border: 1px solid var(--jv-border-strong);
+  background: var(--jv-surface);
+  cursor: pointer;
+  font-size: 13px;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+
+  &:hover:not(:disabled) {
+    background: var(--jv-surface-2);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--jv-accent);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  &.primary {
+    border-color: rgba(56, 189, 248, 0.55);
+    background: rgba(56, 189, 248, 0.14);
+    color: var(--jv-accent);
+
+    &:hover:not(:disabled) {
+      background: rgba(56, 189, 248, 0.22);
+    }
+  }
+
+  &.danger {
+    border-color: rgba(248, 113, 113, 0.5);
+    background: rgba(248, 113, 113, 0.1);
+    color: var(--jv-danger);
+  }
+
+  &.ghost {
+    background: transparent;
+  }
+}
+
+a:focus-visible {
+  outline: 2px solid var(--jv-accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(56, 189, 248, 0.3);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background: var(--jv-border-strong) padding-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+// Reduced motion: honoured from the OS and from JARVIS settings.
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.jv-reduced-motion *,
+.jv-reduced-motion *::before,
+.jv-reduced-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}

@@ -1,0 +1,7 @@
+// Public entry point of the IPC contract types.
+// Files in ./generated are produced by `cargo test` (ts-rs) from the Rust
+// source of truth. Regenerate them instead of editing by hand.
+export type * from './generated/ai';
+export type * from './generated/core';
+export type * from './generated/events';
+export type * from './generated/platform';

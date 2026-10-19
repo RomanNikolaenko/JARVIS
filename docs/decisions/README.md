@@ -1,0 +1,15 @@
+# Architecture Decision Records
+
+Each ADR records one decision: context, the decision, alternatives and
+consequences. ADRs are immutable once accepted; a later ADR supersedes an
+earlier one instead of editing it.
+
+| # | Title | Status |
+| --- | --- | --- |
+| [0001](0001-modular-monolith.md) | Modular monolith: Rust workspace + Tauri 2 + Angular | Accepted |
+| [0002](0002-ipc-contract.md) | Typed IPC contract with generated TypeScript types and explicit permissions | Accepted |
+| [0003](0003-ai-provider-abstraction.md) | Provider-agnostic AI abstraction, streaming and cancellation | Accepted |
+| [0004](0004-settings-storage.md) | Settings in a validated TOML file with atomic writes | Accepted |
+| [0005](0005-logging-and-events.md) | Diagnostic logging vs. user-facing system events | Accepted |
+
+Template: copy an existing ADR, increment the number, keep it short.

@@ -1,0 +1,7 @@
+# Normalize line endings so generated files (ts-rs bindings) are identical on
+# Windows and Linux.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary

@@ -1,0 +1,271 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, auto);
+  gap: 16px;
+}
+
+.hero {
+  grid-column: 1 / span 5;
+  grid-row: 1 / span 2;
+}
+.health {
+  grid-column: 6 / span 4;
+  grid-row: 1 / span 2;
+}
+.resources {
+  grid-column: 10 / span 3;
+  grid-row: 1;
+}
+.model {
+  grid-column: 10 / span 3;
+  grid-row: 2;
+}
+.events {
+  grid-column: 1 / span 8;
+  grid-row: 3 / span 2;
+}
+.voice {
+  grid-column: 9 / span 4;
+  grid-row: 3;
+}
+.platform {
+  grid-column: 9 / span 4;
+  grid-row: 4;
+}
+
+@media (max-width: 1280px) {
+  .hero,
+  .health,
+  .events {
+    grid-column: span 12;
+  }
+  .resources,
+  .model,
+  .voice,
+  .platform {
+    grid-column: span 6;
+  }
+  .hero,
+  .health,
+  .resources,
+  .model,
+  .events,
+  .voice,
+  .platform {
+    grid-row: auto;
+  }
+}
+
+.hero-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 8px 8px;
+  text-align: center;
+}
+
+.eyebrow {
+  font: 600 11px/1 var(--jv-mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--jv-accent);
+}
+
+.headline {
+  margin: 10px 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.sub {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  color: var(--jv-text-muted);
+}
+
+.primary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--jv-radius-sm);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.1);
+  color: var(--jv-accent);
+  text-decoration: none;
+  font-size: 13px;
+
+  &:hover {
+    background: rgba(56, 189, 248, 0.18);
+  }
+}
+
+.component-list,
+.event-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.component-list li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--jv-border);
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.component-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.component-name {
+  font-size: 13.5px;
+}
+
+.component-message {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--jv-text-muted);
+}
+
+.meter {
+  margin-bottom: 14px;
+}
+
+.meter-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  color: var(--jv-text-muted);
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+}
+
+.meter-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--jv-surface-2);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--jv-accent), var(--jv-accent-2));
+  box-shadow: 0 0 10px var(--jv-accent-glow);
+  transition: width 600ms ease;
+}
+
+.facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+
+  div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  dt {
+    font-size: 12px;
+    color: var(--jv-text-dim);
+  }
+  dd {
+    margin: 0;
+    font-size: 12.5px;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+}
+
+.model-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+.model-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--jv-text-muted);
+}
+
+.note {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--jv-warning);
+}
+
+.voice-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.voice-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--jv-border-strong);
+  color: var(--jv-text-dim);
+}
+
+.voice-state {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.event-list li {
+  display: grid;
+  grid-template-columns: 70px 90px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--jv-border);
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.event-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link {
+  font-size: 12px;
+  color: var(--jv-accent);
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.placeholder {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--jv-text-dim);
+}
+.mono {
+  font-family: var(--jv-mono);
+}
+.dim {
+  color: var(--jv-text-dim);
+}

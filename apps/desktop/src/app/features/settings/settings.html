@@ -1,0 +1,118 @@
+<header class="page-header">
+  <h1 class="title">Settings</h1>
+  <p class="subtitle">Stored locally and validated by the JARVIS core.</p>
+</header>
+
+@if (!loaded()) {
+  <p class="placeholder">Loading settings…</p>
+} @else {
+  <form class="settings-grid" [formGroup]="form" (ngSubmit)="save()">
+    <jv-hud-panel heading="General">
+      <label class="field">
+        <span class="field-label">Assistant language</span>
+        <select formControlName="assistantLanguage">
+          <option value="uk">Українська</option>
+          <option value="en">English</option>
+        </select>
+        <span class="hint">Language JARVIS answers and (later) speaks in.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" formControlName="reducedMotion" />
+        <span>Reduce motion (disable decorative animations)</span>
+      </label>
+    </jv-hud-panel>
+
+    <jv-hud-panel heading="AI">
+      <label class="field">
+        <span class="field-label">Default model</span>
+        <select formControlName="defaultModel">
+          <option value="">Automatic (prefer a real model over diagnostics)</option>
+          @for (option of modelOptions(); track optionKey(option.provider.id, option.model.id)) {
+            <option [value]="optionKey(option.provider.id, option.model.id)">
+              {{ option.model.displayName }} — {{ option.provider.displayName }}
+            </option>
+          }
+        </select>
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Request timeout (s)</span>
+          <input type="number" min="10" max="3600" formControlName="requestTimeoutSecs" />
+          @if (form.controls.requestTimeoutSecs.invalid) {
+            <span class="field-error">10–3600 seconds</span>
+          }
+        </label>
+        <label class="field">
+          <span class="field-label">Idle timeout (s)</span>
+          <input type="number" min="5" max="600" formControlName="idleTimeoutSecs" />
+          @if (form.controls.idleTimeoutSecs.invalid) {
+            <span class="field-error">5–600 seconds</span>
+          }
+        </label>
+      </div>
+      <span class="hint"
+        >Idle timeout: maximum silence between streamed chunks. Must not exceed the request
+        timeout.</span
+      >
+    </jv-hud-panel>
+
+    <jv-hud-panel heading="Privacy">
+      <label class="check">
+        <input type="checkbox" formControlName="allowCloudProviders" />
+        <span>Allow sending conversations to cloud AI providers</span>
+      </label>
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        Off by default. When off, the core rejects every request to a cloud provider, regardless of
+        the UI.
+      </p>
+    </jv-hud-panel>
+
+    <jv-hud-panel heading="Diagnostics">
+      <label class="field">
+        <span class="field-label">Log level</span>
+        <select formControlName="logLevel">
+          @for (level of logLevels; track level) {
+            <option [value]="level">{{ level }}</option>
+          }
+        </select>
+        <span class="hint">Applies immediately. RUST_LOG overrides it when set.</span>
+      </label>
+      @if (appInfo(); as info) {
+        <dl class="paths">
+          <div>
+            <dt>Settings file</dt>
+            <dd>{{ info.configFile }}</dd>
+          </div>
+          <div>
+            <dt>Data</dt>
+            <dd>{{ info.dataDir }}</dd>
+          </div>
+          <div>
+            <dt>Logs</dt>
+            <dd>{{ info.logDir }}</dd>
+          </div>
+        </dl>
+      }
+    </jv-hud-panel>
+
+    <div class="actions">
+      @if (error(); as e) {
+        <span class="save-error" role="alert">{{ e.message }}</span>
+      } @else if (savedAt() && form.pristine) {
+        <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
+      }
+      <button
+        type="button"
+        class="ghost"
+        (click)="discard()"
+        [disabled]="form.pristine || saving()"
+      >
+        Discard
+      </button>
+      <button type="submit" class="primary" [disabled]="form.pristine || saving()">
+        {{ saving() ? 'Saving…' : 'Save settings' }}
+      </button>
+    </div>
+  </form>
+}

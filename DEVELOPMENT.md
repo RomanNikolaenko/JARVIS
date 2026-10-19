@@ -1,0 +1,125 @@
+# Development guide
+
+## Toolchain
+
+| Tool | Version used | Notes |
+| --- | --- | --- |
+| Rust | stable 1.98 (MSRV declared: 1.90) | `rustup component add rustfmt clippy` |
+| Node.js | 24 LTS (22.22+ supported) | npm 11 |
+| Tauri CLI | 2.12 (npm `@tauri-apps/cli`, no global install needed) | |
+| Angular | 22.2, TypeScript 6.0 | Angular CLI via `npx ng` |
+
+### Windows 10/11
+
+1. Visual Studio Build Tools (or Visual Studio) with *Desktop development with
+   C++* (MSVC + Windows SDK).
+2. Microsoft Edge WebView2 Runtime (preinstalled on Windows 11).
+3. Rust via `rustup` (target `x86_64-pc-windows-msvc`), Node.js 24.
+
+### Linux (Ubuntu/Debian 24.04+)
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential curl wget file libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+```
+
+Fedora: `sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file
+libappindicator-gtk3-devel librsvg2-devel libxdo-devel` and the
+"C Development Tools and Libraries" group.
+
+Both X11 and Wayland sessions work for the current features. Wayland-specific
+limits (screen capture, global shortcuts) matter from Phase 6 on.
+
+## Common tasks
+
+All npm commands run in `apps/desktop`; cargo commands in the repository root.
+
+```bash
+# install frontend dependencies
+cd apps/desktop && npm ci
+
+# run the desktop app with hot reload (starts `ng serve` automatically)
+npm run tauri dev
+
+# frontend only (no IPC: the UI shows "Core offline")
+npm start
+
+# frontend unit tests (Vitest)
+npm run test:ci
+
+# frontend formatting
+npm run format:check   # or: npm run format
+
+# release binary without installers
+npm run tauri -- build --no-bundle
+
+# installers (NSIS/MSI on Windows; deb/rpm/AppImage on Linux)
+npm run tauri build
+```
+
+```bash
+# Rust: format, lint, test (from the repository root)
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+`cargo test` also regenerates the TypeScript IPC types (test `export_typescript_bindings` in `apps/desktop/src-tauri/src/bindings.rs`) in
+`packages/shared-types/src/generated/`. Commit them together with the Rust
+change; CI fails if they differ.
+
+## Adding an IPC command
+
+1. Implement the logic in a domain crate (usually `jarvis-core`), with tests.
+2. Add a thin `#[tauri::command]` in `apps/desktop/src-tauri/src/commands.rs`.
+3. Register it in `with_commands` (`src/lib.rs`) **and** in `COMMANDS`
+   (`build.rs`).
+4. Grant `allow-<command-name>` in `capabilities/main-window.json` (only if the
+   main window needs it).
+5. If the command introduces a new top-level argument/result type, derive
+   `ts_rs::TS` with `#[ts(export_to = "<crate>.ts")]` and add it to
+   `src-tauri/src/bindings.rs`; run `cargo test` to regenerate the TS types.
+6. Add the typed method to `JarvisApi` (`src/app/core/ipc/jarvis-api.ts`).
+7. Extend the IPC tests (`src-tauri/src/ipc_tests.rs`).
+
+## Where JARVIS stores data
+
+| What | Windows | Linux |
+| --- | --- | --- |
+| Settings (`config.toml`) | `%APPDATA%\ai.jarvis.desktop\` | `~/.config/ai.jarvis.desktop/` |
+| Local data | `%LOCALAPPDATA%\ai.jarvis.desktop\` | `~/.local/share/ai.jarvis.desktop/` |
+| Logs (`jarvis.YYYY-MM-DD.log`) | `%LOCALAPPDATA%\ai.jarvis.desktop\logs\` | `~/.local/share/ai.jarvis.desktop/logs/` |
+
+The exact paths are shown on the Settings screen.
+
+## Debugging
+
+- Verbose logs: `RUST_LOG=debug npm run tauri dev` (PowerShell:
+  `$env:RUST_LOG='debug'; npm run tauri dev`). `RUST_LOG` overrides the log
+  level from settings.
+- WebView DevTools: right-click → *Inspect* in debug builds.
+- If the settings file is broken, JARVIS starts with defaults, shows a
+  degraded *Configuration* component, and backs the file up when you save.
+
+## Troubleshooting
+
+- **`STATUS_ENTRYPOINT_NOT_FOUND` when running Rust tests on Windows**: the
+  test binaries need the Common Controls v6 manifest. `build.rs` embeds it via
+  linker flags for all targets; if you changed `build.rs`, make sure
+  `embed_windows_manifest_via_linker` still runs.
+- **npm warns about install scripts** (`esbuild`, `lmdb`, …): npm 11 does not
+  run dependency install scripts unless approved. The build does not need
+  them (esbuild ships platform binaries as optional dependencies; `lmdb` and
+  `msgpackr-extract` are optional caches).
+- **Blank window on Linux under some GPU drivers**: try
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
+
+## Verified environments
+
+| Check | Windows 11 (local) | Linux |
+| --- | --- | --- |
+| `cargo fmt --check`, `clippy -D warnings`, `cargo test` | ✔ | CI (`ubuntu-24.04`) |
+| Angular tests + production build | ✔ | CI |
+| `tauri build --no-bundle` | ✔ | CI |
+| App launch and manual UI check | ✔ | not yet verified |
