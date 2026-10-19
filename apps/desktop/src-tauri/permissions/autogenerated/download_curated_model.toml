@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-download-curated-model"
+description = "Enables the download_curated_model command without any pre-configured scope."
+commands.allow = ["download_curated_model"]
+
+[[permission]]
+identifier = "deny-download-curated-model"
+description = "Denies the download_curated_model command without any pre-configured scope."
+commands.deny = ["download_curated_model"]

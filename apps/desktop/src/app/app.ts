@@ -42,6 +42,7 @@ export class App {
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
     { path: '/chat', label: 'Chat', icon: 'chat' },
     { path: '/models', label: 'Models', icon: 'spark' },
+    { path: '/runtime', label: 'Runtime', icon: 'cpu' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];

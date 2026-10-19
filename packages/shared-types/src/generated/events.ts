@@ -3,7 +3,7 @@
 /**
  * Functional area that produced a [`SystemEvent`].
  */
-export type EventCategory = "lifecycle" | "config" | "health" | "ai" | "chat" | "security" | "platform" | "ui";
+export type EventCategory = "lifecycle" | "config" | "health" | "ai" | "runtime" | "chat" | "security" | "platform" | "ui";
 
 /**
  * Severity of a [`SystemEvent`].

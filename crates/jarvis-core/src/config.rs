@@ -10,6 +10,7 @@ use std::sync::{PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jarvis_ai::{EchoProvider, ProviderConfig};
+use jarvis_runtime::{RUNTIME_PROVIDER_ID, RuntimeSettings};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
@@ -35,6 +36,8 @@ pub struct Settings {
     pub general: GeneralSettings,
     pub interface: InterfaceSettings,
     pub ai: AiSettings,
+    /// Embedded llama.cpp runtime.
+    pub runtime: RuntimeSettings,
     pub privacy: PrivacySettings,
     pub logging: LoggingSettings,
 }
@@ -46,6 +49,7 @@ impl Default for Settings {
             general: GeneralSettings::default(),
             interface: InterfaceSettings::default(),
             ai: AiSettings::default(),
+            runtime: RuntimeSettings::default(),
             privacy: PrivacySettings::default(),
             logging: LoggingSettings::default(),
         }
@@ -172,6 +176,7 @@ impl Settings {
         }
         validate_providers(&ai.providers, &mut problems);
         validate_routing(&ai.routing, &ai.providers, &mut problems);
+        problems.extend(self.runtime.problems());
 
         if problems.is_empty() {
             Ok(())
@@ -184,6 +189,11 @@ impl Settings {
     }
 }
 
+/// Ids used by built-in providers (diagnostic echo, embedded runtime).
+pub fn is_reserved_provider_id(id: &str) -> bool {
+    id == EchoProvider::ID || id == RUNTIME_PROVIDER_ID
+}
+
 fn validate_providers(providers: &[ProviderConfig], problems: &mut Vec<String>) {
     if providers.len() > MAX_PROVIDERS {
         problems.push(format!(
@@ -194,11 +204,8 @@ fn validate_providers(providers: &[ProviderConfig], problems: &mut Vec<String>) 
         if let Err(problem) = provider.validate() {
             problems.push(format!("ai.providers: {problem}"));
         }
-        if provider.id.as_str() == EchoProvider::ID {
-            problems.push(format!(
-                "ai.providers: id \"{}\" is reserved",
-                EchoProvider::ID
-            ));
+        if is_reserved_provider_id(provider.id.as_str()) {
+            problems.push(format!("ai.providers: id \"{}\" is reserved", provider.id));
         }
         if providers[..index].iter().any(|p| p.id == provider.id) {
             problems.push(format!("ai.providers: duplicate id \"{}\"", provider.id));
@@ -212,7 +219,7 @@ fn validate_routing(
     problems: &mut Vec<String>,
 ) {
     for (category, model_ref) in routing.entries() {
-        let known = model_ref.provider_id.as_str() == EchoProvider::ID
+        let known = is_reserved_provider_id(model_ref.provider_id.as_str())
             || providers.iter().any(|p| p.id == model_ref.provider_id);
         if !known {
             problems.push(format!(

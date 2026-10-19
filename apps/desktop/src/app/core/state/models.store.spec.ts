@@ -61,6 +61,14 @@ const SETTINGS = {
     requestTimeoutSecs: 300,
     idleTimeoutSecs: 120,
   },
+  runtime: {
+    contextSize: 4096,
+    threads: null,
+    gpuOffload: 'auto',
+    gpuLayers: 0,
+    autostartModel: null,
+    startupTimeoutSecs: 180,
+  },
   privacy: { allowCloudProviders: false },
   logging: { level: 'info' },
 } satisfies Settings;

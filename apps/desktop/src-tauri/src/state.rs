@@ -27,9 +27,10 @@ impl AppState {
         }
     }
 
-    /// Stops background work and flushes logs. Called once on exit.
-    pub fn shutdown(&self) {
-        self.core.shutdown();
+    /// Stops background work (including the local model server) and
+    /// flushes logs. Called once on exit.
+    pub async fn shutdown(&self) {
+        self.core.shutdown().await;
         tracing::info!("JARVIS desktop shut down");
         if let Some(logging) = &self.logging {
             logging.flush();

@@ -3,12 +3,12 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 2 — AI integration (in progress).** JARVIS chats with local
-> models served by **Ollama** or any **OpenAI-compatible** server (LM Studio,
-> llama.cpp server, vLLM, …) on this machine or the local network, with
-> streaming, cancellation, Markdown and per-task model routing. Not yet: API
-> keys / cloud providers, the embedded llama.cpp runtime, memory, agents,
-> voice. See [ROADMAP.md](ROADMAP.md).
+> **Status: Phase 3 — Embedded runtime.** JARVIS chats with local models
+> served by **Ollama**, any **OpenAI-compatible** server (LM Studio, llama.cpp
+> server, vLLM, …) or its own **embedded llama.cpp runtime** (verified
+> install, GGUF import and verified downloads), with streaming, cancellation,
+> Markdown and per-task model routing. Not yet: API keys / cloud providers,
+> memory, agents, voice. See [ROADMAP.md](ROADMAP.md).
 
 ## What works today
 
@@ -19,6 +19,10 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
   default ports; add servers on the Models screen with a connection test.
 - Model routing per task (general, reasoning, coding, vision, embeddings,
   tool calling), automatic or explicit; cloud hosts blocked unless allowed.
+- Embedded runtime (Runtime screen): install an official llama.cpp build
+  (CPU/Vulkan) after explicit approval, import GGUF files or download
+  verified models, start/stop a model with memory checks, GPU offload and
+  hardware detection.
 - Rust core (`jarvis-core`) independent of the UI shell:
   - health check of all core components with timeouts;
   - settings in `config.toml` with validation, atomic writes and safe recovery;
@@ -43,9 +47,10 @@ npm ci
 npm run tauri dev
 ```
 
-To chat with a real model, run [Ollama](https://ollama.com) (`ollama pull
-llama3.2`) or LM Studio's local server; JARVIS finds both on their default
-ports. Details: [DEVELOPMENT.md → Local AI](DEVELOPMENT.md#local-ai).
+To chat with a real model, either open **Runtime** in JARVIS, install the
+llama.cpp engine and download a model, or run [Ollama](https://ollama.com) /
+LM Studio, which JARVIS finds on their default ports. Details:
+[DEVELOPMENT.md → Local AI](DEVELOPMENT.md#local-ai).
 
 Full instructions (Linux packages, tests, release builds, troubleshooting):
 [DEVELOPMENT.md](DEVELOPMENT.md).

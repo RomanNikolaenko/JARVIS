@@ -3,6 +3,14 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import type {
   AppInfo,
   ChatStartRequest,
+  CuratedModel,
+  HardwareInfo,
+  LocalModel,
+  ModelDownloadRequest,
+  RuntimeBackend,
+  RuntimeBinary,
+  RuntimeRelease,
+  RuntimeStatus,
   ChatStreamEvent,
   HealthReport,
   PlatformInfo,
@@ -86,6 +94,64 @@ export class JarvisApi {
 
   cancelChat(requestId: string): Promise<boolean> {
     return this.bridge.invoke('cancel_chat', { requestId });
+  }
+
+  // ---- Local runtime (llama.cpp) ----
+
+  getRuntimeStatus(): Promise<RuntimeStatus> {
+    return this.bridge.invoke('get_runtime_status');
+  }
+
+  getHardwareInfo(): Promise<HardwareInfo> {
+    return this.bridge.invoke('get_hardware_info');
+  }
+
+  listCuratedModels(): Promise<CuratedModel[]> {
+    return this.bridge.invoke('list_curated_models');
+  }
+
+  /** Looks up the newest official llama.cpp build on GitHub. */
+  checkRuntimeRelease(backend: RuntimeBackend): Promise<RuntimeRelease> {
+    return this.bridge.invoke('check_runtime_release', { backend });
+  }
+
+  /** Installs a release the user approved; returns the download id. */
+  installRuntime(release: RuntimeRelease): Promise<string> {
+    return this.bridge.invoke('install_runtime', { release });
+  }
+
+  /** Opens a native file picker in the core; `null` if cancelled. */
+  selectRuntimeBinary(): Promise<RuntimeBinary | null> {
+    return this.bridge.invoke('select_runtime_binary');
+  }
+
+  /** Opens a native file picker in the core; `null` if cancelled. */
+  importModel(): Promise<LocalModel | null> {
+    return this.bridge.invoke('import_model');
+  }
+
+  downloadCuratedModel(id: string): Promise<string> {
+    return this.bridge.invoke('download_curated_model', { id });
+  }
+
+  downloadModel(request: ModelDownloadRequest): Promise<string> {
+    return this.bridge.invoke('download_model', { request });
+  }
+
+  cancelDownload(id: string): Promise<boolean> {
+    return this.bridge.invoke('cancel_download', { id });
+  }
+
+  removeModel(id: string, deleteFile: boolean): Promise<void> {
+    return this.bridge.invoke('remove_model', { id, deleteFile });
+  }
+
+  startLocalModel(modelId: string): Promise<void> {
+    return this.bridge.invoke('start_local_model', { modelId });
+  }
+
+  stopLocalModel(): Promise<void> {
+    return this.bridge.invoke('stop_local_model');
   }
 
   reportUiError(report: UiErrorReport): Promise<void> {

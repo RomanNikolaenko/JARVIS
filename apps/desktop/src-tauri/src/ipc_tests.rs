@@ -80,6 +80,9 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "get_recent_events",
     "list_ai_models",
     "get_model_routes",
+    "get_runtime_status",
+    "get_hardware_info",
+    "list_curated_models",
 ];
 
 #[test]
@@ -97,6 +100,16 @@ fn every_command_is_denied_for_windows_without_a_capability() {
     let all = READ_ONLY_COMMANDS.iter().chain(&[
         "update_settings",
         "test_ai_provider",
+        "check_runtime_release",
+        "install_runtime",
+        "select_runtime_binary",
+        "import_model",
+        "download_curated_model",
+        "download_model",
+        "cancel_download",
+        "remove_model",
+        "start_local_model",
+        "stop_local_model",
         "start_chat",
         "cancel_chat",
         "report_ui_error",
@@ -128,7 +141,7 @@ fn health_report_lists_components() {
         .iter()
         .filter_map(|c| c["id"].as_str())
         .collect();
-    for expected in ["config", "storage", "events", "platform", "ai"] {
+    for expected in ["config", "storage", "events", "platform", "ai", "runtime"] {
         assert!(ids.contains(&expected), "missing component {expected}");
     }
     // Only the diagnostic provider is registered.
@@ -302,4 +315,61 @@ fn provider_test_validates_input_before_connecting() {
     )
     .expect_err("credentials in URL are rejected");
     assert_eq!(error["code"], "validation");
+}
+
+#[test]
+fn runtime_status_reports_an_empty_installation() {
+    let h = harness();
+    let status = invoke(&h.main, "get_runtime_status", json!({})).expect("status");
+    assert_eq!(status["binary"], Value::Null);
+    assert_eq!(status["server"]["phase"], "stopped");
+    assert_eq!(status["models"], json!([]));
+    assert!(
+        status["modelsDir"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("models"))
+    );
+
+    let curated = invoke(&h.main, "list_curated_models", json!({})).expect("catalog");
+    assert!(curated.as_array().is_some_and(|c| !c.is_empty()));
+    let hardware = invoke(&h.main, "get_hardware_info", json!({})).expect("hardware");
+    assert!(hardware["logicalCpus"].as_u64().is_some_and(|n| n >= 1));
+}
+
+#[test]
+fn runtime_commands_report_errors_without_touching_the_network() {
+    let h = harness();
+    let error = invoke(
+        &h.main,
+        "start_local_model",
+        json!({ "modelId": "missing" }),
+    )
+    .expect_err("not installed");
+    assert_eq!(error["code"], "notFound");
+
+    let error = invoke(
+        &h.main,
+        "remove_model",
+        json!({ "id": "missing", "deleteFile": false }),
+    )
+    .expect_err("unknown model");
+    assert_eq!(error["code"], "notFound");
+
+    let error = invoke(
+        &h.main,
+        "download_model",
+        json!({ "request": { "repo": "not a repo", "file": "x.bin", "revision": null } }),
+    )
+    .expect_err("invalid request");
+    assert_eq!(error["code"], "validation");
+
+    let error = invoke(&h.main, "download_curated_model", json!({ "id": "nope" }))
+        .expect_err("unknown catalog entry");
+    assert_eq!(error["code"], "notFound");
+
+    assert_eq!(
+        invoke(&h.main, "cancel_download", json!({ "id": "nope" })).expect("cancel"),
+        json!(false)
+    );
+    invoke(&h.main, "stop_local_model", json!({})).expect("stopping a stopped runtime is fine");
 }

@@ -5,3 +5,4 @@ export type * from './generated/ai';
 export type * from './generated/core';
 export type * from './generated/events';
 export type * from './generated/platform';
+export type * from './generated/runtime';

@@ -18,6 +18,19 @@
     "allow-test-ai-provider",
     "allow-start-chat",
     "allow-cancel-chat",
-    "allow-report-ui-error"
+    "allow-report-ui-error",
+    "allow-get-runtime-status",
+    "allow-get-hardware-info",
+    "allow-list-curated-models",
+    "allow-check-runtime-release",
+    "allow-install-runtime",
+    "allow-select-runtime-binary",
+    "allow-import-model",
+    "allow-download-curated-model",
+    "allow-download-model",
+    "allow-cancel-download",
+    "allow-remove-model",
+    "allow-start-local-model",
+    "allow-stop-local-model"
   ]
 }

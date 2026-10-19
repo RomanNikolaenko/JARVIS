@@ -25,6 +25,7 @@ export class Events {
     'config',
     'health',
     'ai',
+    'runtime',
     'chat',
     'security',
     'platform',

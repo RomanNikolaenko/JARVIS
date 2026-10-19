@@ -6,6 +6,7 @@
 
 mod commands;
 mod logging;
+mod runtime_commands;
 mod state;
 
 #[cfg(test)]
@@ -43,12 +44,26 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::start_chat,
         commands::cancel_chat,
         commands::report_ui_error,
+        runtime_commands::get_runtime_status,
+        runtime_commands::get_hardware_info,
+        runtime_commands::list_curated_models,
+        runtime_commands::check_runtime_release,
+        runtime_commands::install_runtime,
+        runtime_commands::select_runtime_binary,
+        runtime_commands::import_model,
+        runtime_commands::download_curated_model,
+        runtime_commands::download_model,
+        runtime_commands::cancel_download,
+        runtime_commands::remove_model,
+        runtime_commands::start_local_model,
+        runtime_commands::stop_local_model,
     ])
 }
 
 /// Application entry point.
 pub fn run() {
     let result = with_commands(tauri::Builder::default())
+        .plugin(tauri_plugin_dialog::init())
         .setup(setup)
         .build(tauri::generate_context!());
 
@@ -57,7 +72,7 @@ pub fn run() {
             if let RunEvent::Exit = event
                 && let Some(state) = handle.try_state::<AppState>()
             {
-                state.shutdown();
+                tauri::async_runtime::block_on(state.shutdown());
             }
         }),
         Err(err) => {

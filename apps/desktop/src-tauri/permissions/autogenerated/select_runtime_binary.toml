@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-select-runtime-binary"
+description = "Enables the select_runtime_binary command without any pre-configured scope."
+commands.allow = ["select_runtime_binary"]
+
+[[permission]]
+identifier = "deny-select-runtime-binary"
+description = "Denies the select_runtime_binary command without any pre-configured scope."
+commands.deny = ["select_runtime_binary"]

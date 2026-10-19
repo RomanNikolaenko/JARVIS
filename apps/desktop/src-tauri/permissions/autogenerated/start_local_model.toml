@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-local-model"
+description = "Enables the start_local_model command without any pre-configured scope."
+commands.allow = ["start_local_model"]
+
+[[permission]]
+identifier = "deny-start-local-model"
+description = "Denies the start_local_model command without any pre-configured scope."
+commands.deny = ["start_local_model"]

@@ -24,6 +24,9 @@ pub struct OpenAiCompatibleProvider {
     descriptor: ProviderDescriptor,
     base: Url,
     http: Arc<HttpClient>,
+    /// Bearer token sent with every request (e.g. the per-launch key of the
+    /// embedded llama.cpp server). Never logged.
+    api_key: Option<String>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -32,17 +35,31 @@ impl OpenAiCompatibleProvider {
             descriptor,
             base: http::normalize_base(base),
             http,
+            api_key: None,
         }
+    }
+
+    /// Sends `Authorization: Bearer <key>` with every request.
+    pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = Some(api_key.into());
+        self
     }
 
     fn url(&self, path: &str) -> Result<Url, AiError> {
         http::endpoint(&self.base, path)
     }
 
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(key) => request.bearer_auth(key),
+            None => request,
+        }
+    }
+
     async fn fetch_models(&self) -> Result<ModelsResponse, AiError> {
         let client = self.http.get()?;
         let url = self.url("models")?;
-        http::send_json(|| client.get(url.clone())).await
+        http::send_json(|| self.authorize(client.get(url.clone()))).await
     }
 }
 
@@ -88,8 +105,8 @@ impl AiProvider for OpenAiCompatibleProvider {
             body["max_tokens"] = json!(max_tokens);
         }
 
-        let response = client
-            .post(url)
+        let response = self
+            .authorize(client.post(url))
             .json(&body)
             .send()
             .await
@@ -105,7 +122,7 @@ impl AiProvider for OpenAiCompatibleProvider {
         let url = self.url("embeddings")?;
         let body = json!({ "model": request.model, "input": request.input });
         let mut response: EmbeddingsResponse =
-            http::send_json(|| client.post(url.clone()).json(&body)).await?;
+            http::send_json(|| self.authorize(client.post(url.clone())).json(&body)).await?;
         if response.data.len() != request.input.len() {
             return Err(AiError::Protocol(format!(
                 "expected {} embeddings, got {}",

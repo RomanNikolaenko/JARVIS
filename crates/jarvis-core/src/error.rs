@@ -1,4 +1,5 @@
 use jarvis_ai::AiError;
+use jarvis_runtime::RuntimeError;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -81,6 +82,9 @@ pub enum CoreError {
     #[error(transparent)]
     Ai(#[from] AiError),
 
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -110,6 +114,25 @@ impl CoreError {
                 AiError::InvalidRequest(_) => ErrorCode::Validation,
                 AiError::Timeout => ErrorCode::Timeout,
                 AiError::Cancelled => ErrorCode::Cancelled,
+            },
+            Self::Runtime(err) => match err {
+                RuntimeError::NotInstalled | RuntimeError::NotFound(_) => ErrorCode::NotFound,
+                RuntimeError::InvalidInput(_) | RuntimeError::InvalidModel(_) => {
+                    ErrorCode::Validation
+                }
+                RuntimeError::PermissionDenied(_)
+                | RuntimeError::IntegrityMismatch { .. }
+                | RuntimeError::BinaryChanged(_) => ErrorCode::PermissionDenied,
+                RuntimeError::InsufficientMemory { .. } | RuntimeError::InsufficientDisk { .. } => {
+                    ErrorCode::LimitExceeded
+                }
+                RuntimeError::Download(_)
+                | RuntimeError::Unavailable(_)
+                | RuntimeError::StartupFailed { .. } => ErrorCode::Unavailable,
+                RuntimeError::StartupTimeout(_) => ErrorCode::Timeout,
+                RuntimeError::Cancelled => ErrorCode::Cancelled,
+                RuntimeError::Io { .. } => ErrorCode::Io,
+                RuntimeError::Internal(_) => ErrorCode::Internal,
             },
         }
     }

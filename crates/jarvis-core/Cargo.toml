@@ -11,6 +11,7 @@ futures.workspace = true
 jarvis-ai.workspace = true
 jarvis-events.workspace = true
 jarvis-platform.workspace = true
+jarvis-runtime.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
@@ -21,6 +22,7 @@ ts-rs.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+jarvis-runtime = { workspace = true, features = ["test-support"] }
 async-trait.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

@@ -11,7 +11,8 @@ use jarvis_core::{
     ProviderTestResult, RouteResolution, Settings, UiErrorReport,
 };
 use jarvis_events::SystemEvent;
-use jarvis_platform::{PlatformInfo, SystemMetrics};
+use jarvis_platform::{HardwareInfo, PlatformInfo, SystemMetrics};
+use jarvis_runtime::{CuratedModel, ModelDownloadRequest, RuntimeRelease, RuntimeStatus};
 use ts_rs::{Config, TS};
 
 macro_rules! export_all {
@@ -43,5 +44,10 @@ fn export_typescript_bindings() {
         ChatStreamEvent,
         ErrorPayload,
         UiErrorReport,
+        RuntimeStatus,
+        RuntimeRelease,
+        CuratedModel,
+        ModelDownloadRequest,
+        HardwareInfo,
     );
 }

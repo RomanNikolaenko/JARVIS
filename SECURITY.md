@@ -32,6 +32,10 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 | No implicit proxies for AI traffic; connection timeouts; streaming line size cap (4 MiB). | `jarvis-ai::http` |
 | Model output is untrusted: rendered Markdown shows raw HTML as text, links are inert (no navigation), images are not loaded; Angular sanitizes again and the CSP blocks scripts and remote images. | `shared/markdown` |
 | The UI never contacts AI servers itself; all network access goes through the core. System fonts only, no CDN assets. | UI, CSP |
+| Embedded runtime: llama.cpp builds only from the official GitHub repository, installed after explicit approval of the exact release, re-verified by tag, SHA-256 checked, extracted without path traversal or escaping links; executable hash checked before every start. | `jarvis-runtime::installer` |
+| The local model server listens on 127.0.0.1 with a random per-launch API key (checked after start-up), runs without a console window, is stopped on exit and cleaned up after crashes only if the pid still runs the recorded executable. | `jarvis-runtime` |
+| Model files: GGUF headers parsed with strict bounds; downloads only from Hugging Face over HTTPS, pinned to a commit and SHA-256 verified; JARVIS deletes a model file only on request and only inside its own models folder (checked on canonical paths, not trusted from the index); files imported from elsewhere are never deleted. | `jarvis-runtime::gguf`, `::download`, `::library` |
+| File pickers run in Rust; the WebView gets no file system or dialog permissions and cannot pass arbitrary paths. | `runtime_commands.rs` |
 | Microphone, camera and screen are not accessed at all. | — |
 
 Known trade-off: the *Test connection* action on the Models screen lets the
@@ -52,8 +56,6 @@ window only.
   prompt-injection mitigations for tool use (Phase 5).
 - Command execution without a shell (argument vectors), working-directory and
   timeout limits (Phase 5).
-- Verified downloads of models and the llama.cpp runtime (checksums, trusted
-  sources, explicit user consent) (Phase 3).
 - Visible indicators and explicit consent for microphone, camera and screen
   capture (Phase 6).
 - Signed installers and updates (Phase 8).

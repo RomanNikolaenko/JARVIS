@@ -116,6 +116,33 @@ pub(crate) async fn storage_health(dir: &std::path::Path) -> (HealthStatus, Stri
     }
 }
 
+/// Local runtime health. The runtime is optional, so "not installed" is
+/// healthy; a failed server is degraded.
+pub(crate) fn runtime_health(
+    installed: bool,
+    state: &jarvis_runtime::ServerState,
+) -> (HealthStatus, String) {
+    use jarvis_runtime::ServerPhase;
+    let model = state.model_id.as_deref().unwrap_or("model");
+    match state.phase {
+        ServerPhase::Running => (HealthStatus::Healthy, format!("Serving {model}")),
+        ServerPhase::Starting => (HealthStatus::Healthy, format!("Loading {model}")),
+        ServerPhase::Stopping => (HealthStatus::Healthy, "Stopping".to_owned()),
+        ServerPhase::Failed => (
+            HealthStatus::Degraded,
+            format!(
+                "Failed: {}",
+                state.error.as_deref().unwrap_or("unknown error")
+            ),
+        ),
+        ServerPhase::Stopped if installed => (
+            HealthStatus::Healthy,
+            "Installed; no model running".to_owned(),
+        ),
+        ServerPhase::Stopped => (HealthStatus::Healthy, "Not installed (optional)".to_owned()),
+    }
+}
+
 /// AI health: healthy if at least one real (non-diagnostic) provider answers
 /// its health check.
 pub(crate) async fn ai_health(

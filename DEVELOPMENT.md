@@ -106,12 +106,35 @@ JARVIS talks to AI servers over HTTP. Configure them on the **Models** screen
 - First requests to a model can be slow while the server loads it; the idle
   timeout (Settings → AI, default 120 s) also bounds that wait.
 
+### Embedded runtime
+
+The **Runtime** screen manages a llama.cpp `llama-server` that JARVIS starts
+itself:
+
+1. *Engine*: pick CPU or Vulkan (recommended when a GPU and the Vulkan loader
+   are present), press **Find build**, review tag, file, size and SHA-256,
+   then **Download & install**. Or use an existing `llama-server` (any
+   backend, e.g. CUDA).
+2. *Models*: download a curated model or any public GGUF from Hugging Face
+   (`owner/repo` + file name), or import a local `.gguf` (stays in place).
+3. Press **Start**. The model appears as provider "JARVIS runtime" in Models
+   and Chat; automatic routing prefers it.
+
+Inference settings: context size, threads (default: physical cores), GPU
+offload (auto/off/all/custom) and an optional model to start with JARVIS.
+JARVIS refuses to start a model that does not fit into free memory.
+
+Developers can run the supervisor tests without llama.cpp: they start the
+test binary itself as a fake `llama-server`
+(`cargo test -p jarvis-runtime`).
+
 ## Where JARVIS stores data
 
 | What | Windows | Linux |
 | --- | --- | --- |
 | Settings (`config.toml`) | `%APPDATA%\ai.jarvis.desktop\` | `~/.config/ai.jarvis.desktop/` |
 | Local data | `%LOCALAPPDATA%\ai.jarvis.desktop\` | `~/.local/share/ai.jarvis.desktop/` |
+| Runtime engine, models | `…\runtime\`, `…\models\` in local data | `runtime/`, `models/` in local data |
 | Logs (`jarvis.YYYY-MM-DD.log`) | `%LOCALAPPDATA%\ai.jarvis.desktop\logs\` | `~/.local/share/ai.jarvis.desktop/logs/` |
 
 The exact paths are shown on the Settings screen.
@@ -146,4 +169,7 @@ The exact paths are shown on the Settings screen.
 | Angular tests + production build | ✔ | ✔ |
 | `tauri build --no-bundle` | ✔ | ✔ |
 | App launch and UI check (CDP-driven, incl. mock Ollama server) | ✔ | not yet verified |
+| Runtime supervisor with real processes (fake `llama-server`) | ✔ | CI only |
+| Runtime screen: hardware detection, llama.cpp release lookup (no install) | ✔ | not yet verified |
+| Real llama.cpp build + GGUF model end to end | not yet verified | not yet verified |
 | Real Ollama / LM Studio | not installed on the dev machine | not verified |

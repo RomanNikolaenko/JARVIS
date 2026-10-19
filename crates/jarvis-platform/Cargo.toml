@@ -1,6 +1,6 @@
 [package]
 name = "jarvis-platform"
-description = "Cross-platform system layer for JARVIS: OS detection and resource monitoring."
+description = "Cross-platform system layer for JARVIS: OS detection, hardware detection and resource monitoring."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,12 +8,16 @@ publish.workspace = true
 
 [dependencies]
 serde.workspace = true
-sysinfo.workspace = true
+sysinfo = { workspace = true, features = ["disk"] }
 tracing.workspace = true
 ts-rs.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+
 [dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

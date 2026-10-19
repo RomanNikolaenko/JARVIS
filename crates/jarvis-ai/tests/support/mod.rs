@@ -17,6 +17,7 @@ pub struct Request {
     pub method: String,
     pub path: String,
     pub body: String,
+    pub authorization: Option<String>,
 }
 
 impl Request {
@@ -134,6 +135,7 @@ async fn serve(
     let path = parts.next().unwrap_or_default().to_owned();
 
     let mut content_length = 0usize;
+    let mut authorization = None;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
@@ -141,10 +143,12 @@ async fn serve(
         if line.is_empty() {
             break;
         }
-        if let Some((name, value)) = line.split_once(':')
-            && name.eq_ignore_ascii_case("content-length")
-        {
-            content_length = value.trim().parse().unwrap_or(0);
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            } else if name.eq_ignore_ascii_case("authorization") {
+                authorization = Some(value.trim().to_owned());
+            }
         }
     }
     let mut body = vec![0; content_length];
@@ -154,6 +158,7 @@ async fn serve(
         method,
         path,
         body: String::from_utf8_lossy(&body).into_owned(),
+        authorization,
     };
     requests.lock().unwrap().push(request.clone());
     let reply = handler(&request);

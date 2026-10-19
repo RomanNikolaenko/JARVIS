@@ -453,3 +453,46 @@ macro_rules! contract_suite {
 
 contract_suite!(ollama, OLLAMA);
 contract_suite!(openai_compatible, OPENAI);
+
+#[tokio::test]
+async fn openai_compatible_sends_the_api_key_when_configured() {
+    use jarvis_ai::{
+        DataLocality, HttpClient, OpenAiCompatibleProvider, ProviderDescriptor, ProviderKind,
+    };
+
+    let server = MockServer::start(openai_handler(Scenario::default())).await;
+    let base = url::Url::parse(&server.url("/v1")).expect("url");
+    let descriptor = ProviderDescriptor {
+        id: ProviderId::new("runtime"),
+        display_name: "Runtime".into(),
+        kind: ProviderKind::Embedded,
+        locality: DataLocality::OnDevice,
+    };
+    let provider = OpenAiCompatibleProvider::new(descriptor, base, Arc::new(HttpClient::new()))
+        .with_api_key("secret-key");
+
+    provider.list_models().await.expect("models");
+    provider
+        .chat(chat_request(OPENAI.chat_model))
+        .await
+        .expect("chat");
+    let requests = server.requests();
+    assert!(!requests.is_empty());
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.authorization.as_deref() == Some("Bearer secret-key")),
+        "every request must carry the key"
+    );
+
+    // Without a key no Authorization header is sent.
+    let plain = provider_at(&OPENAI, server.url("/v1"));
+    plain.list_models().await.expect("models");
+    assert_eq!(
+        server
+            .requests()
+            .last()
+            .and_then(|r| r.authorization.clone()),
+        None
+    );
+}

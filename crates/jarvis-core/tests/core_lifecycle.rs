@@ -166,7 +166,7 @@ async fn initialization_creates_directories_and_reports_health() {
     assert!(info.config_file.ends_with("config.toml"));
 
     let report = test.core.health().await;
-    assert_eq!(report.components.len(), 5);
+    assert_eq!(report.components.len(), 6);
     let ai = report
         .components
         .iter()
@@ -202,7 +202,7 @@ async fn settings_persist_across_restarts() {
     settings.ai.idle_timeout_secs = 42;
     settings.interface.reduced_motion = true;
     first.update_settings(settings.clone()).await.expect("save");
-    first.shutdown();
+    first.shutdown().await;
     drop(first);
 
     let second =
@@ -294,7 +294,7 @@ async fn shutdown_cancels_running_chats() {
         .start(user_request("a long answer"), sink)
         .await
         .expect("start");
-    test.core.shutdown();
+    test.core.shutdown().await;
 
     let events = collect(rx).await;
     assert!(matches!(
@@ -482,4 +482,152 @@ async fn provider_connection_test_reports_models_and_locality() {
         .await
         .expect_err("credentials in URL");
     assert_eq!(invalid.code(), ErrorCode::Validation);
+}
+
+// ---------------------------------------------------------------------------
+// Embedded runtime
+// ---------------------------------------------------------------------------
+
+/// Hosts the fake llama-server (see `jarvis_runtime::testing`).
+#[test]
+fn fake_llama_server() {
+    jarvis_runtime::testing::fake_server_entry();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_served_by_the_runtime_is_routed_and_unregistered_on_stop() {
+    use jarvis_runtime::testing;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = paths_in(&dir);
+    testing::install_fake_runtime(&paths.data_dir, None)
+        .await
+        .expect("fake runtime");
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths.clone(), "9.9.9")
+            .with_provider_factory(None)
+            .with_runtime_command_factory(testing::fake_command_factory(testing::mode::SLOW)),
+    )
+    .await
+    .expect("core");
+
+    let model_path = dir.path().join("tiny.gguf");
+    std::fs::write(&model_path, testing::fake_gguf_bytes()).expect("model");
+    let model = core
+        .runtime()
+        .import_model(&model_path)
+        .await
+        .expect("import");
+
+    core.start_local_model(&model.id).await.expect("start");
+    let state = core.runtime().wait_settled(Duration::from_secs(30)).await;
+    assert_eq!(
+        state.phase,
+        jarvis_runtime::ServerPhase::Running,
+        "{state:?}"
+    );
+
+    // The registry is rebuilt asynchronously after the state change.
+    let mut listed = false;
+    for _ in 0..50 {
+        let listing = core.list_models(true).await;
+        if listing.iter().any(|p| {
+            p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID && p.error.is_none()
+        }) {
+            listed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(listed, "runtime provider must appear in the catalog");
+
+    let runtime_component = core
+        .health()
+        .await
+        .components
+        .into_iter()
+        .find(|c| c.id == "runtime")
+        .expect("runtime health");
+    assert!(
+        runtime_component.message.contains(&model.id),
+        "{runtime_component:?}"
+    );
+
+    // Automatic routing prefers the embedded runtime over the diagnostic provider.
+    let (sink, rx) = channel_sink();
+    core.chat()
+        .start(user_request("ping"), sink)
+        .await
+        .expect("chat");
+    let events = collect(rx).await;
+    match &events[0] {
+        ChatStreamEvent::Started {
+            provider_id,
+            model: routed,
+            ..
+        } => {
+            assert_eq!(provider_id.as_str(), jarvis_runtime::RUNTIME_PROVIDER_ID);
+            assert_eq!(routed, &model.id);
+        }
+        other => panic!("expected started, got {other:?}"),
+    }
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            ChatStreamEvent::Delta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "pong");
+
+    core.shutdown().await;
+    assert!(core.runtime().provider().is_none());
+    let mut removed = false;
+    for _ in 0..50 {
+        if !core
+            .list_models(true)
+            .await
+            .iter()
+            .any(|p| p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID)
+        {
+            removed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(removed, "runtime provider must be unregistered after stop");
+}
+
+#[tokio::test]
+async fn runtime_settings_are_validated_and_persisted() {
+    let test = start_core(vec![Arc::new(EchoProvider::new())]).await;
+    let mut settings = test.core.settings();
+    settings.runtime.context_size = 100;
+    let err = test
+        .core
+        .update_settings(settings.clone())
+        .await
+        .expect_err("too small");
+    assert_eq!(err.code(), ErrorCode::Validation);
+
+    settings.runtime.context_size = 8192;
+    settings.runtime.threads = Some(6);
+    settings.runtime.autostart_model = Some("qwen2.5-0.5b-instruct-q4_k_m".into());
+    test.core
+        .update_settings(settings.clone())
+        .await
+        .expect("valid");
+    assert_eq!(test.core.settings().runtime, settings.runtime);
+
+    // The runtime provider id is reserved for configured providers.
+    let mut reserved = test.core.settings();
+    reserved.ai.providers[0].id = ProviderId::new(jarvis_runtime::RUNTIME_PROVIDER_ID);
+    assert_eq!(
+        test.core
+            .update_settings(reserved)
+            .await
+            .expect_err("reserved")
+            .code(),
+        ErrorCode::Validation
+    );
 }

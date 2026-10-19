@@ -11,13 +11,20 @@
 
 mod adapters;
 mod display;
+mod hardware;
 mod info;
 mod monitor;
+mod process;
 
 pub use adapters::current_adapter;
 pub use display::{DisplayServer, detect_linux_display_server};
+pub use hardware::{
+    CpuFeatures, GpuInfo, GpuVendor, HardwareInfo, available_disk_space, available_memory,
+    read_drm_gpus,
+};
 pub use info::{OsFamily, PlatformInfo};
 pub use monitor::{SystemMetrics, SystemMonitor};
+pub use process::{kill_if_executable, process_memory, request_termination};
 
 /// OS-specific behaviour that cannot be expressed through portable crates.
 ///
@@ -30,4 +37,14 @@ pub trait PlatformAdapter: Send + Sync + std::fmt::Debug {
 
     /// The graphical session type of the current process.
     fn display_server(&self) -> DisplayServer;
+
+    /// GPUs known to the OS (best effort, may be empty).
+    fn gpus(&self) -> Vec<GpuInfo>;
+
+    /// Whether a Vulkan loader is installed.
+    fn vulkan_available(&self) -> bool;
+
+    /// Configures a command for a background helper process (e.g. hides the
+    /// console window on Windows).
+    fn prepare_background_command(&self, command: &mut std::process::Command);
 }

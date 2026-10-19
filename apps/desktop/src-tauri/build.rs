@@ -20,6 +20,19 @@ const COMMANDS: &[&str] = &[
     "start_chat",
     "cancel_chat",
     "report_ui_error",
+    "get_runtime_status",
+    "get_hardware_info",
+    "list_curated_models",
+    "check_runtime_release",
+    "install_runtime",
+    "select_runtime_binary",
+    "import_model",
+    "download_curated_model",
+    "download_model",
+    "cancel_download",
+    "remove_model",
+    "start_local_model",
+    "stop_local_model",
 ];
 
 fn main() {

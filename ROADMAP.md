@@ -29,11 +29,23 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Verification against real Ollama / LM Studio installations (only protocol
   mocks so far)
 
-## Phase 3 — Embedded runtime ⬜
+## Phase 3 — Embedded runtime 🟡
 
-`jarvis-runtime`: managed `llama-server` process, GGUF import, verified
-downloads with checksums and progress, hardware detection (CPU/GPU,
-RAM/VRAM), context size/threads configuration, safe start/stop.
+- ✅ Hardware detection: CPU features, RAM, GPUs (NVIDIA via nvidia-smi,
+  Windows registry, Linux sysfs), Vulkan availability, free disk space
+- ✅ Verified installation of official llama.cpp builds (CPU/Vulkan) with
+  explicit approval, digest check and safe extraction; or an existing
+  `llama-server`
+- ✅ GGUF library: import in place, header validation, memory estimate
+- ✅ Verified model downloads (curated catalog, any public Hugging Face GGUF),
+  resume, cancel, disk space check
+- ✅ Supervised server: 127.0.0.1 + per-launch API key, readiness, crash
+  detection, safe stop, orphan cleanup, memory check, GPU layers, threads,
+  context size, autostart (opt-in)
+- ✅ Runtime screen; embedded provider in routing and health
+- ⬜ Verification with the real llama.cpp engine on Windows and Linux
+- ⬜ CUDA build installation (needs the separate CUDA runtime archive)
+- ⬜ Embedding model serving (second server instance with `--embedding`)
 
 ## Phase 4 — Memory ⬜
 
@@ -66,6 +78,6 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Finish Phase 2 (keychain-backed API keys, cloud providers behind the privacy
-opt-in, verification against real servers), then Phase 3: managed
-`llama-server` runtime with GGUF import and hardware detection.
+Verify the embedded runtime with real llama.cpp builds and models, then
+Phase 4 (memory: SQLite, conversation history, context manager, semantic
+search). Open Phase 2 items: keychain-backed API keys and cloud providers.

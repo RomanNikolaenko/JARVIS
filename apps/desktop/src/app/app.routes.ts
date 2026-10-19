@@ -18,6 +18,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/models/models').then((m) => m.Models),
   },
   {
+    path: 'runtime',
+    title: 'Local runtime · JARVIS',
+    loadComponent: () => import('./features/runtime/runtime').then((m) => m.RuntimePage),
+  },
+  {
     path: 'events',
     title: 'Event log · JARVIS',
     loadComponent: () => import('./features/events/events').then((m) => m.Events),

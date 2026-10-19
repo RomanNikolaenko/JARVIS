@@ -18,11 +18,13 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use jarvis_ai::{
-    AiError, AiProvider, DataLocality, EchoProvider, HttpProviderFactory, ModelInfo,
+    AiError, AiProvider, DataLocality, EchoProvider, HttpClient, HttpProviderFactory, ModelInfo,
     ProviderConfig, ProviderFactory, ProviderRegistry,
 };
 use jarvis_events::{EventBus, EventCategory};
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
+use jarvis_runtime::process::CommandFactory;
+use jarvis_runtime::{RuntimeManager, RuntimeOptions};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -88,7 +90,6 @@ pub struct ProviderTestResult {
 }
 
 /// Options for [`JarvisCore::initialize`].
-#[derive(Debug)]
 pub struct CoreOptions {
     pub paths: AppPaths,
     pub app_version: String,
@@ -97,6 +98,17 @@ pub struct CoreOptions {
     /// Builds providers from `ai.providers`; `None` disables configured
     /// providers (used by tests that must not touch the network).
     pub provider_factory: Option<Arc<dyn ProviderFactory>>,
+    /// Replaces the `llama-server` command of the local runtime (tests).
+    pub runtime_command_factory: Option<CommandFactory>,
+}
+
+impl std::fmt::Debug for CoreOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CoreOptions")
+            .field("paths", &self.paths)
+            .field("app_version", &self.app_version)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CoreOptions {
@@ -108,7 +120,13 @@ impl CoreOptions {
             app_version: app_version.into(),
             static_providers: vec![Arc::new(EchoProvider::new())],
             provider_factory: Some(Arc::new(HttpProviderFactory::new())),
+            runtime_command_factory: None,
         }
+    }
+
+    pub fn with_runtime_command_factory(mut self, factory: CommandFactory) -> Self {
+        self.runtime_command_factory = Some(factory);
+        self
     }
 
     /// Replaces the providers that exist regardless of settings.
@@ -138,7 +156,10 @@ pub struct JarvisCore {
     static_providers: Vec<Arc<dyn AiProvider>>,
     provider_factory: Option<Arc<dyn ProviderFactory>>,
     providers: Arc<ProviderRegistry>,
+    /// Serialises registry rebuilds (settings changes, runtime start/stop).
+    provider_reload: tokio::sync::Mutex<()>,
     catalog: Arc<ModelCatalog>,
+    runtime: Arc<RuntimeManager>,
     chat: ChatService,
     ui_error_limiter: ui_errors::RateLimiter,
 }
@@ -153,6 +174,7 @@ impl JarvisCore {
             app_version,
             static_providers,
             provider_factory,
+            runtime_command_factory,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -202,9 +224,18 @@ impl JarvisCore {
             ),
         );
 
+        let runtime = RuntimeManager::new(RuntimeOptions {
+            data_dir: paths.data_dir.clone(),
+            events: events.clone(),
+            ai_http: Arc::new(HttpClient::new()),
+            command_factory: runtime_command_factory,
+        })
+        .await?;
+
         let registry = Arc::new(ProviderRegistry::new());
         registry.replace_all(build_providers(
             &static_providers,
+            runtime.provider(),
             provider_factory.as_deref(),
             &config.current().ai.providers,
             &events,
@@ -228,7 +259,7 @@ impl JarvisCore {
             format!("JARVIS core ready in {} ms", started.elapsed().as_millis()),
         );
 
-        Ok(Arc::new(Self {
+        let core = Arc::new(Self {
             paths,
             version: app_version,
             started,
@@ -240,13 +271,86 @@ impl JarvisCore {
             static_providers,
             provider_factory,
             providers: registry,
+            provider_reload: tokio::sync::Mutex::new(()),
             catalog,
+            runtime,
             chat,
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
             ),
-        }))
+        });
+        Self::watch_runtime_provider(&core);
+        Self::autostart_runtime(&core);
+        Ok(core)
+    }
+
+    /// Re-registers providers whenever the embedded runtime starts or stops
+    /// serving a model.
+    fn watch_runtime_provider(core: &Arc<Self>) {
+        let mut receiver = core.runtime.subscribe_provider();
+        let weak = Arc::downgrade(core);
+        tokio::spawn(async move {
+            while receiver.changed().await.is_ok() {
+                let Some(core) = weak.upgrade() else { break };
+                if let Err(err) = core.reload_providers().await {
+                    tracing::warn!("cannot reload AI providers: {err}");
+                }
+            }
+        });
+    }
+
+    /// Starts the configured model, if the user enabled autostart.
+    fn autostart_runtime(core: &Arc<Self>) {
+        let Some(model) = core.settings().runtime.autostart_model else {
+            return;
+        };
+        if core.runtime.binary().is_none() {
+            core.events.warning(
+                EventCategory::Runtime,
+                format!("Autostart of {model} skipped: the llama.cpp runtime is not installed"),
+            );
+            return;
+        }
+        let core = Arc::clone(core);
+        tokio::spawn(async move {
+            if let Err(err) = core.start_local_model(&model).await {
+                core.events.error(
+                    EventCategory::Runtime,
+                    format!("Autostart of {model} failed: {err}"),
+                );
+            }
+        });
+    }
+
+    /// Rebuilds the registry from settings and the runtime state.
+    async fn reload_providers(&self) -> Result<(), CoreError> {
+        let _guard = self.provider_reload.lock().await;
+        let current = self.config.current();
+        self.providers.replace_all(build_providers(
+            &self.static_providers,
+            self.runtime.provider(),
+            self.provider_factory.as_deref(),
+            &current.ai.providers,
+            &self.events,
+        ))?;
+        self.catalog.invalidate().await;
+        self.events.info(
+            EventCategory::Ai,
+            format!("AI providers: {}", provider_names(&self.providers)),
+        );
+        Ok(())
+    }
+
+    /// The embedded llama.cpp runtime.
+    pub fn runtime(&self) -> &Arc<RuntimeManager> {
+        &self.runtime
+    }
+
+    /// Starts serving a library model with the runtime settings.
+    pub async fn start_local_model(&self, model_id: &str) -> Result<(), CoreError> {
+        let settings = self.config.current().runtime;
+        Ok(self.runtime.start(model_id, &settings).await?)
     }
 
     pub fn info(&self) -> AppInfo {
@@ -295,20 +399,9 @@ impl JarvisCore {
         self.events.info(EventCategory::Config, "Settings saved");
 
         if previous.ai.providers != saved.ai.providers {
-            // Always rebuild from the latest saved settings, so concurrent
-            // updates cannot leave an older provider set active.
-            let current = self.config.current();
-            self.providers.replace_all(build_providers(
-                &self.static_providers,
-                self.provider_factory.as_deref(),
-                &current.ai.providers,
-                &self.events,
-            ))?;
-            self.catalog.invalidate().await;
-            self.events.info(
-                EventCategory::Ai,
-                format!("AI providers reloaded: {}", provider_names(&self.providers)),
-            );
+            // Rebuilds from the latest saved settings, so concurrent updates
+            // cannot leave an older provider set active.
+            self.reload_providers().await?;
         }
         Ok(saved)
     }
@@ -390,7 +483,9 @@ impl JarvisCore {
         let subscribers = self.events.subscriber_count();
         let display_server = self.platform.display_server;
 
-        let (config, storage, events, platform, ai) = tokio::join!(
+        let runtime_installed = self.runtime.binary().is_some();
+        let runtime_state = self.runtime.server_state();
+        let (config, storage, events, platform, ai, runtime) = tokio::join!(
             health::run_probe("config", "Configuration", health::PROBE_TIMEOUT, async {
                 health::config_health(&config_source)
             }),
@@ -418,9 +513,12 @@ impl JarvisCore {
                 health::AI_PROBE_TIMEOUT,
                 health::ai_health(self.providers.providers())
             ),
+            health::run_probe("runtime", "Local runtime", health::PROBE_TIMEOUT, async {
+                health::runtime_health(runtime_installed, &runtime_state)
+            }),
         );
 
-        let components = vec![config, storage, events, platform, ai];
+        let components = vec![config, storage, events, platform, ai, runtime];
         HealthReport {
             status: HealthReport::aggregate(&components),
             version: self.version.clone(),
@@ -446,23 +544,29 @@ impl JarvisCore {
         );
     }
 
-    /// Cancels running work. Safe to call more than once.
-    pub fn shutdown(&self) {
-        self.chat.cancel_all();
+    /// Cancels running work and stops the local model server. Safe to call
+    /// more than once.
+    pub async fn shutdown(&self) {
         self.events
             .info(EventCategory::Lifecycle, "JARVIS core shutting down");
+        self.chat.cancel_all();
+        self.runtime.shutdown().await;
     }
 }
 
-/// Static providers followed by the enabled configured providers, in
-/// configuration order. Invalid configurations are skipped with a warning.
+/// Static providers, the embedded runtime (while serving) and the enabled
+/// configured providers, in configuration order. Invalid configurations are skipped with a warning.
 fn build_providers(
     static_providers: &[Arc<dyn AiProvider>],
+    runtime: Option<Arc<dyn AiProvider>>,
     factory: Option<&dyn ProviderFactory>,
     configs: &[ProviderConfig],
     events: &EventBus,
 ) -> Vec<Arc<dyn AiProvider>> {
     let mut providers = static_providers.to_vec();
+    // The embedded runtime comes before configured servers, so automatic
+    // routing prefers a model the user started inside JARVIS.
+    providers.extend(runtime);
     if let Some(factory) = factory {
         for config in configs.iter().filter(|c| c.enabled) {
             match factory.create(config) {

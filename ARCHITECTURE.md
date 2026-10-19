@@ -33,8 +33,9 @@ crates with explicit interfaces) instead of services. See
 │ Domain — Rust core crates (crates/*)                          │
 │ jarvis-core  → composition root: config, health, chat, router │
 │ jarvis-ai    → AiProvider trait, Ollama/OpenAI-compatible     │
+│ jarvis-runtime → supervised llama.cpp server, GGUF, downloads │
 │ jarvis-events→ event bus + system event log                   │
-│ jarvis-platform → OS adapters, system monitor                 │
+│ jarvis-platform → OS adapters, hardware, system monitor       │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,7 +50,10 @@ Cargo.toml                    Rust workspace (resolver 3, edition 2024)
 crates/
   jarvis-events/              EventBus, SystemEvent, bounded history
   jarvis-platform/            PlatformAdapter trait, Windows/Linux adapters,
-                              PlatformInfo, SystemMonitor (sysinfo)
+                              PlatformInfo, SystemMonitor, HardwareInfo (CPU
+                              features, RAM, GPUs, Vulkan), process helpers
+  jarvis-runtime/             RuntimeManager: llama.cpp installer, GGUF library,
+                              verified downloads, supervised llama-server
   jarvis-ai/                  AiProvider trait, ProviderRegistry, ProviderFactory,
                               Ollama + OpenAI-compatible HTTP providers,
                               EchoProvider, provider config + URL privacy class
@@ -60,7 +64,8 @@ apps/desktop/
     app/core/ipc/             TauriBridge (only user of @tauri-apps/api), JarvisApi
     app/core/state/           signal stores (system, events, settings, chat)
     app/core/errors/          global error handler → core log
-    app/features/             dashboard, chat, models, events, settings (lazy)
+    app/features/             dashboard, chat, models, runtime, events,
+                              settings (lazy)
     app/shared/               HUD panel, AI core, icons, status badge, Markdown,
                               formatters
   src-tauri/                  Tauri 2 shell (crate jarvis-desktop)
@@ -73,7 +78,7 @@ docs/decisions/               Architecture Decision Records
 
 Crates that exist only on the roadmap (`jarvis-memory`, `jarvis-storage`,
 `jarvis-voice`, `jarvis-vision`, `jarvis-tools`, `jarvis-security`,
-`jarvis-agent`, `jarvis-runtime`, `jarvis-sync`) are **not created yet**; they
+`jarvis-agent`, `jarvis-sync`) are **not created yet**; they
 are added when their phase starts, so the tree never contains empty modules.
 
 ## 4. Components (implemented)
@@ -174,6 +179,26 @@ across network chunks. See also [ADR 0003](docs/decisions/0003-ai-provider-abstr
 - **Reload:** saving settings with changed providers rebuilds the registry
   atomically; running chats keep their provider handle.
 
+### 4.2b Embedded runtime (`jarvis-runtime`)
+
+See [ADR 0008](docs/decisions/0008-embedded-llama-runtime.md).
+
+| Module | Responsibility |
+| --- | --- |
+| `installer` | find official llama.cpp builds (GitHub, tags `bNNNNN`), re-verify an approved release, extract `.zip`/`.tar.gz` safely, locate and probe `llama-server` |
+| `gguf` | bounded GGUF metadata reader; memory estimate (weights + KV cache + overhead) |
+| `library` | model index (`models/library.json`); import in place; deletes only files inside the models folder (canonical paths) |
+| `catalog`, `download` | curated pinned models; Hugging Face resolution to commit + LFS SHA-256; resumable, verified downloads with progress and cancellation |
+| `process` | command line, spawn without console, log ring buffer, `/health` readiness, API-key check |
+| `RuntimeManager` | state machine `stopped → starting → running → stopping/failed`, supervision task, provider publication via `watch`, orphan cleanup, shutdown |
+
+The core owns the `RuntimeManager`, adds its provider to the registry while a
+model is served (before configured servers, so automatic routing prefers it)
+and rebuilds the registry when the runtime starts or stops. Health reports a
+`runtime` component; autostart happens only if `runtime.autostartModel` is
+set. Data lives in the local data directory: `runtime/` (engine, install
+record, pid file) and `models/`.
+
 ### 4.3 Chat orchestration (`jarvis-core::chat`)
 
 `ChatService::start(request, sink)`:
@@ -248,6 +273,17 @@ notification instead of blocking publishers.
 | `start_chat` | `request: ChatStartRequest`, `onEvent: Channel<ChatStreamEvent>` | request id |
 | `cancel_chat` | `requestId: string` | `boolean` |
 | `report_ui_error` | `report: UiErrorReport` | – |
+| `get_runtime_status` | – | `RuntimeStatus` |
+| `get_hardware_info` | – | `HardwareInfo` |
+| `list_curated_models` | – | `CuratedModel[]` |
+| `check_runtime_release` | `backend` | `RuntimeRelease` (GitHub lookup) |
+| `install_runtime` | `release: RuntimeRelease` (approved) | download id |
+| `select_runtime_binary` | – (native picker in Rust) | `RuntimeBinary \| null` |
+| `import_model` | – (native picker in Rust) | `LocalModel \| null` |
+| `download_curated_model` / `download_model` | `id` / `request: ModelDownloadRequest` | download id |
+| `cancel_download` | `id` | `boolean` |
+| `remove_model` | `id`, `deleteFile` | – |
+| `start_local_model` / `stop_local_model` | `modelId` / – | – |
 
 Event: `jarvis://system-event` → `SystemEvent`.
 
@@ -300,8 +336,11 @@ must be granted by a capability; anything not granted is denied. See
 
 - No API keys yet: servers that require authentication cannot be used; cloud
   providers (OpenAI, Anthropic, Gemini) need keychain-backed secrets first.
-- No embedded runtime yet (Phase 3): a local server (Ollama, LM Studio, …)
-  must be installed and running.
+- The embedded runtime installs CPU and Vulkan builds; CUDA/ROCm/SYCL builds
+  must be selected manually. The real llama.cpp engine is verified manually,
+  automated tests use a fake server.
+- A server outlives JARVIS if JARVIS is killed forcibly; the next start
+  stops it.
 - Capabilities of OpenAI-compatible models are inferred, not reported.
 - Tested against protocol mocks; compatibility with every server version is
   not guaranteed.
@@ -317,8 +356,6 @@ must be granted by a capability; anything not granted is denied. See
 
 See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
-- `jarvis-runtime`: managed `llama-server` child process (GGUF import,
-  checksums, hardware detection, safe termination).
 - `jarvis-storage` / `jarvis-memory`: SQLite with migrations, FTS, vector
   search, layered memory, context manager.
 - `jarvis-security`: policy engine (capabilities, allowlists, scoped file

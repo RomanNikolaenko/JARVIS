@@ -1,0 +1,519 @@
+<header class="page-header">
+  <div>
+    <h1 class="title">Local runtime</h1>
+    <p class="subtitle">
+      Run GGUF models inside JARVIS with llama.cpp — no Ollama or LM Studio needed.
+    </p>
+  </div>
+  @if (store.server(); as server) {
+    <jv-status-badge
+      [status]="
+        server.phase === 'running'
+          ? 'healthy'
+          : server.phase === 'failed'
+            ? 'unhealthy'
+            : server.phase === 'stopped'
+              ? 'unknown'
+              : 'degraded'
+      "
+      [label]="server.phase"
+    />
+  }
+</header>
+
+@if (store.error(); as error) {
+  <p class="error" role="alert">{{ error.message }}</p>
+}
+
+<div class="layout">
+  <!-- Engine -->
+  <jv-hud-panel class="engine" heading="Engine (llama.cpp)">
+    @if (store.installed(); as binary) {
+      <dl class="facts">
+        <div>
+          <dt>Version</dt>
+          <dd class="mono">{{ binary.version }}</dd>
+        </div>
+        <div>
+          <dt>Backend</dt>
+          <dd>{{ backendLabels[binary.backend] }}</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{{ describeSource(binary.source) }}</dd>
+        </div>
+        <div>
+          <dt>Path</dt>
+          <dd class="mono">{{ binary.path }}</dd>
+        </div>
+        <div>
+          <dt>SHA-256</dt>
+          <dd class="mono" [title]="binary.sha256">{{ binary.sha256.slice(0, 16) }}…</dd>
+        </div>
+      </dl>
+    } @else {
+      <p class="lead">
+        JARVIS runs models with <strong>llama-server</strong> from the official llama.cpp project.
+        Install a verified build or use one you already have.
+      </p>
+    }
+
+    <div class="engine-actions">
+      <label class="inline">
+        <span>Build</span>
+        <select (change)="onBackend($event)">
+          <option value="cpu" [selected]="backend() === 'cpu'">
+            CPU{{ recommended() === 'cpu' ? ' (recommended)' : '' }}
+          </option>
+          <option value="vulkan" [selected]="backend() === 'vulkan'">
+            Vulkan GPU{{ recommended() === 'vulkan' ? ' (recommended)' : '' }}
+          </option>
+        </select>
+      </label>
+      <button
+        type="button"
+        (click)="store.checkRelease(backend())"
+        [disabled]="store.checkingRelease()"
+      >
+        {{
+          store.checkingRelease()
+            ? 'Checking…'
+            : store.installed()
+              ? 'Check for update'
+              : 'Find build'
+        }}
+      </button>
+      <button type="button" class="ghost" (click)="store.selectBinary()">
+        Use existing llama-server…
+      </button>
+    </div>
+
+    @if (store.release(); as release) {
+      <div class="release">
+        <div class="release-title">
+          llama.cpp {{ release.tag }} · {{ backendLabels[release.backend] }}
+        </div>
+        <dl class="facts">
+          <div>
+            <dt>File</dt>
+            <dd class="mono">{{ release.assetName }}</dd>
+          </div>
+          <div>
+            <dt>Size</dt>
+            <dd>{{ formatBytes(release.sizeBytes) }}</dd>
+          </div>
+          <div>
+            <dt>Published</dt>
+            <dd>{{ release.publishedAt.slice(0, 10) }}</dd>
+          </div>
+          <div>
+            <dt>SHA-256</dt>
+            <dd class="mono">{{ release.sha256 }}</dd>
+          </div>
+          <div>
+            <dt>Source</dt>
+            <dd class="mono">{{ release.downloadUrl }}</dd>
+          </div>
+        </dl>
+        <p class="consent">
+          <jv-icon name="shield" [size]="14" />
+          <span>
+            JARVIS will download this archive from the official llama.cpp GitHub repository, verify
+            the SHA-256 above, extract it into its data folder and run
+            <code>llama-server</code> locally (bound to 127.0.0.1 only).
+          </span>
+        </p>
+        <div class="row-actions">
+          <button type="button" class="ghost" (click)="store.release.set(null)">Cancel</button>
+          <button type="button" class="primary" (click)="store.install(release)">
+            Download &amp; install ({{ formatBytes(release.sizeBytes) }})
+          </button>
+        </div>
+      </div>
+    }
+
+    @for (download of runtimeDownloads(); track download.id) {
+      <div class="download">
+        <div class="download-head">
+          <span>{{ download.label }}</span>
+          <span class="dim">{{ download.phase }}</span>
+        </div>
+        @if (
+          download.phase === 'downloading' ||
+          download.phase === 'verifying' ||
+          download.phase === 'installing'
+        ) {
+          <div class="meter">
+            <div class="meter-fill" [style.width.%]="downloadPercent(download)"></div>
+          </div>
+        }
+        @if (download.error) {
+          <div class="error-text">{{ download.error }}</div>
+        }
+      </div>
+    }
+  </jv-hud-panel>
+
+  <!-- Hardware -->
+  <jv-hud-panel class="hardware" heading="Hardware">
+    @if (store.hardware(); as hw) {
+      <dl class="facts">
+        <div>
+          <dt>CPU</dt>
+          <dd>{{ hw.cpuBrand ?? 'unknown' }}</dd>
+        </div>
+        <div>
+          <dt>Cores / threads</dt>
+          <dd>{{ hw.physicalCores ?? '?' }} / {{ hw.logicalCpus }}</dd>
+        </div>
+        <div>
+          <dt>Instructions</dt>
+          <dd>
+            @if (hw.cpuFeatures.avx2) {
+              <span class="chip">AVX2</span>
+            }
+            @if (hw.cpuFeatures.avx512f) {
+              <span class="chip">AVX-512</span>
+            }
+            @if (hw.cpuFeatures.fma) {
+              <span class="chip">FMA</span>
+            }
+            @if (hw.cpuFeatures.neon) {
+              <span class="chip">NEON</span>
+            }
+          </dd>
+        </div>
+        <div>
+          <dt>Memory</dt>
+          <dd>
+            {{ formatBytes(hw.availableMemoryBytes) }} free of
+            {{ formatBytes(hw.totalMemoryBytes) }}
+          </dd>
+        </div>
+        @for (gpu of hw.gpus; track $index) {
+          <div>
+            <dt>GPU</dt>
+            <dd>
+              {{ gpu.name }}
+              @if (gpu.vramTotalBytes) {
+                <span class="dim">· {{ formatBytes(gpu.vramTotalBytes) }} VRAM</span>
+              }
+            </dd>
+          </div>
+        } @empty {
+          <div>
+            <dt>GPU</dt>
+            <dd class="dim">none detected</dd>
+          </div>
+        }
+        <div>
+          <dt>Vulkan</dt>
+          <dd>{{ hw.vulkanAvailable ? 'available' : 'not installed' }}</dd>
+        </div>
+        @if (hw.nvidiaDriver) {
+          <div>
+            <dt>NVIDIA driver</dt>
+            <dd>{{ hw.nvidiaDriver }}</dd>
+          </div>
+        }
+      </dl>
+    } @else {
+      <p class="dim">Detecting…</p>
+    }
+  </jv-hud-panel>
+
+  <!-- Server -->
+  <jv-hud-panel class="server" heading="Server">
+    @if (store.server(); as server) {
+      @if (server.phase === 'stopped') {
+        <p class="dim">No model is running. Start one from the library below.</p>
+      } @else {
+        <dl class="facts grid">
+          <div>
+            <dt>Model</dt>
+            <dd class="mono">{{ server.modelId }}</dd>
+          </div>
+          <div>
+            <dt>State</dt>
+            <dd>{{ server.phase }}</dd>
+          </div>
+          <div>
+            <dt>Address</dt>
+            <dd class="mono">127.0.0.1:{{ server.port }}</dd>
+          </div>
+          <div>
+            <dt>PID</dt>
+            <dd class="mono">{{ server.pid ?? '—' }}</dd>
+          </div>
+          <div>
+            <dt>Context</dt>
+            <dd>{{ server.contextSize }} tokens</dd>
+          </div>
+          <div>
+            <dt>GPU layers</dt>
+            <dd>{{ (server.gpuLayers ?? 0) >= allLayers ? 'all' : server.gpuLayers }}</dd>
+          </div>
+          <div>
+            <dt>Threads</dt>
+            <dd>{{ server.threads }}</dd>
+          </div>
+          <div>
+            <dt>Memory</dt>
+            <dd>{{ formatBytes(server.memoryBytes) }}</dd>
+          </div>
+          <div>
+            <dt>Uptime</dt>
+            <dd>{{ uptime() }}</dd>
+          </div>
+        </dl>
+        @if (server.error) {
+          <pre class="error-block">{{ server.error }}</pre>
+        }
+      }
+      @if (serverActive()) {
+        <div class="row-actions">
+          <button type="button" class="danger" (click)="store.stop()">
+            <jv-icon name="stop" [size]="15" />
+            Stop
+          </button>
+        </div>
+      }
+      @if (store.status()?.logTail?.length) {
+        <details class="logs">
+          <summary>Server log</summary>
+          <pre>{{ store.status()?.logTail?.join('\n') }}</pre>
+        </details>
+      }
+    }
+  </jv-hud-panel>
+
+  <!-- Library -->
+  <jv-hud-panel class="library" heading="Model library">
+    <button panelActions type="button" class="ghost small" (click)="store.importModel()">
+      Import GGUF…
+    </button>
+    @if (models().length) {
+      <table class="model-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Details</th>
+            <th class="num">Size</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (model of models(); track model.id) {
+            <tr [class.missing]="!model.available">
+              <td>
+                <div>{{ model.displayName }}</div>
+                <div class="mono dim">{{ model.id }}</div>
+                @if (!model.available) {
+                  <div class="error-text">File missing or changed: {{ model.path }}</div>
+                }
+              </td>
+              <td class="dim">
+                {{ model.gguf.architecture ?? '?' }}
+                @if (model.gguf.sizeLabel) {
+                  · {{ model.gguf.sizeLabel }}
+                }
+                @if (model.gguf.quantization) {
+                  · {{ model.gguf.quantization }}
+                }
+                @if (model.gguf.contextLength) {
+                  · {{ model.gguf.contextLength }} ctx
+                }
+                · {{ model.source.kind === 'downloaded' ? 'verified download' : 'imported' }}
+              </td>
+              <td class="num mono">{{ formatBytes(model.sizeBytes) }}</td>
+              <td class="actions-cell">
+                @if (confirmingRemoval() === model.id) {
+                  <button type="button" class="ghost small" (click)="remove(model, false)">
+                    Remove from list
+                  </button>
+                  @if (model.managed) {
+                    <button type="button" class="danger small" (click)="remove(model, true)">
+                      Delete file
+                    </button>
+                  }
+                  <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">
+                    Cancel
+                  </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="primary small"
+                    (click)="store.start(model.id)"
+                    [disabled]="!canStart(model)"
+                    [title]="store.installed() ? '' : 'Install the engine first'"
+                  >
+                    Start
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost small"
+                    (click)="confirmingRemoval.set(model.id)"
+                  >
+                    Remove
+                  </button>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    } @else {
+      <p class="dim">No models yet. Import a GGUF file or download one below.</p>
+    }
+
+    @for (download of modelDownloads(); track download.id) {
+      <div class="download">
+        <div class="download-head">
+          <span>{{ download.label }}</span>
+          <span class="dim">
+            {{ download.phase }}
+            @if (download.phase === 'downloading') {
+              · {{ formatBytes(download.receivedBytes) }} / {{ formatBytes(download.totalBytes) }} ·
+              {{ formatBytes(download.bytesPerSecond) }}/s
+            }
+          </span>
+          @if (download.phase === 'downloading' || download.phase === 'verifying') {
+            <button type="button" class="ghost small" (click)="store.cancelDownload(download.id)">
+              Cancel
+            </button>
+          }
+        </div>
+        @if (download.phase === 'downloading' || download.phase === 'verifying') {
+          <div class="meter">
+            <div class="meter-fill" [style.width.%]="downloadPercent(download)"></div>
+          </div>
+        }
+        @if (download.error) {
+          <div class="error-text">{{ download.error }}</div>
+        }
+      </div>
+    }
+    <p class="hint">
+      Models folder: <span class="mono">{{ store.status()?.modelsDir }}</span>
+    </p>
+  </jv-hud-panel>
+
+  <!-- Downloads -->
+  <jv-hud-panel class="catalog" heading="Download models">
+    <ul class="curated">
+      @for (model of store.curated(); track model.id) {
+        <li>
+          <div>
+            <div class="curated-name">{{ model.displayName }}</div>
+            <div class="dim small-text">
+              {{ model.description }} {{ formatBytes(model.sizeBytes) }} · {{ model.license }}
+            </div>
+          </div>
+          <button
+            type="button"
+            class="small"
+            (click)="store.downloadCurated(model.id)"
+            [disabled]="isCuratedPresent(model.id)"
+          >
+            {{ isCuratedPresent(model.id) ? 'Downloaded' : 'Download' }}
+          </button>
+        </li>
+      }
+    </ul>
+    <form class="custom" [formGroup]="customDownload" (ngSubmit)="downloadCustom()">
+      <div class="field-label">Other GGUF from Hugging Face</div>
+      <div class="custom-grid">
+        <input
+          type="text"
+          formControlName="repo"
+          placeholder="owner/repository"
+          spellcheck="false"
+        />
+        <input
+          type="text"
+          formControlName="file"
+          placeholder="model-Q4_K_M.gguf"
+          spellcheck="false"
+        />
+        <input
+          type="text"
+          formControlName="revision"
+          placeholder="revision (main)"
+          spellcheck="false"
+        />
+        <button type="submit">Download</button>
+      </div>
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        Only public Hugging Face repositories. The file is pinned to a commit and checked against
+        the SHA-256 published by Hugging Face.
+      </p>
+    </form>
+  </jv-hud-panel>
+
+  <!-- Settings -->
+  <jv-hud-panel class="settings" heading="Inference settings">
+    <form [formGroup]="settingsForm" (ngSubmit)="saveSettings()">
+      <div class="settings-grid">
+        <label class="field">
+          <span class="field-label">Context size (tokens)</span>
+          <input type="number" min="512" max="262144" step="512" formControlName="contextSize" />
+        </label>
+        <label class="field">
+          <span class="field-label">CPU threads</span>
+          <input
+            type="number"
+            min="1"
+            max="256"
+            formControlName="threads"
+            placeholder="auto (physical cores)"
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">GPU offload</span>
+          <select formControlName="gpuOffload">
+            <option value="auto">Automatic (by GPU memory)</option>
+            <option value="off">Off (CPU only)</option>
+            <option value="all">All layers</option>
+            <option value="custom">Custom number of layers</option>
+          </select>
+        </label>
+        @if (settingsForm.controls.gpuOffload.value === 'custom') {
+          <label class="field">
+            <span class="field-label">GPU layers</span>
+            <input type="number" min="0" max="1000" formControlName="gpuLayers" />
+          </label>
+        }
+        <label class="field">
+          <span class="field-label">Start with JARVIS</span>
+          <select formControlName="autostartModel">
+            <option value="">Never</option>
+            @for (model of models(); track model.id) {
+              <option [value]="model.id">{{ model.displayName }}</option>
+            }
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Startup timeout (s)</span>
+          <input type="number" min="10" max="1800" formControlName="startupTimeoutSecs" />
+        </label>
+      </div>
+      <p class="hint">
+        Larger contexts need more memory. Changes apply the next time a model starts. JARVIS refuses
+        to start a model that does not fit into free memory.
+      </p>
+      <div class="row-actions">
+        @if (settingsSaved() && settingsForm.pristine) {
+          <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
+        }
+        <button
+          type="submit"
+          class="primary"
+          [disabled]="settingsForm.pristine || settingsForm.invalid"
+        >
+          Save
+        </button>
+      </div>
+    </form>
+  </jv-hud-panel>
+</div>

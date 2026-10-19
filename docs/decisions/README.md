@@ -13,5 +13,6 @@ earlier one instead of editing it.
 | [0005](0005-logging-and-events.md) | Diagnostic logging vs. user-facing system events | Accepted |
 | [0006](0006-http-ai-providers.md) | HTTP AI providers and URL-based privacy classification | Accepted |
 | [0007](0007-model-routing.md) | Model routing by task category | Accepted |
+| [0008](0008-embedded-llama-runtime.md) | Embedded runtime: supervised llama.cpp server | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.
