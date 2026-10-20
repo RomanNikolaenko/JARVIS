@@ -111,6 +111,13 @@ and a stuck or crashed engine must never take the UI down.
   the core can test that search becomes semantic while the embedding server
   runs.
 - Running both servers costs memory for two models (BGE-M3 Q8_0: ~0.6 GB
-  of weights; JARVIS requires ~1.2 GB free before it starts it).
+  of weights, ~870 MB resident on the CPU with a 2 048-token context;
+  JARVIS requires ~1.2 GB free before it starts it).
+- Live check (Windows, llama.cpp b11739, CPU): BGE-M3 loads in ~5 s; the
+  right Ukrainian fact ranks first for queries without a shared word, also
+  for English queries; a chat turn with Qwen2.5 3B received only the
+  relevant fact. Unrelated facts still pass the search similarity threshold
+  (0.35) and appear lower in the list, so the thresholds need calibrating
+  for this model.
 - On forced termination of JARVIS (e.g. killed by the OS) the server may
   outlive it until the next start, which cleans it up.

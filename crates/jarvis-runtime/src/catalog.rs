@@ -87,7 +87,7 @@ pub fn curated_models() -> Vec<CuratedModel> {
             ..chat(
                 "bge-m3-q8_0",
                 "BGE-M3 embeddings (Q8_0)",
-                "Multilingual embedding model (100+ languages, incl. Ukrainian) for semantic memory search; runs next to a chat model. ~1.3 GB RAM.",
+                "Multilingual embedding model (100+ languages, incl. Ukrainian) for semantic memory search; runs next to a chat model. ~0.9 GB RAM.",
                 "ggml-org/bge-m3-Q8_0-GGUF",
                 "bge-m3-q8_0.gguf",
                 "9eba04c5d75ba5a1595e45de734d36bef4e5cb98",

@@ -48,7 +48,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ CUDA build installation (needs the separate CUDA runtime archive)
 - ✅ Embedding model serving: second supervised server (`--embedding`,
   pooling from GGUF), separate start/stop and autostart, BGE-M3 in the
-  catalog (live check with the real engine: pending)
+  catalog; verified with the real engine on Windows (b11739, BGE-M3 Q8_0
+  next to Qwen2.5 3B, CPU)
 
 ## Phase 4 — Memory 🟡
 
@@ -107,6 +108,6 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Live verification of Phase 5 on Linux, embeddings in the embedded runtime,
-then Phase 6 (voice and vision). Open Phase 2 items: keychain-backed API keys
-and cloud providers.
+Live verification of Phase 5 on Linux, calibration of the semantic search
+thresholds for BGE-M3, then Phase 6 (voice and vision). Open Phase 2 items:
+keychain-backed API keys and cloud providers.
