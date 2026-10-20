@@ -35,8 +35,9 @@ desirable.
   recorded from the event bus without message text). Temporary
   conversations live only in memory.
 - **Search** combines FTS5 (BM25, `unicode61` with diacritic folding, a
-  crude prefix stem for inflected languages, stop words, term-overlap
-  filter) with vector similarity, fused by reciprocal rank fusion.
+  crude prefix stem for inflected languages, English, Ukrainian and Russian
+  stop words including auxiliaries, pronouns and question words) with
+  vector similarity, fused by reciprocal rank fusion.
   Embeddings come from an AI provider whose model reports the capability
   (or that the user picks); vectors are normalized `f32` blobs per
   embedding model and searched brute force in memory. The embedded runtime
@@ -56,6 +57,17 @@ desirable.
   (search 0.35, recall 0.50) with the same margin. Recall is stricter than
   search because a small model cannot tell an unrelated fact from a
   relevant one, while the user reads the search list.
+- **Text matches** are judged by the query terms they share (by stem, as
+  the FTS5 query matches them). A hit must share more than half as many
+  terms as the best text hit of its kind: when a fact holds both "sister"
+  and "work", a fact with only "work" is dropped, while a long question
+  that shares one rare term with every hit keeps them all. Recall also
+  needs half of the query's terms, as before. A hit that shares at most
+  one term with a query of several words is weak: it falls when the
+  semantic side matched other items of its kind and passed over this one
+  although it has a vector. Without a query vector, a semantic match or a
+  vector of the hit, it stands; a one-word query ("atlas", "атласом")
+  keeps every word match.
 - **Context Manager** assembles each request inside the model's window:
   the system prompt and the new message always; then project instructions
   (≤ 15 % of the prompt budget), the pinned note (≤ 10 %), pinned and
@@ -137,10 +149,10 @@ What the cuts cannot fix:
   (0.486), "birthday" (0.481, ranked below the dentist appointment) and
   "робота" (0.400, ranked below unrelated facts). The old search floor
   listed them together with almost every other fact.
-- Word matches are not cut: "am" is not a stop word ("Which language am I
-  learning?" lists "I am allergic to cats."), "Where do I work?" finds
-  "…works as a teacher" and "Ким я працюю?" finds "…працює на
-  PostgreSQL 16.".
+- Word matches are not cut: "am" was not a stop word ("Which language am I
+  learning?" listed "I am allergic to cats."), "Where do I work?" found
+  "…works as a teacher" and "Ким я працюю?" found "…працює на
+  PostgreSQL 16.". See "Judging text matches" below.
 
 The margin of 0.10 keeps a second relevant fact (gaps of 0.083 and 0.090
 were measured; 0.08 loses both) and, above the search floor, drops hits
@@ -169,6 +181,61 @@ Not measured: other embedding models (Ollama was not installed on the
 measuring machine), other quantizations of BGE-M3, and conversation
 messages (longer than facts). Measuring another model means adding its
 floors to `SimilarityCuts::for_model`.
+
+## Judging text matches
+
+The word matches left after the cuts were of two kinds. "am" was missing
+from the stop words, so "Which language am I learning?" shared one of
+three terms with "I am allergic to cats." and "…at 10 am.". "Where do I
+work?" and "Ким я працюю?" keep a single term each ("work", "працюю"), and
+the unrelated facts contain it ("works", "працює"), so their overlap is
+1.0: no stop word or overlap threshold separates them from the job fact,
+and the semantic side alone cannot either ("…works as a teacher" scores
+0.516 against 0.606 for the job fact, within the margin). What does
+separate them is the combination: one shared word of a question, and the
+semantic side matched another fact instead.
+
+Measured with the same vectors (no new embeddings) on the 41 queries,
+plus 20 labelled probes without vectors, which therefore run text-only
+("Where does Anna work?", "Що з атласом?", "PostgreSQL 16", …):
+
+| Engine, 41 queries | Search: unrelated facts listed | of them by word match only | Recall: unrelated facts added | of them by word match only | Relevant missed (search / recall) |
+| --- | --- | --- | --- | --- | --- |
+| similarity cuts only | 10 | 4 | 6 | 2 | 4 / 4 |
+| plus judging of text matches | 6 | 0 | 4 | 0 | 4 / 4 |
+
+The remaining unrelated facts are the semantic hard negatives listed
+above. Text-only (without an embedding model, all 61 queries), search
+lists 3 unrelated facts instead of 8 and recall adds 3 instead of 6; in
+both modes no relevant and no secondary fact is lost.
+
+Rejected:
+
+- Stop words alone: they fix "am", not "work" and "працюю", which are the
+  only content word of their question.
+- Recall's absolute overlap (half of the query's terms) for search too: it
+  does not catch one-term questions (overlap 1.0) and loses a long
+  question that shares one rare term with the relevant fact, e.g. "Which
+  version of PostgreSQL does Atlas use?" (one of four terms) without an
+  embedding model.
+- A stricter stem (whole words only below five letters): "work" would no
+  longer match "works", but neither would "live" match "lives", and
+  "працюю" keeps the five-letter prefix "працю".
+- Semantic confirmation for every text hit: names and identifiers are
+  what words find when meaning does not ("Atlas" → the Ukrainian "Атлас"
+  fact scores 0.486).
+
+What remains:
+
+- Without an embedding model, a question that shares one word with an
+  unrelated fact still finds it: "Where do I work?" → "…works as a
+  teacher", "Ким я працюю?" and "Де працює моя сестра?" → "…працює на
+  PostgreSQL 16.". Words alone cannot tell whose work is meant.
+- A weak word match falls when meaning prefers another item even if it is
+  relevant, e.g. a question naming a project by an inflected word ("Що з
+  атласом?") whose vector misses the fact while it matches another one. No
+  such case occurred among the 41 measured queries; the probes for it have
+  no vectors.
 
 ## Alternatives considered
 
@@ -201,5 +268,7 @@ floors to `SimilarityCuts::for_model`.
   0.55 (recall) are not found by meaning, and facts the model itself
   places close to the query still appear. Other embedding models keep the
   uncalibrated floors until they are measured.
+- A word shared by coincidence no longer lists a fact when meaning finds
+  the answer elsewhere; without an embedding model it still does.
 - Token counts are estimates, so the budget keeps a safety margin.
 - Later domains (tasks, audit log) add migrations to the same database.

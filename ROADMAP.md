@@ -70,6 +70,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Similarity cuts per embedding model (floor + margin below the best
   hit), measured for BGE-M3 on Ukrainian and English facts; other models
   not measured yet
+- ✅ Text matches judged by shared terms: fewer than the best hit's are
+  dropped, one shared word of a question yields to the semantic side
 - ⬜ Encryption at rest (key in the OS keychain)
 - ⬜ Automatic fact extraction (opt-in)
 

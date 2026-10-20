@@ -267,7 +267,10 @@ A conversation turn (`JarvisCore::send_message`):
    model is available, vector similarity (reciprocal rank fusion); vector
    hits must reach the embedding model's floor and lie within 0.10 of the
    best recallable hit (`SimilarityCuts`; measured for BGE-M3: recall 0.55,
-   search 0.52);
+   search 0.52); text hits must share half of the query's terms and more
+   than half as many as the best text hit, and one that shares a single
+   word of the question falls when the semantic side matched other facts
+   or excerpts instead (`TextQuery`);
 4. the Context Manager assembles system prompt, project, note, memory,
    summary and recent messages within the budget and reports what it used
    (`ContextReport`, sent with the `started` event);
@@ -489,6 +492,9 @@ must be granted by a capability; anything not granted is denied. See
   unmeasured floors (0.35 / 0.50) with the same margin. Facts the model
   places close to the query (e.g. two allergies, two appointments) still
   match; weaker relevant matches below the floor are found only by words.
+- Without an embedding model, a question that shares one word with an
+  unrelated fact still finds it ("Where do I work?" → "…works as a
+  teacher"): words alone cannot tell whose work is meant.
 - Vector search is brute force in memory (fine for tens of thousands of
   items).
 - The memory database is not encrypted at rest.

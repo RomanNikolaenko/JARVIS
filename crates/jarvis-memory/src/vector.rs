@@ -184,6 +184,10 @@ impl VectorIndex {
         self.vectors.remove(&(kind, id));
     }
 
+    pub fn contains(&self, kind: VectorKind, id: i64) -> bool {
+        self.vectors.contains_key(&(kind, id))
+    }
+
     /// Most similar items of `kind`, best first, with cosine similarity.
     pub fn search(&self, kind: VectorKind, query: &[f32], limit: usize) -> Vec<(i64, f32)> {
         let mut scored: Vec<(i64, f32)> = self

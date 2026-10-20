@@ -97,6 +97,77 @@ const STOPWORDS: &[&str] = &[
     "so",
     "no",
     "yes",
+    "am",
+    "been",
+    "being",
+    "did",
+    "doing",
+    "done",
+    "had",
+    "could",
+    "should",
+    "shall",
+    "might",
+    "must",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "its",
+    "our",
+    "us",
+    "their",
+    "mine",
+    "yours",
+    "these",
+    "those",
+    "than",
+    "then",
+    "into",
+    "onto",
+    "all",
+    "any",
+    "some",
+    "each",
+    "much",
+    "many",
+    "more",
+    "most",
+    "very",
+    "just",
+    "also",
+    "too",
+    "only",
+    "same",
+    "such",
+    "other",
+    "here",
+    "whom",
+    "whose",
+    "while",
+    "again",
+    "because",
+    "until",
+    "after",
+    "before",
+    "between",
+    "through",
+    "during",
+    "without",
+    // Halves of contractions ("don't" → "don", "t").
+    "don",
+    "doesn",
+    "didn",
+    "isn",
+    "aren",
+    "wasn",
+    "weren",
+    "haven",
+    "hasn",
+    "ll",
+    "ve",
+    "re",
     // Ukrainian
     "та",
     "що",
@@ -169,6 +240,130 @@ const STOPWORDS: &[&str] = &[
     "зі",
     "аби",
     "щоб",
+    "хто",
+    "кого",
+    "кому",
+    "ким",
+    "чого",
+    "чому",
+    "чим",
+    "куди",
+    "звідки",
+    "скільки",
+    "якого",
+    "якому",
+    "якій",
+    "яку",
+    "якою",
+    "яких",
+    "якими",
+    "чий",
+    "чия",
+    "чиє",
+    "чиї",
+    "тебе",
+    "тобі",
+    "тобою",
+    "мною",
+    "нас",
+    "нам",
+    "нами",
+    "вас",
+    "вам",
+    "вами",
+    "йому",
+    "нього",
+    "ним",
+    "неї",
+    "нею",
+    "їй",
+    "їм",
+    "них",
+    "ними",
+    "себе",
+    "собі",
+    "собою",
+    "мого",
+    "моєї",
+    "моєму",
+    "моїй",
+    "мою",
+    "моїм",
+    "моїх",
+    "твоє",
+    "твої",
+    "твого",
+    "твою",
+    "наш",
+    "наша",
+    "наше",
+    "наші",
+    "нашого",
+    "нашої",
+    "нашу",
+    "наших",
+    "ваш",
+    "ваша",
+    "ваше",
+    "ваші",
+    "свій",
+    "своя",
+    "своє",
+    "свої",
+    "свого",
+    "своєї",
+    "свою",
+    "своїх",
+    "цього",
+    "цьому",
+    "цієї",
+    "цю",
+    "цим",
+    "цих",
+    "того",
+    "тієї",
+    "ту",
+    "тим",
+    "тих",
+    "був",
+    "була",
+    "було",
+    "були",
+    "буду",
+    "будеш",
+    "будемо",
+    "будуть",
+    "маю",
+    "має",
+    "маєш",
+    "маємо",
+    "мають",
+    "би",
+    "лише",
+    "тільки",
+    "теж",
+    "також",
+    "навіть",
+    "ось",
+    "ну",
+    "уже",
+    "саме",
+    "через",
+    "після",
+    "перед",
+    "між",
+    "біля",
+    "щодо",
+    "якщо",
+    "тому",
+    "ніж",
+    "хоча",
+    "адже",
+    "тоді",
+    "все",
+    "всі",
+    "усе",
+    "усі",
     // Russian
     "что",
     "как",
@@ -194,18 +389,32 @@ const STOPWORDS: &[&str] = &[
     "была",
     "было",
     "быть",
+    "будет",
+    "ты",
+    "он",
+    "мы",
+    "вы",
+    "кто",
+    "кем",
+    "чем",
+    "мой",
+    "мои",
+    "моего",
 ];
+
+/// Lowercase alphanumeric words of two or more characters.
+fn words(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| w.chars().count() >= 2)
+}
 
 /// Normalized search terms of `text`: lowercase alphanumeric words of two or
 /// more characters, without stop words, deduplicated, at most `limit`.
 pub fn search_terms(text: &str, limit: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut terms = Vec::new();
-    for word in text
-        .split(|c: char| !c.is_alphanumeric())
-        .map(str::to_lowercase)
-        .filter(|w| w.chars().count() >= 2)
-    {
+    for word in words(text) {
         if STOPWORDS.contains(&word.as_str()) || !seen.insert(word.clone()) {
             continue;
         }
@@ -233,41 +442,22 @@ pub fn stem(term: &str) -> String {
 /// Shorter terms match whole words only ("hi" must not match "history").
 const MIN_PREFIX_CHARS: usize = 4;
 
-/// FTS5 `MATCH` expression for free text: stemmed terms as quoted prefix
-/// queries joined with `OR`. `None` when nothing searchable remains. Terms
-/// contain only alphanumeric characters, so user input cannot inject FTS5
-/// syntax.
+/// Terms taken from one query at most.
+const MAX_QUERY_TERMS: usize = 12;
+
+/// FTS5 `MATCH` expression for free text (see [`TextQuery::match_expression`]).
 pub fn match_query(text: &str) -> Option<String> {
-    let terms = search_terms(text, 12);
-    if terms.is_empty() {
-        return None;
-    }
-    Some(
-        terms
-            .iter()
-            .map(|t| {
-                let stem = stem(t);
-                if stem.chars().count() >= MIN_PREFIX_CHARS {
-                    format!("\"{stem}\"*")
-                } else {
-                    format!("\"{stem}\"")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" OR "),
-    )
+    TextQuery::new(text).match_expression()
 }
 
-/// Share of the query's terms that occur (as stems) in `text`, 0.0..=1.0.
-pub fn term_overlap(query_terms: &[String], text: &str) -> f32 {
-    if query_terms.is_empty() {
-        return 0.0;
-    }
+/// Number of the query's terms that occur in `text`, matched like the FTS5
+/// query matches them: by stem prefix, short stems as whole words.
+pub fn shared_terms(query_terms: &[String], text: &str) -> usize {
     let words: Vec<String> = text
         .split(|c: char| !c.is_alphanumeric())
         .map(str::to_lowercase)
         .collect();
-    let found = query_terms
+    query_terms
         .iter()
         .filter(|term| {
             let stem = stem(term);
@@ -277,8 +467,95 @@ pub fn term_overlap(query_terms: &[String], text: &str) -> f32 {
                 words.contains(&stem)
             }
         })
-        .count();
-    found as f32 / query_terms.len() as f32
+        .count()
+}
+
+/// Share of the query's terms that occur (as stems) in `text`, 0.0..=1.0.
+pub fn term_overlap(query_terms: &[String], text: &str) -> f32 {
+    if query_terms.is_empty() {
+        return 0.0;
+    }
+    shared_terms(query_terms, text) as f32 / query_terms.len() as f32
+}
+
+/// A free-text query for full-text search: its terms, and how the hits of
+/// its `MATCH` expression are judged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextQuery {
+    terms: Vec<String>,
+    /// Two or more words, stop words included: a question or a phrase
+    /// rather than one keyword.
+    several_words: bool,
+}
+
+/// How a full-text hit matches the query's terms.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TermMatch {
+    /// Share of the query's terms the hit contains, 0.0..=1.0.
+    pub overlap: f32,
+    /// The hit shares at most one term with a query of several words, as
+    /// "…works as a teacher" does with "Where do I work?" and "…працює на
+    /// PostgreSQL" with "Ким я працюю?". One shared word is often a
+    /// coincidence, so such a hit should not stand against the semantic side.
+    pub weak: bool,
+}
+
+impl TextQuery {
+    pub fn new(text: &str) -> Self {
+        Self {
+            terms: search_terms(text, MAX_QUERY_TERMS),
+            several_words: words(text).nth(1).is_some(),
+        }
+    }
+
+    /// FTS5 `MATCH` expression: stemmed terms as quoted prefix queries joined
+    /// with `OR`. `None` when nothing searchable remains. Terms contain only
+    /// alphanumeric characters, so user input cannot inject FTS5 syntax.
+    pub fn match_expression(&self) -> Option<String> {
+        if self.terms.is_empty() {
+            return None;
+        }
+        Some(
+            self.terms
+                .iter()
+                .map(|t| {
+                    let stem = stem(t);
+                    if stem.chars().count() >= MIN_PREFIX_CHARS {
+                        format!("\"{stem}\"*")
+                    } else {
+                        format!("\"{stem}\"")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" OR "),
+        )
+    }
+
+    /// Judges the hits of the `MATCH` expression, keeping their order. A hit
+    /// must share more than half as many terms as the best hit: when one
+    /// fact holds both "sister" and "work", a fact with only "work" is
+    /// dropped, while a long question that shares one rare term with each
+    /// hit keeps them all. Hits that share no term as this module matches
+    /// them (FTS5 also folds Latin diacritics) are kept only when no hit does.
+    pub fn judge<T>(&self, hits: Vec<T>, text: impl Fn(&T) -> &str) -> Vec<(T, TermMatch)> {
+        let shared: Vec<usize> = hits
+            .iter()
+            .map(|hit| shared_terms(&self.terms, text(hit)))
+            .collect();
+        let best = shared.iter().copied().max().unwrap_or(0);
+        let total = self.terms.len().max(1) as f32;
+        hits.into_iter()
+            .zip(shared)
+            .filter(|(_, shared)| best == 0 || 2 * shared > best)
+            .map(|(hit, shared)| {
+                let judged = TermMatch {
+                    overlap: shared as f32 / total,
+                    weak: self.several_words && shared <= 1,
+                };
+                (hit, judged)
+            })
+            .collect()
+    }
 }
 
 /// Removes `<think>…</think>` blocks (the reasoning of thinking models) so
@@ -383,5 +660,61 @@ mod tests {
         assert!(term_overlap(&short, "history of HI") > 0.99);
         assert!(term_overlap(&short, "history") < 0.01);
         assert_eq!(match_query("hi").as_deref(), Some("\"hi\""));
+    }
+
+    #[test]
+    fn auxiliaries_pronouns_and_question_words_are_stop_words() {
+        assert_eq!(
+            search_terms("Which language am I learning?", 12),
+            ["language", "learning"]
+        );
+        assert_eq!(search_terms("Where do I work?", 12), ["work"]);
+        assert_eq!(search_terms("Ким я працюю?", 12), ["працюю"]);
+        assert_eq!(search_terms("Як звати мого пса?", 12), ["звати", "пса"]);
+        assert_eq!(search_terms("Why don't they know?", 12), ["know"]);
+    }
+
+    #[test]
+    fn hits_sharing_fewer_terms_than_the_best_one_are_dropped() {
+        let sister = "My sister Anna lives in Lviv and works as a teacher.";
+        let job = "I work as a backend developer.";
+        let judged = TextQuery::new("Where does my sister work?").judge(vec![job, sister], |t| *t);
+        assert_eq!(judged.len(), 1);
+        assert_eq!(judged[0].0, sister);
+        assert!(!judged[0].1.weak);
+        assert!((judged[0].1.overlap - 1.0).abs() < f32::EPSILON);
+
+        // When no hit shares more, one rare shared term is enough.
+        let database = "База даних проєкту Атлас працює на PostgreSQL 16.";
+        let deadline = "The Atlas project deadline is Friday.";
+        let judged = TextQuery::new("Which version of PostgreSQL does Atlas use?")
+            .judge(vec![database, deadline], |t| *t);
+        assert_eq!(judged.len(), 2);
+        assert!(judged.iter().all(|(_, judged)| judged.weak));
+        assert!((judged[0].1.overlap - 0.25).abs() < f32::EPSILON);
+
+        // FTS5 folds "Café" to "cafe", these helpers do not: such hits stay.
+        let judged = TextQuery::new("cafe").judge(vec!["Café au lait"], |t| *t);
+        assert_eq!(judged.len(), 1);
+    }
+
+    #[test]
+    fn one_shared_word_of_a_question_is_weak() {
+        let sister = "My sister Anna lives in Lviv and works as a teacher.";
+        let database = "База даних проєкту Атлас працює на PostgreSQL 16.";
+        let weak = |query: &str, text: &str| {
+            let judged = TextQuery::new(query).judge(vec![text], |t| *t);
+            assert_eq!(judged.len(), 1, "{query:?} must find {text:?}");
+            judged[0].1.weak
+        };
+        assert!(weak("Where do I work?", sister));
+        assert!(weak("Ким я працюю?", database));
+        assert!(weak("Що з атласом?", database));
+        // A single keyword is exactly what the user asked for.
+        assert!(!weak("work", sister));
+        assert!(!weak("атласом", database));
+        assert!(!weak("Anna's", sister));
+        // Two shared terms are no coincidence.
+        assert!(!weak("Що працює на PostgreSQL?", database));
     }
 }

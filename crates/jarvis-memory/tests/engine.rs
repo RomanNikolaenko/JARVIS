@@ -23,6 +23,7 @@ fn concept(word: &str) -> usize {
         "car" | "automobile" | "drive" | "машина" | "авто" => 0,
         "tesla" => 1,
         "red" | "червона" => 2,
+        "work" | "job" | "developer" | "працюю" => 3,
         _ => {
             8 + word
                 .bytes()
@@ -440,6 +441,103 @@ async fn semantic_matches_far_below_the_best_one_are_dropped() {
         .unwrap();
     assert_eq!(context.report.facts_included, 1);
     assert!(context.messages[0].content.contains("red Tesla"));
+}
+
+/// Snippets of the facts that `text` finds.
+async fn find_facts(
+    memory: &MemoryEngine,
+    text: &str,
+    embedder: Option<Arc<dyn Embedder>>,
+) -> Vec<String> {
+    memory
+        .search(
+            SearchQuery {
+                text: text.into(),
+                kinds: vec![MemoryKind::Fact],
+                limit: 10,
+            },
+            embedder,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|hit| hit.snippet)
+        .collect()
+}
+
+#[tokio::test]
+async fn one_shared_word_of_a_question_does_not_outweigh_meaning() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    for content in [
+        "I work as a backend developer at a logistics company.",
+        "My sister Anna lives in Lviv and works as a teacher.",
+        "База даних проєкту Атлас працює на PostgreSQL 16.",
+        "I am allergic to cats.",
+    ] {
+        memory
+            .save_fact(fact(content, false, None), FactSource::User)
+            .await
+            .unwrap();
+    }
+    let embedder: Arc<dyn Embedder> = Arc::new(ConceptEmbedder);
+    memory.index_pending(embedder.as_ref(), 64).await.unwrap();
+    let semantic = || Some(Arc::clone(&embedder));
+
+    // "am" is a stop word, so the allergy is not found.
+    assert!(
+        find_facts(&memory, "Which language am I learning?", None)
+            .await
+            .is_empty()
+    );
+    // A fact that holds both words of the question drops those with one.
+    let hits = find_facts(&memory, "Where does my sister work?", None).await;
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].contains("teacher"));
+
+    // Without meaning, the one shared word is all there is to go by.
+    assert_eq!(find_facts(&memory, "Where do I work?", None).await.len(), 2);
+    // With it, the job fact is found by meaning, and the sister's job and
+    // the database that "працює" share one word by coincidence.
+    for question in ["Where do I work?", "Ким я працюю?"] {
+        let hits = find_facts(&memory, question, semantic()).await;
+        assert_eq!(hits.len(), 1, "{question}: {hits:?}");
+        assert!(hits[0].contains("backend"), "{question}: {hits:?}");
+    }
+    let conversation = memory.create_conversation(None, false).await.unwrap();
+    let context = memory
+        .prepare_context(request(
+            conversation.id,
+            "Where do I work?",
+            Retrieval {
+                embedder: semantic(),
+                ..text_retrieval()
+            },
+        ))
+        .await
+        .unwrap();
+    let system = &context.messages[0].content;
+    assert!(system.contains("backend developer"), "{system}");
+    assert!(!system.contains("teacher"), "{system}");
+
+    // A keyword keeps its word matches, and so does a question that
+    // meaning finds nothing for.
+    assert_eq!(find_facts(&memory, "work", semantic()).await.len(), 2);
+    let hits = find_facts(&memory, "Що з атласом?", semantic()).await;
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].contains("PostgreSQL"));
+
+    // A fact without a vector yet was not judged by meaning: it stays.
+    memory
+        .save_fact(
+            fact("Anna works at the school.", false, None),
+            FactSource::User,
+        )
+        .await
+        .unwrap();
+    let hits = find_facts(&memory, "Where do I work?", semantic()).await;
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert!(hits.iter().any(|h| h.contains("school")), "{hits:?}");
+    assert!(!hits.iter().any(|h| h.contains("teacher")), "{hits:?}");
 }
 
 #[tokio::test]

@@ -12,7 +12,7 @@
 //! cannot be opened, the engine still serves temporary conversations and
 //! reports the reason everywhere else.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -25,8 +25,8 @@ use crate::context::{
     self, AssembledContext, CompactionPlan, ContextInput, ContextWindow, MemoryItem, MemoryItemKind,
 };
 use crate::error::{MemoryError, Result};
-use crate::store::{self, ConversationFilter, FactScope, MessageHit, Ranked};
-use crate::text::{self, format_date, truncate_chars};
+use crate::store::{self, ConversationFilter, FactScope, MessageHit};
+use crate::text::{self, TermMatch, TextQuery, format_date, truncate_chars};
 use crate::types::{
     Conversation, ConversationDetail, ConversationPatch, ConversationSummary, Episode, Fact,
     FactInput, FactSource, MAX_FACT_CHARS, MAX_FACTS, MAX_MESSAGE_CHARS, MAX_NOTE_CHARS,
@@ -514,8 +514,8 @@ impl MemoryEngine {
     ) -> Result<Vec<MemoryItem>> {
         let db = self.db()?;
         let project = conversation.project_id;
-        let terms = text::search_terms(query, 12);
-        let fts = text::match_query(query);
+        let text_query = TextQuery::new(query);
+        let fts = text_query.match_expression();
         let query_vector = match &retrieval.embedder {
             Some(embedder) => embed_query(embedder.as_ref(), query).await,
             None => None,
@@ -549,11 +549,45 @@ impl MemoryEngine {
             })
             .await?;
 
+        // Text hits that may be recalled, judged against the best of them.
+        let eligible = |hit: &MessageHit| {
+            hit.conversation_id != conversation.id
+                && hit.project_id == project
+                && hit.status == MessageStatus::Complete
+        };
+        let fts_facts = text_query.judge(
+            fts_facts
+                .into_iter()
+                .filter(|h| !h.item.fact.pinned)
+                .collect(),
+            |h| &h.item.fact.content,
+        );
+        let fts_messages = text_query.judge(
+            fts_messages
+                .into_iter()
+                .map(|h| h.item)
+                .filter(|h| eligible(h))
+                .collect(),
+            |h| &h.content,
+        );
+
+        let (mut fact_check, mut message_check) =
+            (SemanticCheck::default(), SemanticCheck::default());
         let (recall_cut, vector_facts, vector_messages) = match &query_vector {
             Some((key, vector)) => {
                 let cut = SimilarityCuts::for_model(key).recall;
                 let index = self.vector_index(&db, key).await?;
                 let index = index.as_ref();
+                fact_check = SemanticCheck::new(
+                    index,
+                    VectorKind::Fact,
+                    weak_ids(&fts_facts, |h| h.item.row_id),
+                );
+                message_check = SemanticCheck::new(
+                    index,
+                    VectorKind::Message,
+                    weak_ids(&fts_messages, |h| h.row_id),
+                );
                 let search = |kind, limit| {
                     index
                         .map(|i| i.search(kind, vector, limit))
@@ -608,18 +642,6 @@ impl MemoryEngine {
 
         // Relevant facts (not pinned, in scope).
         let in_scope = |fact: &Fact| fact.project_id.is_none() || fact.project_id == project;
-        let mut fused: HashMap<i64, (f32, Fact)> = HashMap::new();
-        for (rank, hit) in fts_facts
-            .iter()
-            .filter(|h| !h.item.fact.pinned)
-            .filter(|h| text::term_overlap(&terms, &h.item.fact.content) >= MIN_TERM_OVERLAP)
-            .enumerate()
-        {
-            let entry = fused
-                .entry(hit.item.row_id)
-                .or_insert((0.0, hit.item.fact.clone()));
-            entry.0 += rrf(rank);
-        }
         let recallable_fact = |row_id: i64| {
             vector_fact_rows
                 .iter()
@@ -629,6 +651,20 @@ impl MemoryEngine {
             .into_iter()
             .filter(|(id, _)| recallable_fact(*id).is_some())
             .collect());
+        fact_check.set_matched(&vector_facts);
+        let mut fused: HashMap<i64, (f32, Fact)> = HashMap::new();
+        for (rank, (hit, _)) in fts_facts
+            .iter()
+            .filter(|(hit, judged)| {
+                judged.overlap >= MIN_TERM_OVERLAP && fact_check.keeps(hit.item.row_id, *judged)
+            })
+            .enumerate()
+        {
+            let entry = fused
+                .entry(hit.item.row_id)
+                .or_insert((0.0, hit.item.fact.clone()));
+            entry.0 += rrf(rank);
+        }
         for (rank, (row_id, _)) in vector_facts.iter().enumerate() {
             if let Some(row) = recallable_fact(*row_id) {
                 let entry = fused.entry(*row_id).or_insert((0.0, row.fact.clone()));
@@ -648,22 +684,6 @@ impl MemoryEngine {
         );
 
         // Excerpts of other conversations in the same scope.
-        let eligible = |hit: &MessageHit| {
-            hit.conversation_id != conversation.id
-                && hit.project_id == project
-                && hit.status == MessageStatus::Complete
-        };
-        let mut fused: HashMap<i64, (f32, MessageHit)> = HashMap::new();
-        for (rank, hit) in fts_messages
-            .iter()
-            .map(|h: &Ranked<MessageHit>| &h.item)
-            .filter(|h| eligible(h))
-            .filter(|h| text::term_overlap(&terms, &h.content) >= MIN_TERM_OVERLAP)
-            .enumerate()
-        {
-            let entry = fused.entry(hit.row_id).or_insert((0.0, hit.clone()));
-            entry.0 += rrf(rank);
-        }
         let recallable_message = |row_id: i64| {
             vector_message_rows
                 .iter()
@@ -673,6 +693,18 @@ impl MemoryEngine {
             .into_iter()
             .filter(|(id, _)| recallable_message(*id).is_some())
             .collect());
+        message_check.set_matched(&vector_messages);
+        let mut fused: HashMap<i64, (f32, MessageHit)> = HashMap::new();
+        for (rank, (hit, _)) in fts_messages
+            .iter()
+            .filter(|(hit, judged)| {
+                judged.overlap >= MIN_TERM_OVERLAP && message_check.keeps(hit.row_id, *judged)
+            })
+            .enumerate()
+        {
+            let entry = fused.entry(hit.row_id).or_insert((0.0, hit.clone()));
+            entry.0 += rrf(rank);
+        }
         for (rank, (row_id, _)) in vector_messages.iter().enumerate() {
             if let Some(hit) = recallable_message(*row_id) {
                 let entry = fused.entry(*row_id).or_insert((0.0, hit.clone()));
@@ -908,7 +940,9 @@ impl MemoryEngine {
     // ---- Search -----------------------------------------------------------
 
     /// Hybrid search: full-text (all kinds) fused with vector similarity
-    /// (messages and facts) when an embedder is available.
+    /// (messages and facts) when an embedder is available. A text hit must
+    /// share more than half as many terms as the best one, and a weak one
+    /// (one word of a question) falls when the semantic side passes it over.
     pub async fn search(
         &self,
         query: SearchQuery,
@@ -924,7 +958,8 @@ impl MemoryEngine {
             wants(MemoryKind::Episode),
         );
         let db = self.db()?;
-        let fts = text::match_query(&text);
+        let text_query = TextQuery::new(&text);
+        let fts = text_query.match_expression();
         let query_vector = match &embedder {
             Some(embedder) => embed_query(embedder.as_ref(), &text).await,
             None => None,
@@ -954,50 +989,29 @@ impl MemoryEngine {
                 ))
             })
             .await?;
+        let messages = text_query.judge(messages, |h| &h.item.content);
+        let facts = text_query.judge(facts, |h| &h.item.fact.content);
+        let episodes = text_query.judge(episodes, |h| &h.item.summary);
 
-        let mut hits: HashMap<(MemoryKind, Uuid), SearchHit> = HashMap::new();
-        let mut add = |hit: SearchHit, score: f32, semantic: bool| {
-            let entry = hits
-                .entry((hit.kind, hit.id))
-                .or_insert(SearchHit { score: 0.0, ..hit });
-            entry.score += score;
-            if semantic {
-                entry.matched_semantic = true;
-            } else {
-                entry.matched_text = true;
-            }
-        };
-        for (rank, hit) in messages.into_iter().enumerate() {
-            add(message_hit(hit.item, hit.snippet), rrf(rank), false);
-        }
-        for (rank, hit) in facts.into_iter().enumerate() {
-            add(fact_hit(hit.item.fact, hit.snippet), rrf(rank), false);
-        }
-        for (rank, hit) in episodes.into_iter().enumerate() {
-            let episode = hit.item;
-            add(
-                SearchHit {
-                    kind: MemoryKind::Episode,
-                    id: episode.id,
-                    conversation_id: None,
-                    conversation_title: None,
-                    role: None,
-                    snippet: hit.snippet,
-                    score: 0.0,
-                    matched_text: false,
-                    matched_semantic: false,
-                    created_at_ms: episode.occurred_at_ms,
-                },
-                rrf(rank),
-                false,
-            );
-        }
-
+        // The semantic side first: it has a say on weak text hits.
+        let mut semantic: Vec<(SearchHit, f32)> = Vec::new();
+        let (mut message_check, mut fact_check) =
+            (SemanticCheck::default(), SemanticCheck::default());
         if let Some((key, vector)) = query_vector {
             let (message_scores, fact_scores) = {
                 let cut = SimilarityCuts::for_model(&key).search;
                 let index = self.vector_index(&db, &key).await?;
                 let index = index.as_ref();
+                message_check = SemanticCheck::new(
+                    index,
+                    VectorKind::Message,
+                    weak_ids(&messages, |h| h.item.row_id),
+                );
+                fact_check = SemanticCheck::new(
+                    index,
+                    VectorKind::Fact,
+                    weak_ids(&facts, |h| h.item.row_id),
+                );
                 let search = |kind| {
                     cut.apply(
                         index
@@ -1018,6 +1032,8 @@ impl MemoryEngine {
                     },
                 )
             };
+            message_check.set_matched(&message_scores);
+            fact_check.set_matched(&fact_scores);
             let message_ids: Vec<i64> = message_scores.iter().map(|(id, _)| *id).collect();
             let fact_ids: Vec<i64> = fact_scores.iter().map(|(id, _)| *id).collect();
             let (message_rows, fact_rows) = db
@@ -1031,15 +1047,66 @@ impl MemoryEngine {
             for (rank, (row_id, _)) in message_scores.iter().enumerate() {
                 if let Some(row) = message_rows.iter().find(|r| r.row_id == *row_id) {
                     let snippet = truncate_chars(row.content.trim(), 200);
-                    add(message_hit(row.clone(), snippet), rrf(rank), true);
+                    semantic.push((message_hit(row.clone(), snippet), rrf(rank)));
                 }
             }
             for (rank, (row_id, _)) in fact_scores.iter().enumerate() {
                 if let Some(row) = fact_rows.iter().find(|r| r.row_id == *row_id) {
                     let snippet = truncate_chars(row.fact.content.trim(), 200);
-                    add(fact_hit(row.fact.clone(), snippet), rrf(rank), true);
+                    semantic.push((fact_hit(row.fact.clone(), snippet), rrf(rank)));
                 }
             }
+        }
+
+        let mut hits: HashMap<(MemoryKind, Uuid), SearchHit> = HashMap::new();
+        let mut add = |hit: SearchHit, score: f32, semantic: bool| {
+            let entry = hits
+                .entry((hit.kind, hit.id))
+                .or_insert(SearchHit { score: 0.0, ..hit });
+            entry.score += score;
+            if semantic {
+                entry.matched_semantic = true;
+            } else {
+                entry.matched_text = true;
+            }
+        };
+        // Text hits first, so a hit found both ways keeps its highlights.
+        for (rank, (hit, _)) in messages
+            .into_iter()
+            .filter(|(hit, judged)| message_check.keeps(hit.item.row_id, *judged))
+            .enumerate()
+        {
+            add(message_hit(hit.item, hit.snippet), rrf(rank), false);
+        }
+        for (rank, (hit, _)) in facts
+            .into_iter()
+            .filter(|(hit, judged)| fact_check.keeps(hit.item.row_id, *judged))
+            .enumerate()
+        {
+            add(fact_hit(hit.item.fact, hit.snippet), rrf(rank), false);
+        }
+        // Episodes have no vectors, so their weak matches stand.
+        for (rank, (hit, _)) in episodes.into_iter().enumerate() {
+            let episode = hit.item;
+            add(
+                SearchHit {
+                    kind: MemoryKind::Episode,
+                    id: episode.id,
+                    conversation_id: None,
+                    conversation_title: None,
+                    role: None,
+                    snippet: hit.snippet,
+                    score: 0.0,
+                    matched_text: false,
+                    matched_semantic: false,
+                    created_at_ms: episode.occurred_at_ms,
+                },
+                rrf(rank),
+                false,
+            );
+        }
+        for (hit, score) in semantic {
+            add(hit, score, true);
         }
 
         let mut hits: Vec<SearchHit> = hits.into_values().collect();
@@ -1183,6 +1250,51 @@ impl MemoryEngine {
 
 fn rrf(rank: usize) -> f32 {
     1.0 / (RRF_K + rank as f32 + 1.0)
+}
+
+/// What the semantic side says about the weak text hits of one kind.
+#[derive(Debug, Default)]
+struct SemanticCheck {
+    /// Weak text hits that have a vector, so the semantic side judged them.
+    embedded: HashSet<i64>,
+    /// Items that passed the similarity cut.
+    matched: HashSet<i64>,
+}
+
+impl SemanticCheck {
+    fn new(index: Option<&VectorIndex>, kind: VectorKind, weak: Vec<i64>) -> Self {
+        Self {
+            embedded: weak
+                .into_iter()
+                .filter(|id| index.is_some_and(|i| i.contains(kind, *id)))
+                .collect(),
+            matched: HashSet::new(),
+        }
+    }
+
+    fn set_matched(&mut self, hits: &[(i64, f32)]) {
+        self.matched = hits.iter().map(|(id, _)| *id).collect();
+    }
+
+    /// Whether a text hit stands. A weak one falls when the semantic side
+    /// matched other items of its kind and passed over this one although it
+    /// has a vector: "Where do I work?" finds the job fact by meaning, so
+    /// "…works as a teacher" is a coincidence of one word. Without a query
+    /// vector, a semantic match or a vector of the hit, it stands.
+    fn keeps(&self, row_id: i64, judged: TermMatch) -> bool {
+        !judged.weak
+            || self.matched.is_empty()
+            || !self.embedded.contains(&row_id)
+            || self.matched.contains(&row_id)
+    }
+}
+
+/// Row ids of the weak text hits.
+fn weak_ids<T>(hits: &[(T, TermMatch)], row_id: impl Fn(&T) -> i64) -> Vec<i64> {
+    hits.iter()
+        .filter(|(_, judged)| judged.weak)
+        .map(|(hit, _)| row_id(hit))
+        .collect()
 }
 
 fn not_found(what: &str) -> MemoryError {
