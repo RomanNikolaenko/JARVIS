@@ -88,6 +88,12 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "list_projects",
     "list_episodes",
     "get_memory_status",
+    "get_agent_status",
+    "list_tools",
+    "list_agent_tasks",
+    "list_pending_approvals",
+    "get_audit_log",
+    "verify_audit_log",
 ];
 
 #[test]
@@ -131,6 +137,14 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "export_memory",
         "import_memory",
         "clear_memory",
+        "start_agent_task",
+        "get_agent_task",
+        "cancel_agent_task",
+        "pause_agent_task",
+        "resume_agent_task",
+        "clear_finished_agent_tasks",
+        "resolve_approval",
+        "add_workspace_folder",
     ]);
     for cmd in all {
         let result = invoke(&h.other, cmd, json!({}));
@@ -483,4 +497,87 @@ fn runtime_commands_report_errors_without_touching_the_network() {
         json!(false)
     );
     invoke(&h.main, "stop_local_model", json!({})).expect("stopping a stopped runtime is fine");
+}
+
+#[test]
+fn agent_commands_report_state_and_validate_input() {
+    let h = harness();
+    let status = invoke(&h.main, "get_agent_status", json!({})).expect("status");
+    assert_eq!(status["enabled"], true);
+    assert_eq!(status["persistent"], true);
+    assert_eq!(status["workspaceFolders"], json!([]));
+
+    let tools = invoke(&h.main, "list_tools", json!({})).expect("tools");
+    let enabled = |name: &str| {
+        tools
+            .as_array()
+            .and_then(|t| t.iter().find(|tool| tool["spec"]["name"] == name))
+            .map(|tool| tool["enabled"].clone())
+    };
+    assert_eq!(enabled("read_file"), Some(json!(true)));
+    assert_eq!(enabled("delete_path"), Some(json!(false)));
+    assert_eq!(enabled("run_command"), Some(json!(false)));
+
+    let request = |goal: &str| {
+        json!({ "request": {
+            "goal": goal, "providerId": null, "model": null,
+            "maxSteps": null, "maxDurationSecs": null
+        } })
+    };
+    let error = invoke(&h.main, "start_agent_task", request("   ")).expect_err("empty goal");
+    assert_eq!(error["code"], "validation");
+    let missing = json!({ "id": "00000000-0000-0000-0000-000000000000" });
+    let error = invoke(&h.main, "get_agent_task", missing.clone()).expect_err("unknown task");
+    assert_eq!(error["code"], "notFound");
+    assert_eq!(
+        invoke(&h.main, "pause_agent_task", missing).expect("pause"),
+        json!(false)
+    );
+    assert_eq!(
+        invoke(
+            &h.main,
+            "resolve_approval",
+            json!({ "id": "00000000-0000-0000-0000-000000000000", "approved": true })
+        )
+        .expect("resolve"),
+        json!(false)
+    );
+    assert_eq!(
+        invoke(&h.main, "list_pending_approvals", json!({})).expect("approvals"),
+        json!([])
+    );
+
+    // The diagnostic echo model does not speak the agent protocol: the task
+    // ends after three invalid replies instead of looping.
+    let task = invoke(&h.main, "start_agent_task", request("Say hello")).expect("start");
+    let id = json!({ "id": task["id"] });
+    let mut finished = Value::Null;
+    for _ in 0..300 {
+        let current = invoke(&h.main, "get_agent_task", id.clone()).expect("task");
+        let status = current["status"].as_str().unwrap_or_default();
+        if ["completed", "failed", "cancelled"].contains(&status) {
+            finished = current;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(finished["status"], "failed", "{finished}");
+    assert_eq!(
+        finished["error"],
+        "The model did not follow the action format"
+    );
+    assert_eq!(finished["providerId"], "diagnostic-echo");
+
+    let listed = invoke(&h.main, "list_agent_tasks", json!({ "limit": 10 })).expect("list");
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    let verification = invoke(&h.main, "verify_audit_log", json!({})).expect("verify");
+    assert_eq!(verification["intact"], true);
+    assert_eq!(
+        invoke(&h.main, "get_audit_log", json!({})).expect("audit"),
+        json!([])
+    );
+    assert_eq!(
+        invoke(&h.main, "clear_finished_agent_tasks", json!({})).expect("clear"),
+        json!(1)
+    );
 }

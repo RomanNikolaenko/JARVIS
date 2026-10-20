@@ -9,11 +9,15 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 futures.workspace = true
+jarvis-agent.workspace = true
 jarvis-ai.workspace = true
 jarvis-events.workspace = true
 jarvis-memory.workspace = true
 jarvis-platform.workspace = true
 jarvis-runtime.workspace = true
+jarvis-security.workspace = true
+jarvis-storage.workspace = true
+jarvis-tools.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

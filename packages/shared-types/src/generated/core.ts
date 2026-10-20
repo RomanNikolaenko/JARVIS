@@ -3,6 +3,53 @@ import type { DataLocality, FinishReason, ModelInfo, ProviderConfig, ProviderDes
 import type { ContextReport } from "./memory";
 import type { OsFamily } from "./platform";
 import type { RuntimeSettings } from "./runtime";
+import type { ToolSpec } from "./tools";
+
+/**
+ * A new agent task as the UI sends it.
+ */
+export type AgentStartRequest = { goal: string, 
+/**
+ * Provider and model; without them the router chooses (the
+ * `toolCalling` choice if set, otherwise the general one).
+ */
+providerId: ProviderId | null, model: string | null, 
+/**
+ * Limits; unset uses the settings.
+ */
+maxSteps: number | null, maxDurationSecs: number | null, };
+
+export type AgentStatus = { enabled: boolean, 
+/**
+ * False when tasks and the audit log cannot be saved (the memory
+ * database is unavailable); they are then lost on exit.
+ */
+persistent: boolean, runningTasks: number, workspaceFolders: Array<WorkspaceFolder>, 
+/**
+ * Programs agents started that still run.
+ */
+launchedPrograms: Array<LaunchedProgram>, };
+
+/**
+ * Agent tasks.
+ */
+export type AgentsSettings = { 
+/**
+ * Whether agent tasks can be started.
+ */
+enabled: boolean, 
+/**
+ * Default number of steps (tool calls and answers) per task.
+ */
+maxSteps: number, 
+/**
+ * Default time limit per task run.
+ */
+maxDurationSecs: number, 
+/**
+ * How long an action waits for approval before it counts as refused.
+ */
+approvalTimeoutSecs: number, };
 
 export type AiSettings = { 
 /**
@@ -95,6 +142,8 @@ export type InterfaceSettings = {
  */
 reducedMotion: boolean, };
 
+export type LaunchedProgram = { pid: number, program: string, };
+
 export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
 
 export type LoggingSettings = { level: LogLevel, };
@@ -156,7 +205,13 @@ allowCloudProviders: boolean,
  * embeddings) may be sent to cloud providers. Off by default; the
  * current conversation itself goes wherever the chat goes.
  */
-shareMemoryWithCloud: boolean, };
+shareMemoryWithCloud: boolean, 
+/**
+ * Whether agents may use cloud models. Agents send file contents and
+ * program output to the model; this also needs `allowCloudProviders`.
+ * Off by default.
+ */
+allowCloudAgents: boolean, };
 
 /**
  * Models offered by one provider, or the reason they could not be listed.
@@ -185,7 +240,11 @@ export type Settings = { schemaVersion: number, general: GeneralSettings, interf
 /**
  * Embedded llama.cpp runtime.
  */
-runtime: RuntimeSettings, memory: MemorySettings, privacy: PrivacySettings, logging: LoggingSettings, };
+runtime: RuntimeSettings, memory: MemorySettings, 
+/**
+ * Tools agents may use and what they need approval for.
+ */
+tools: ToolSettings, agents: AgentsSettings, privacy: PrivacySettings, logging: LoggingSettings, };
 
 /**
  * Kinds of work JARVIS routes to models. Speech categories arrive with the
@@ -193,8 +252,55 @@ runtime: RuntimeSettings, memory: MemorySettings, privacy: PrivacySettings, logg
  */
 export type TaskCategory = "general" | "reasoning" | "coding" | "vision" | "embeddings" | "toolCalling";
 
+/**
+ * A tool and whether it is turned on.
+ */
+export type ToolInfo = { spec: ToolSpec, enabled: boolean, };
+
+/**
+ * Settings of the Security Policy Engine for tools.
+ */
+export type ToolSettings = { 
+/**
+ * Tools that may be used at all.
+ */
+enabled: Array<string>, 
+/**
+ * Folders file tools may use (absolute paths); nothing outside them is
+ * reachable. JARVIS's own data and settings stay off limits.
+ */
+workspaceFolders: Array<string>, 
+/**
+ * Programs `run_command` and `launch_program` may start (plain names
+ * such as `git`, no paths).
+ */
+allowedPrograms: Array<string>, 
+/**
+ * Whether `fetch_url` may load public web pages.
+ */
+allowNetwork: boolean, 
+/**
+ * Run read-only actions inside the workspace without asking.
+ */
+autoApproveReadOnly: boolean, 
+/**
+ * Run medium-risk actions (create or edit files, copy, move, fetch or
+ * open pages) without asking. High-risk actions always ask.
+ */
+autoApproveChanges: boolean, 
+/**
+ * Time limit of one program run by `run_command`.
+ */
+commandTimeoutSecs: number, };
+
 export type UiErrorReport = { message: string, 
 /**
  * Where the error happened, e.g. a component or service name.
  */
 context: string | null, };
+
+export type WorkspaceFolder = { path: string, 
+/**
+ * The folder exists and can be used.
+ */
+available: boolean, };

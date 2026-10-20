@@ -1,6 +1,14 @@
 import { Injectable, inject } from '@angular/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  AgentStartRequest,
+  AgentStatus,
+  AgentTask,
+  AuditEntry,
+  AuditVerification,
+  PendingApproval,
+  TaskSummary,
+  ToolInfo,
   AppInfo,
   ChatTurnRequest,
   Conversation,
@@ -40,6 +48,10 @@ import { TauriBridge } from './tauri-bridge';
 
 /** Name of the event used by the core to push system events. */
 export const SYSTEM_EVENT = 'jarvis://system-event';
+/** Pushed with the whole task whenever an agent task changes. */
+export const AGENT_TASK_EVENT = 'jarvis://agent-task';
+/** Pushed with every pending approval whenever the list changes. */
+export const APPROVALS_EVENT = 'jarvis://approvals';
 
 /**
  * Typed facade over the IPC commands registered in
@@ -245,6 +257,74 @@ export class JarvisApi {
   /** Deletes all saved memory; `confirmation` must be the agreed phrase. */
   clearMemory(confirmation: string): Promise<void> {
     return this.bridge.invoke('clear_memory', { confirmation });
+  }
+
+  // ---- Agents and tools ----
+
+  getAgentStatus(): Promise<AgentStatus> {
+    return this.bridge.invoke('get_agent_status');
+  }
+
+  listTools(): Promise<ToolInfo[]> {
+    return this.bridge.invoke('list_tools');
+  }
+
+  startAgentTask(request: AgentStartRequest): Promise<AgentTask> {
+    return this.bridge.invoke('start_agent_task', { request });
+  }
+
+  listAgentTasks(limit?: number): Promise<TaskSummary[]> {
+    return this.bridge.invoke('list_agent_tasks', { limit: limit ?? null });
+  }
+
+  getAgentTask(id: string): Promise<AgentTask> {
+    return this.bridge.invoke('get_agent_task', { id });
+  }
+
+  cancelAgentTask(id: string): Promise<boolean> {
+    return this.bridge.invoke('cancel_agent_task', { id });
+  }
+
+  pauseAgentTask(id: string): Promise<boolean> {
+    return this.bridge.invoke('pause_agent_task', { id });
+  }
+
+  resumeAgentTask(id: string): Promise<void> {
+    return this.bridge.invoke('resume_agent_task', { id });
+  }
+
+  clearFinishedAgentTasks(): Promise<number> {
+    return this.bridge.invoke('clear_finished_agent_tasks');
+  }
+
+  listPendingApprovals(): Promise<PendingApproval[]> {
+    return this.bridge.invoke('list_pending_approvals');
+  }
+
+  /** `false` when the action is no longer waiting (decided, timed out, cancelled). */
+  resolveApproval(id: string, approved: boolean): Promise<boolean> {
+    return this.bridge.invoke('resolve_approval', { id, approved });
+  }
+
+  getAuditLog(limit: number, beforeMs: number | null): Promise<AuditEntry[]> {
+    return this.bridge.invoke('get_audit_log', { limit, beforeMs });
+  }
+
+  verifyAuditLog(): Promise<AuditVerification> {
+    return this.bridge.invoke('verify_audit_log');
+  }
+
+  /** Opens a folder dialog in the core; `null` when the user cancelled. */
+  addWorkspaceFolder(): Promise<Settings | null> {
+    return this.bridge.invoke('add_workspace_folder');
+  }
+
+  onAgentTask(handler: (task: AgentTask) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<AgentTask>(AGENT_TASK_EVENT, handler);
+  }
+
+  onApprovals(handler: (approvals: PendingApproval[]) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<PendingApproval[]>(APPROVALS_EVENT, handler);
   }
 
   reportUiError(report: UiErrorReport): Promise<void> {

@@ -8,11 +8,13 @@ import {
 } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
+import { AgentsStore } from './core/state/agents.store';
 import { ChatStore } from './core/state/chat.store';
 import { EventLogStore } from './core/state/event-log.store';
 import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
 import { SystemStore } from './core/state/system.store';
+import { ApprovalDialog } from './shared/approval-dialog/approval-dialog';
 import { Icon, type IconName } from './shared/icon/icon';
 import { StatusBadge } from './shared/status-badge/status-badge';
 
@@ -27,7 +29,7 @@ const CLOCK_TICK_MS = 10_000;
 
 @Component({
   selector: 'jv-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, StatusBadge],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, StatusBadge, ApprovalDialog],
   templateUrl: './app.html',
   styleUrl: './app.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -43,6 +45,7 @@ export class App {
     { path: '/chat', label: 'Chat', icon: 'chat' },
     { path: '/models', label: 'Models', icon: 'spark' },
     { path: '/runtime', label: 'Runtime', icon: 'cpu' },
+    { path: '/agents', label: 'Agents', icon: 'agent' },
     { path: '/memory', label: 'Memory', icon: 'brain' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
@@ -80,6 +83,8 @@ export class App {
 
     void this.system.loadStaticInfo();
     void inject(EventLogStore).start();
+    // Approval requests must reach the user on every screen.
+    void inject(AgentsStore).start();
     void this.settings.load().then(() => chat.loadModels());
     pollWhileVisible(() => this.system.refreshHealth(), HEALTH_POLL_MS, destroyRef);
     pollWhileVisible(() => this.now.set(Date.now()), CLOCK_TICK_MS, destroyRef);

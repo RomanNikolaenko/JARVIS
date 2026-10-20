@@ -1,0 +1,73 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid;
+  border-radius: var(--jv-radius-sm);
+  font-size: 12.5px;
+
+  &.ok {
+    border-color: rgba(52, 211, 153, 0.4);
+    color: var(--jv-success);
+  }
+  &.bad {
+    border-color: rgba(248, 113, 113, 0.45);
+    color: var(--jv-danger);
+  }
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--jv-border);
+  border-radius: var(--jv-radius);
+  background: var(--jv-surface);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--jv-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  font-weight: 600;
+  font-size: 11.5px;
+  color: var(--jv-text-dim);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.detail {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--jv-text-muted);
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+}

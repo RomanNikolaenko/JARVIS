@@ -59,6 +59,37 @@ describe('JarvisApi', () => {
     ]);
   });
 
+  it('passes agent command arguments with the names expected by Rust', async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      return cmd === 'get_audit_log' ? [] : true;
+    });
+
+    await api.resolveApproval('a-1', false);
+    await api.getAuditLog(50, 1234);
+    await api.pauseAgentTask('t-1');
+    await api.startAgentTask({
+      goal: 'g',
+      providerId: null,
+      model: null,
+      maxSteps: 3,
+      maxDurationSecs: null,
+    });
+
+    expect(calls).toEqual([
+      { cmd: 'resolve_approval', args: { id: 'a-1', approved: false } },
+      { cmd: 'get_audit_log', args: { limit: 50, beforeMs: 1234 } },
+      { cmd: 'pause_agent_task', args: { id: 't-1' } },
+      {
+        cmd: 'start_agent_task',
+        args: {
+          request: { goal: 'g', providerId: null, model: null, maxSteps: 3, maxDurationSecs: null },
+        },
+      },
+    ]);
+  });
+
   it('converts core error payloads into IpcError', async () => {
     mockIPC(() => {
       throw { code: 'permissionDenied', message: 'cloud disabled' };

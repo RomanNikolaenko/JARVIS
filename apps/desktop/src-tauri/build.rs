@@ -51,6 +51,20 @@ const COMMANDS: &[&str] = &[
     "export_memory",
     "import_memory",
     "clear_memory",
+    "get_agent_status",
+    "list_tools",
+    "start_agent_task",
+    "list_agent_tasks",
+    "get_agent_task",
+    "cancel_agent_task",
+    "pause_agent_task",
+    "resume_agent_task",
+    "clear_finished_agent_tasks",
+    "list_pending_approvals",
+    "resolve_approval",
+    "get_audit_log",
+    "verify_audit_log",
+    "add_workspace_folder",
 ];
 
 fn main() {

@@ -22,6 +22,7 @@ describe('App shell', () => {
       'Chat',
       'Models',
       'Runtime',
+      'Agents',
       'Memory',
       'Event log',
       'Settings',

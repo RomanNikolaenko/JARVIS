@@ -28,6 +28,7 @@ export class Events {
     'runtime',
     'memory',
     'chat',
+    'agents',
     'security',
     'platform',
     'ui',

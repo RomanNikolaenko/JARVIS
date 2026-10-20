@@ -39,6 +39,9 @@ pub struct Settings {
     /// Embedded llama.cpp runtime.
     pub runtime: RuntimeSettings,
     pub memory: MemorySettings,
+    /// Tools agents may use and what they need approval for.
+    pub tools: ToolSettings,
+    pub agents: AgentsSettings,
     pub privacy: PrivacySettings,
     pub logging: LoggingSettings,
 }
@@ -52,6 +55,8 @@ impl Default for Settings {
             ai: AiSettings::default(),
             runtime: RuntimeSettings::default(),
             memory: MemorySettings::default(),
+            tools: ToolSettings::default(),
+            agents: AgentsSettings::default(),
             privacy: PrivacySettings::default(),
             logging: LoggingSettings::default(),
         }
@@ -135,6 +140,155 @@ impl MemorySettings {
     }
 }
 
+pub const MAX_WORKSPACE_FOLDERS: usize = 16;
+pub const MAX_ALLOWED_PROGRAMS: usize = 32;
+pub const MIN_COMMAND_TIMEOUT_SECS: u32 = 5;
+pub const MAX_COMMAND_TIMEOUT_SECS: u32 = 600;
+pub const MIN_APPROVAL_TIMEOUT_SECS: u32 = 30;
+pub const MAX_APPROVAL_TIMEOUT_SECS: u32 = 3600;
+const MAX_FOLDER_LEN: usize = 1024;
+
+/// Settings of the Security Policy Engine for tools.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export_to = "core.ts")]
+pub struct ToolSettings {
+    /// Tools that may be used at all.
+    pub enabled: Vec<String>,
+    /// Folders file tools may use (absolute paths); nothing outside them is
+    /// reachable. JARVIS's own data and settings stay off limits.
+    pub workspace_folders: Vec<String>,
+    /// Programs `run_command` and `launch_program` may start (plain names
+    /// such as `git`, no paths).
+    pub allowed_programs: Vec<String>,
+    /// Whether `fetch_url` may load public web pages.
+    pub allow_network: bool,
+    /// Run read-only actions inside the workspace without asking.
+    pub auto_approve_read_only: bool,
+    /// Run medium-risk actions (create or edit files, copy, move, fetch or
+    /// open pages) without asking. High-risk actions always ask.
+    pub auto_approve_changes: bool,
+    /// Time limit of one program run by `run_command`.
+    pub command_timeout_secs: u32,
+}
+
+impl Default for ToolSettings {
+    fn default() -> Self {
+        Self {
+            enabled: jarvis_tools::DEFAULT_ENABLED
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+            workspace_folders: Vec::new(),
+            allowed_programs: Vec::new(),
+            allow_network: false,
+            auto_approve_read_only: true,
+            auto_approve_changes: false,
+            command_timeout_secs: 60,
+        }
+    }
+}
+
+impl ToolSettings {
+    fn problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        let known: Vec<String> = jarvis_tools::ToolRegistry::builtin()
+            .specs()
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect();
+        for name in &self.enabled {
+            if !known.contains(name) {
+                problems.push(format!("tools.enabled: unknown tool \"{name}\""));
+            }
+        }
+        if self.workspace_folders.len() > MAX_WORKSPACE_FOLDERS {
+            problems.push(format!(
+                "tools.workspaceFolders: at most {MAX_WORKSPACE_FOLDERS} folders"
+            ));
+        }
+        for folder in &self.workspace_folders {
+            if folder.len() > MAX_FOLDER_LEN || !Path::new(folder).is_absolute() {
+                problems.push(format!(
+                    "tools.workspaceFolders: \"{folder}\" is not an absolute path"
+                ));
+            }
+        }
+        if self.allowed_programs.len() > MAX_ALLOWED_PROGRAMS {
+            problems.push(format!(
+                "tools.allowedPrograms: at most {MAX_ALLOWED_PROGRAMS} programs"
+            ));
+        }
+        for program in &self.allowed_programs {
+            if !jarvis_security::is_plain_program_name(program) {
+                problems.push(format!(
+                    "tools.allowedPrograms: \"{program}\" must be a plain program name"
+                ));
+            }
+        }
+        if !(MIN_COMMAND_TIMEOUT_SECS..=MAX_COMMAND_TIMEOUT_SECS)
+            .contains(&self.command_timeout_secs)
+        {
+            problems.push(format!(
+                "tools.commandTimeoutSecs must be between {MIN_COMMAND_TIMEOUT_SECS} and {MAX_COMMAND_TIMEOUT_SECS}"
+            ));
+        }
+        problems
+    }
+}
+
+/// Agent tasks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export_to = "core.ts")]
+pub struct AgentsSettings {
+    /// Whether agent tasks can be started.
+    pub enabled: bool,
+    /// Default number of steps (tool calls and answers) per task.
+    pub max_steps: u32,
+    /// Default time limit per task run.
+    pub max_duration_secs: u32,
+    /// How long an action waits for approval before it counts as refused.
+    pub approval_timeout_secs: u32,
+}
+
+impl Default for AgentsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_steps: jarvis_agent::DEFAULT_MAX_STEPS,
+            max_duration_secs: jarvis_agent::DEFAULT_MAX_DURATION_SECS,
+            approval_timeout_secs: 300,
+        }
+    }
+}
+
+impl AgentsSettings {
+    fn problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        if !(1..=jarvis_agent::MAX_STEPS).contains(&self.max_steps) {
+            problems.push(format!(
+                "agents.maxSteps must be between 1 and {}",
+                jarvis_agent::MAX_STEPS
+            ));
+        }
+        if !(30..=jarvis_agent::MAX_DURATION_SECS).contains(&self.max_duration_secs) {
+            problems.push(format!(
+                "agents.maxDurationSecs must be between 30 and {}",
+                jarvis_agent::MAX_DURATION_SECS
+            ));
+        }
+        if !(MIN_APPROVAL_TIMEOUT_SECS..=MAX_APPROVAL_TIMEOUT_SECS)
+            .contains(&self.approval_timeout_secs)
+        {
+            problems.push(format!(
+                "agents.approvalTimeoutSecs must be between {MIN_APPROVAL_TIMEOUT_SECS} and {MAX_APPROVAL_TIMEOUT_SECS}"
+            ));
+        }
+        problems
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "core.ts")]
@@ -197,6 +351,10 @@ pub struct PrivacySettings {
     /// embeddings) may be sent to cloud providers. Off by default; the
     /// current conversation itself goes wherever the chat goes.
     pub share_memory_with_cloud: bool,
+    /// Whether agents may use cloud models. Agents send file contents and
+    /// program output to the model; this also needs `allowCloudProviders`.
+    /// Off by default.
+    pub allow_cloud_agents: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -261,6 +419,8 @@ impl Settings {
         validate_routing(&ai.routing, &ai.providers, &mut problems);
         problems.extend(self.runtime.problems());
         problems.extend(self.memory.problems(&ai.providers));
+        problems.extend(self.tools.problems());
+        problems.extend(self.agents.problems());
 
         if problems.is_empty() {
             Ok(())

@@ -3,19 +3,20 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 4 — Memory.** JARVIS chats with local models served by
-> **Ollama**, any **OpenAI-compatible** server (LM Studio, llama.cpp server,
-> vLLM, …) or its own **embedded llama.cpp runtime**, and remembers:
-> saved conversations, facts, projects and an action history in a local
-> SQLite database, with full-text and semantic search and a context manager
-> that fits the relevant parts into the model's window. Not yet: API keys /
-> cloud providers, agents, voice. See [ROADMAP.md](ROADMAP.md).
+> **Status: Phase 5 — Tools and agents.** JARVIS chats with local models
+> served by **Ollama**, any **OpenAI-compatible** server (LM Studio,
+> llama.cpp server, vLLM, …) or its own **embedded llama.cpp runtime**,
+> remembers conversations, facts and projects in a local SQLite database,
+> and runs **multi-step agent tasks** with tools (files, programs, system,
+> web, git) behind a Security Policy Engine with approvals and an audit log.
+> Not yet: API keys / cloud providers, voice, vision. See
+> [ROADMAP.md](ROADMAP.md).
 
 ## What works today
 
 - Desktop app (Tauri 2 + Angular 22) with a dark HUD-style UI:
   Dashboard, Chat (history, Markdown, code highlighting, stop), Models,
-  Runtime, Memory, Event log, Settings.
+  Runtime, Agents, Memory, Event log, Settings.
 - Local AI: Ollama and OpenAI-compatible servers, auto-detected on their
   default ports; add servers on the Models screen with a connection test.
 - Model routing per task (general, reasoning, coding, vision, embeddings,
@@ -24,6 +25,13 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
   JARVIS to remember, projects with instructions, an action history, search
   by words and meaning, export/import, delete anything; per-model context
   budgets with automatic summaries of long conversations.
+- Agents (Agents screen): give JARVIS a goal; it plans, uses tools step by
+  step and checks its answer, within step and time limits. Tools only see
+  the workspace folders you add; read-only actions run on their own,
+  changes and programs wait for your approval in a dialog; every decision
+  is written to a tamper-evident audit log. Pause, resume or cancel any
+  task; tasks survive restarts. Tools are not sandboxed — see
+  [SECURITY.md](SECURITY.md).
 - Embedded runtime (Runtime screen): install an official llama.cpp build
   (CPU/Vulkan) after explicit approval, import GGUF files or download
   verified models, start/stop a model with memory checks, GPU offload and
@@ -75,7 +83,8 @@ Full instructions (Linux packages, tests, release builds, troubleshooting):
 
 ```
 apps/desktop/          Angular UI (src/) and Tauri shell (src-tauri/)
-crates/                Rust domain crates (core, ai, events, platform)
+crates/                Rust domain crates (core, ai, runtime, storage, memory,
+                       security, tools, agent, events, platform)
 packages/shared-types/ Generated TypeScript IPC types
 docs/decisions/        ADRs
 ```

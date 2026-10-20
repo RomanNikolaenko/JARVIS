@@ -1,0 +1,72 @@
+<div class="toolbar">
+  <p class="hint grow">
+    Every tool call is recorded: the policy decision, your approval and the result. Each entry
+    carries the hash of the one before, so changes made outside JARVIS are detected.
+  </p>
+  <button type="button" (click)="store.loadAudit()" [disabled]="store.busy()">
+    <jv-icon name="refresh" [size]="14" />
+    Refresh
+  </button>
+  <button type="button" class="primary" (click)="store.verifyAudit()" [disabled]="store.busy()">
+    <jv-icon name="shield" [size]="14" />
+    Check integrity
+  </button>
+</div>
+
+@if (store.verification(); as v) {
+  @if (v.intact) {
+    <p class="verdict ok" role="status">
+      <jv-icon name="check" [size]="15" />
+      {{ v.entries }} entries checked: the chain is intact.
+    </p>
+  } @else {
+    <p class="verdict bad" role="alert">
+      <jv-icon name="warning" [size]="15" />
+      The chain is broken at entry {{ v.brokenAt }}: the log was changed outside JARVIS.
+    </p>
+  }
+}
+
+@if (store.audit().length === 0) {
+  <p class="empty">No tool calls yet.</p>
+} @else {
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Time</th>
+          <th scope="col">Tool</th>
+          <th scope="col">Action</th>
+          <th scope="col">Risk</th>
+          <th scope="col">Decision / result</th>
+          <th scope="col">Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (entry of store.audit(); track entry.id) {
+          <tr>
+            <td class="nowrap dim">{{ when(entry.occurredAtMs) }}</td>
+            <td class="mono">{{ entry.tool }}</td>
+            <td>{{ entry.action }}</td>
+            <td>
+              <span class="chip" [class]="riskTone(entry.risk)">{{ entry.risk }}</span>
+            </td>
+            <td>
+              <span class="chip" [class]="eventTone(entry.event)">{{
+                eventLabel(entry.event)
+              }}</span>
+            </td>
+            <td class="detail" [title]="entry.detail">{{ entry.detail }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+  @if (!store.auditComplete()) {
+    <div class="more">
+      <button type="button" class="ghost" (click)="store.loadAudit(true)" [disabled]="store.busy()">
+        Load older entries
+      </button>
+    </div>
+  }
+}

@@ -1660,6 +1660,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jarvis-agent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jarvis-ai",
+ "jarvis-security",
+ "jarvis-storage",
+ "jarvis-tools",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "jarvis-ai"
 version = "0.1.0"
 dependencies = [
@@ -1681,11 +1701,15 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "jarvis-agent",
  "jarvis-ai",
  "jarvis-events",
  "jarvis-memory",
  "jarvis-platform",
  "jarvis-runtime",
+ "jarvis-security",
+ "jarvis-storage",
+ "jarvis-tools",
  "serde",
  "serde_json",
  "tempfile",
@@ -1713,6 +1737,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1788,6 +1813,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "jarvis-security"
+version = "0.1.0"
+dependencies = [
+ "jarvis-storage",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ts-rs",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "jarvis-storage"
 version = "0.1.0"
 dependencies = [
@@ -1797,6 +1840,26 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "jarvis-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jarvis-platform",
+ "jarvis-security",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ts-rs",
+ "url",
 ]
 
 [[package]]

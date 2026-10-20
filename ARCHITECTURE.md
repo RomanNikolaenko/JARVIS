@@ -59,24 +59,34 @@ crates/
   jarvis-memory/              MemoryEngine (conversations, facts, projects,
                               episodes, FTS + vector search, export/import),
                               Context Manager (token budgets, compaction)
+  jarvis-security/            Security Policy Engine (capabilities, risk, scoped
+                              file access, program allowlist, SSRF guard),
+                              ApprovalBroker, hash-chained AuditLog
+  jarvis-tools/               Tool trait (prepare → policy → run), registry,
+                              file, search, process, system, web and git tools
+  jarvis-agent/               Task manager (states, limits, persisted journal),
+                              orchestrator (planner, executor, verifier,
+                              recovery), text protocol for the model
   jarvis-ai/                  AiProvider trait, ProviderRegistry, ProviderFactory,
                               Ollama + OpenAI-compatible HTTP providers,
                               EchoProvider, provider config + URL privacy class
   jarvis-core/                JarvisCore, Settings/ConfigStore, health checks,
                               ChatService, model catalog + router, memory
                               integration (turns, embeddings, action history),
-                              error codes
+                              agents (policy from settings, model adapter,
+                              privacy rules), error codes
 apps/desktop/
   src/                        Angular UI
     app/core/ipc/             TauriBridge (only user of @tauri-apps/api), JarvisApi
     app/core/state/           signal stores (system, events, settings, models,
-                              runtime, chat, memory)
+                              runtime, chat, memory, agents)
     app/core/errors/          global error handler → core log
     app/features/             dashboard, chat (+ conversation list), models,
-                              runtime, memory (facts, projects, history, search,
+                              runtime, agents (tasks, tools & permissions, audit
+                              log), memory (facts, projects, history, search,
                               data), events, settings (lazy)
     app/shared/               HUD panel, AI core, icons, status badge, Markdown,
-                              formatters
+                              approval dialog, formatters
   src-tauri/                  Tauri 2 shell (crate jarvis-desktop)
     capabilities/             IPC permissions per window
     build.rs                  app command manifest, Windows manifest
@@ -86,8 +96,7 @@ docs/decisions/               Architecture Decision Records
 ```
 
 Crates that exist only on the roadmap (`jarvis-voice`, `jarvis-vision`,
-`jarvis-tools`, `jarvis-security`, `jarvis-agent`, `jarvis-sync`) are
-**not created yet**; they
+`jarvis-sync`) are **not created yet**; they
 are added when their phase starts, so the tree never contains empty modules.
 
 ## 4. Components (implemented)
@@ -265,6 +274,47 @@ Background tasks: the indexer embeds new facts and messages (batches of 32,
 on change and every 60 s), the recorder writes actions to the history every
 5 s and on shutdown, the pruner removes actions older than the retention.
 
+### 4.3b Tools and agents (`jarvis-security`, `jarvis-tools`, `jarvis-agent`, `jarvis-core::agents`)
+
+See [ADR 0010](docs/decisions/0010-tools-and-agents.md).
+
+```
+model reply ──parse──▶ tool call ──prepare (no side effects)──▶ ActionRequest
+                                                                  │
+          SecurityPolicy::evaluate ◀──────────────────────────────┘
+            ├─ deny ─────────────▶ audit: policyDenied ─▶ result "refused" to the model
+            ├─ approval ─▶ ApprovalBroker ─▶ UI dialog ─▶ approved / denied / timed out
+            └─ allow ────────────▶ audit: allowed
+                                     ▼
+                              Tool::run (re-checks scope / DNS) ─▶ audit: succeeded / failed
+                                     ▼
+                       <tool_result> (untrusted data) ─▶ next model turn
+```
+
+| Tool | Risk | Notes |
+| --- | --- | --- |
+| `list_directory`, `read_file`, `search_files`, `system_info`, `list_processes`, `git` (status/log/diff/show/branch) | low | on by default; files only inside workspace folders; git without hooks, pager, external diff or credential helpers |
+| `write_file` (new file), `edit_file`, `copy_path`, `move_path`, `fetch_url`, `open_url` | medium | `fetch_url`: public http(s) only, DNS re-checked per redirect, text only |
+| `write_file` (overwrite), `delete_path` (file or empty folder), `run_command`, `launch_program`, `stop_program` | high | always need approval; programs from the allowlist, no shell, time limit; only programs JARVIS started can be stopped |
+
+**Settings** (`tools`, `agents`, `privacy.allowCloudAgents`) are read
+before every step, so a change applies to running tasks. Protected paths:
+JARVIS's config, data and log folders.
+
+**Task lifecycle:** `pending → running ⇄ waitingForApproval`, `running ⇄
+paused`, then `completed | failed | cancelled`. The journal (`TaskStep`:
+plan, action, answer, verification, note — with thought, input, decision,
+outcome, output, duration) is saved to `agent_tasks` after every step and
+pushed to the UI (`jarvis://agent-task`). Pending approvals are pushed as a
+list (`jarvis://approvals`); a new request also asks the OS to draw
+attention to the window.
+
+**Model:** `AgentModel` is implemented in the core: explicit choice →
+`toolCalling` route → general route, the chat privacy check, plus
+`allowCloudAgents` for cloud models; temperature 0.2, at most 1 024 output
+tokens per turn, the request timeout from settings; the conversation sent
+to the model is trimmed to its context window (oldest steps first).
+
 ### 4.4 `jarvis-events` — event bus
 
 Typed `SystemEvent { id, timestampMs, level, category, message }`, published
@@ -338,8 +388,17 @@ notification instead of blocking publishers.
 | `get_memory_status` | – | `MemoryStatus` |
 | `export_memory` / `import_memory` | – (native dialogs in Rust) | `TransferReport \| null` |
 | `clear_memory` | `confirmation` (fixed phrase) | – |
+| `get_agent_status` / `list_tools` | – | `AgentStatus` / `ToolInfo[]` |
+| `start_agent_task` | `request: AgentStartRequest` | `AgentTask` |
+| `list_agent_tasks` / `get_agent_task` | `limit?` / `id` | `TaskSummary[]` / `AgentTask` |
+| `pause_agent_task` / `resume_agent_task` / `cancel_agent_task` | `id` | `boolean` / – / `boolean` |
+| `clear_finished_agent_tasks` | – | count |
+| `list_pending_approvals` / `resolve_approval` | – / `id`, `approved` | `PendingApproval[]` / `boolean` |
+| `get_audit_log` / `verify_audit_log` | `limit?`, `beforeMs?` / – | `AuditEntry[]` / `AuditVerification` |
+| `add_workspace_folder` | – (native folder dialog in Rust) | `Settings \| null` |
 
-Event: `jarvis://system-event` → `SystemEvent`.
+Events: `jarvis://system-event` → `SystemEvent`; `jarvis://agent-task` →
+`AgentTask`; `jarvis://approvals` → `PendingApproval[]`.
 
 Types are defined once in Rust and generated into
 `packages/shared-types/src/generated/*.ts` by `ts-rs` during `cargo test`; CI
@@ -361,7 +420,14 @@ must be granted by a capability; anything not granted is denied. See
   `ModelsStore` (providers, catalog, routes, provider tests), `ChatStore`
   (conversation list and the open chat; streaming state machine
   `idle → connecting → streaming → idle`; "Automatic" lets the core route),
-  `MemoryStore` (facts, projects, action history, search, data).
+  `MemoryStore` (facts, projects, action history, search, data),
+  `AgentsStore` (tasks, pushed task updates, approvals, tools, audit log).
+- **Agents screen**: new task (goal, model, limits), task list, the journal
+  of the selected task with plan, steps, decisions and results, pause /
+  resume / cancel; *Tools & permissions* (workspace folders, tools by risk,
+  approvals, programs, network, limits, cloud permission); *Audit log* with
+  an integrity check. The **approval dialog** is part of the app shell, so a
+  request reaches the user on every screen.
 - **Chat** keeps a history of saved and temporary conversations (search,
   rename, delete), a project and a pinned note per conversation, shows how
   each reply's context was built and lets the user save a message as a fact.
@@ -388,7 +454,7 @@ must be granted by a capability; anything not granted is denied. See
 | Async | Tokio (Tauri's runtime). Blocking work (`sysinfo`) on `spawn_blocking`. No locks held across `.await`. |
 | Cancellation | `CancellationToken` per chat request, child of a shutdown token. |
 | Timeouts | Health probes 3 s, model listing 5 s, chat overall + idle timeouts from settings. |
-| Resource limits | ≤ 4 concurrent chats, bounded event history, bounded input sizes, UI error rate limit (20/min). |
+| Resource limits | ≤ 4 concurrent chats, ≤ 2 agent tasks, agent step/time limits, tool output/input limits, bounded event history, bounded input sizes, UI error rate limit (20/min). |
 | Errors | `thiserror` enums → stable `ErrorCode`; no `unwrap`/`expect` outside tests (clippy-enforced). |
 | Unsafe code | `unsafe_code = "forbid"` workspace-wide. |
 | Observability | `tracing` + rotating files; user-facing event log. |
@@ -412,6 +478,13 @@ must be granted by a capability; anything not granted is denied. See
   items).
 - The memory database is not encrypted at rest.
 - Facts are saved explicitly; JARVIS does not extract them automatically.
+- Tools are not sandboxed: programs the user allowed and approved run with
+  the user's rights. The policy limits what tools are asked to do.
+- Agents use a JSON text protocol, not native tool calling; small local
+  models follow it imperfectly (invalid replies end a task after three
+  tries).
+- The audit log detects changes but cannot stop someone with access to the
+  database from rewriting it entirely.
 - UI text is English; the assistant language setting is stored but not used
   until real models and voice exist.
 - Linux builds are verified in CI only (not on the development machine).
@@ -421,10 +494,8 @@ must be granted by a capability; anything not granted is denied. See
 
 See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
-- `jarvis-security`: policy engine (capabilities, allowlists, scoped file
-  access, approvals, audit log, OS keychain for secrets).
-- `jarvis-tools` / `jarvis-agent`: tool registry, planner/executor/verifier,
-  task states, step/time/resource limits.
+- `jarvis-security`: OS keychain for secrets; process isolation for tools.
+- `jarvis-tools`: native tool calling where providers support it, MCP tools.
 - `jarvis-voice` / `jarvis-vision`: STT/TTS/VAD/wake word; screen capture via
   OS-specific adapters (including xdg-desktop-portal on Wayland).
 - `jarvis-sync`: optional Supabase sync with an offline queue.

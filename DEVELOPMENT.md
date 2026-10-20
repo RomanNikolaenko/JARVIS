@@ -149,6 +149,33 @@ shows the path, size and contents.
 - Tests use in-memory or temporary databases (`cargo test -p jarvis-memory`,
   `cargo test -p jarvis-core --test memory_turns`).
 
+### Agents and tools
+
+1. Open **Agents → Tools & permissions** and add a workspace folder (the
+   folder dialog runs in Rust). File tools see nothing outside these
+   folders; JARVIS's own settings, data and logs stay off limits.
+2. Turn on the tools you want. Read-only tools are on by default; changes
+   and programs ask for approval in a dialog. To let `run_command` /
+   `launch_program` work, list the programs (plain names, e.g. `git`).
+3. Start a task on the **Tasks** tab. Small local models (3B) follow the
+   JSON protocol imperfectly; 7B+ instruction models work noticeably better.
+
+Settings live in `config.toml` under `[tools]`, `[agents]` and
+`privacy.allowCloudAgents`. Tasks and the audit log are tables in
+`memory/jarvis.db` (migration `0002_agents.sql`).
+
+Tests: `cargo test -p jarvis-security -p jarvis-tools -p jarvis-agent`
+(real files and processes in temporary folders, a scripted model for the
+orchestrator) and `cargo test -p jarvis-core --test agent_tasks` (settings,
+privacy, approvals, protected folders, restarts).
+
+**Adding a tool:** implement `jarvis_tools::Tool` — `prepare` validates the
+input with `deny_unknown_fields`, resolves paths through the scope and
+returns an `ActionRequest` with honest capabilities and risk, without side
+effects; `run` does the work, respects `ctx.cancel` and the limits — and
+register it in `ToolRegistry::builtin`. The policy, approvals, audit log and
+UI pick it up automatically.
+
 ## Where JARVIS stores data
 
 | What | Windows | Linux |
@@ -156,7 +183,7 @@ shows the path, size and contents.
 | Settings (`config.toml`) | `%APPDATA%\ai.jarvis.desktop\` | `~/.config/ai.jarvis.desktop/` |
 | Local data | `%LOCALAPPDATA%\ai.jarvis.desktop\` | `~/.local/share/ai.jarvis.desktop/` |
 | Runtime engine, models | `…\runtime\`, `…\models\` in local data | `runtime/`, `models/` in local data |
-| Memory database | `…\memory\jarvis.db` in local data | `memory/jarvis.db` in local data |
+| Memory database (also agent tasks, audit log) | `…\memory\jarvis.db` in local data | `memory/jarvis.db` in local data |
 | Logs (`jarvis.YYYY-MM-DD.log`) | `%LOCALAPPDATA%\ai.jarvis.desktop\logs\` | `~/.local/share/ai.jarvis.desktop/logs/` |
 
 The exact paths are shown on the Settings screen.

@@ -44,6 +44,7 @@ const ICONS = {
   upload: ['M12 20V9', 'M7 14l5-5 5 5', 'M4 4h16'],
   clock: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M12 7v5l3 2'],
   folder: ['M3 6h6l2 2h10v11H3z'],
+  agent: ['M6 8h12v11H6z', 'M12 4v4', 'M10 13h.01M14 13h.01', 'M10 16h4', 'M3 12v3M21 12v3'],
   ghost: ['M5 20V10a7 7 0 0 1 14 0v10l-2.5-2-2.5 2-2-2-2 2-2.5-2z', 'M9.5 10h.01M14.5 10h.01'],
 } as const satisfies Record<string, readonly string[]>;
 

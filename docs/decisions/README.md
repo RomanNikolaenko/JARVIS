@@ -15,5 +15,6 @@ earlier one instead of editing it.
 | [0007](0007-model-routing.md) | Model routing by task category | Accepted |
 | [0008](0008-embedded-llama-runtime.md) | Embedded runtime: supervised llama.cpp server | Accepted |
 | [0009](0009-local-memory.md) | Local memory: SQLite storage, Memory Engine and Context Manager | Accepted |
+| [0010](0010-tools-and-agents.md) | Tools and agents behind a Security Policy Engine | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.

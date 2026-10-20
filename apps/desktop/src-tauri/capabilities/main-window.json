@@ -49,6 +49,20 @@
     "allow-get-memory-status",
     "allow-export-memory",
     "allow-import-memory",
-    "allow-clear-memory"
+    "allow-clear-memory",
+    "allow-get-agent-status",
+    "allow-list-tools",
+    "allow-start-agent-task",
+    "allow-list-agent-tasks",
+    "allow-get-agent-task",
+    "allow-cancel-agent-task",
+    "allow-pause-agent-task",
+    "allow-resume-agent-task",
+    "allow-clear-finished-agent-tasks",
+    "allow-list-pending-approvals",
+    "allow-resolve-approval",
+    "allow-get-audit-log",
+    "allow-verify-audit-log",
+    "allow-add-workspace-folder"
   ]
 }

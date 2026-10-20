@@ -24,14 +24,21 @@ pub struct Migration {
 
 /// All migrations of this build, in order. Append only: never edit or
 /// remove an entry that was released.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "memory",
-    sql: include_str!("../migrations/0001_memory.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "memory",
+        sql: include_str!("../migrations/0001_memory.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "agents",
+        sql: include_str!("../migrations/0002_agents.sql"),
+    },
+];
 
 /// Schema version this build creates.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// What happened while opening a database.
 #[derive(Debug, Clone, PartialEq, Eq)]

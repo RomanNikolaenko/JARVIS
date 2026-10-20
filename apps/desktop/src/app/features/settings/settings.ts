@@ -44,6 +44,7 @@ export class SettingsPage {
     }),
     allowCloudProviders: new FormControl(false, { nonNullable: true }),
     shareMemoryWithCloud: new FormControl(false, { nonNullable: true }),
+    allowCloudAgents: new FormControl(false, { nonNullable: true }),
     logLevel: new FormControl<LogLevel>('info', { nonNullable: true }),
   });
 
@@ -79,6 +80,7 @@ export class SettingsPage {
         ...current.privacy,
         allowCloudProviders: value.allowCloudProviders,
         shareMemoryWithCloud: value.shareMemoryWithCloud,
+        allowCloudAgents: value.allowCloudAgents,
       },
       logging: { ...current.logging, level: value.logLevel },
     };
@@ -106,6 +108,7 @@ function toFormValue(settings: Settings) {
     idleTimeoutSecs: ai.idleTimeoutSecs,
     allowCloudProviders: settings.privacy.allowCloudProviders,
     shareMemoryWithCloud: settings.privacy.shareMemoryWithCloud,
+    allowCloudAgents: settings.privacy.allowCloudAgents,
     logLevel: settings.logging.level,
   };
 }

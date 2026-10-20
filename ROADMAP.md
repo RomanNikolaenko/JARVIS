@@ -67,12 +67,26 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Encryption at rest (key in the OS keychain)
 - ⬜ Automatic fact extraction (opt-in)
 
-## Phase 5 — Tools and agents ⬜
+## Phase 5 — Tools and agents 🟡
 
-Tool registry, Security Policy Engine, approvals, audit log, task manager
-(pending/running/waiting for approval/completed/failed/cancelled), agent
-orchestrator (planner, executor, verifier, recovery) with step/time/resource
-limits.
+- ✅ `jarvis-security`: Security Policy Engine (capabilities, risk levels,
+  tool switches, scoped file access with protected JARVIS folders, secret
+  files, program allowlist, SSRF guard), approvals with timeout, hash-chained
+  audit log
+- ✅ `jarvis-tools`: two-phase tools (prepare → policy → run) — files (list,
+  read, search, write, edit, copy, move, delete), programs without a shell
+  (run, launch, stop), system info, processes, web fetch/open, read-only git
+- ✅ `jarvis-agent`: task manager (pending, running, waiting for approval,
+  paused, completed, failed, cancelled; persisted journal; recovery after
+  restarts), orchestrator (planner, executor, verifier, recovery by the
+  model), step/time/failure limits, no automatic retries
+- ✅ Agents screen (tasks, journal, pause/resume/cancel), Tools & permissions,
+  audit log with integrity check, approval dialog on every screen
+- ✅ Cloud models for agents behind a separate permission
+- ⬜ Process isolation for programs (AppContainer / bubblewrap / Landlock)
+- ⬜ Native tool calling for providers that support it
+- ⬜ Tools from MCP servers and plugins (Phase 7)
+- ⬜ Agents started from chat (today: the Agents screen)
 
 ## Phase 6 — Voice and vision ⬜
 
@@ -91,5 +105,6 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Embeddings in the embedded runtime, then Phase 5 (tools and agents). Open
-Phase 2 items: keychain-backed API keys and cloud providers.
+Live verification of Phase 5 on Linux, embeddings in the embedded runtime,
+then Phase 6 (voice and vision). Open Phase 2 items: keychain-backed API keys
+and cloud providers.

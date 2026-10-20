@@ -68,6 +68,15 @@
         Facts, excerpts of other conversations and texts for semantic search stay on local models
         unless this is on. The current conversation goes wherever you send it.
       </p>
+      <label class="check">
+        <input type="checkbox" formControlName="allowCloudAgents" />
+        <span>Let agents use cloud AI providers</span>
+      </label>
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        Agents send file contents and program output to the model. Tools and folders are set on the
+        <a routerLink="/agents">Agents</a> screen.
+      </p>
     </jv-hud-panel>
 
     <jv-hud-panel heading="Diagnostics">

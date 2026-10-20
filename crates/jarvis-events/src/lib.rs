@@ -47,6 +47,7 @@ pub enum EventCategory {
     Runtime,
     Memory,
     Chat,
+    Agents,
     Security,
     Platform,
     Ui,

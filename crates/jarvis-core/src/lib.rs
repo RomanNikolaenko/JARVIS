@@ -1,10 +1,11 @@
 //! JARVIS core: the composition root of the domain layer.
 //!
 //! [`JarvisCore`] wires the subsystems (configuration, event bus, platform
-//! layer, AI providers, chat orchestration, memory) and exposes a small, UI-agnostic
+//! layer, AI providers, chat orchestration, memory, agents) and exposes a small, UI-agnostic
 //! API. It has no dependency on Tauri or any UI technology: the desktop shell
 //! is just one adapter on top of it.
 
+mod agents;
 pub mod catalog;
 pub mod chat;
 pub mod config;
@@ -32,6 +33,7 @@ use ts_rs::TS;
 
 use crate::catalog::ModelCatalog;
 
+pub use agents::{AgentStartRequest, AgentStatus, LaunchedProgram, ToolInfo, WorkspaceFolder};
 pub use catalog::ProviderModels;
 pub use chat::{ChatEventSink, ChatService, ChatStartRequest, ChatStreamEvent, SinkClosed};
 pub use config::{ConfigSource, ConfigStore, Settings};
@@ -41,6 +43,7 @@ pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
+pub use {jarvis_agent, jarvis_security, jarvis_tools};
 
 /// Filesystem locations used by JARVIS. Resolved by the host application
 /// (e.g. via Tauri's path resolver) and passed in, so the core never guesses.
@@ -167,6 +170,7 @@ pub struct JarvisCore {
     chat: ChatService,
     memory: Arc<MemoryEngine>,
     memory_state: Arc<memory::MemoryState>,
+    agents: agents::AgentSystem,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
@@ -270,6 +274,9 @@ impl JarvisCore {
             }
         };
 
+        let agents =
+            agents::AgentSystem::open(&memory, Arc::clone(&config), &paths, &events).await?;
+
         let catalog = Arc::new(ModelCatalog::default());
         let chat = ChatService::new(
             Arc::clone(&registry),
@@ -302,6 +309,7 @@ impl JarvisCore {
             chat,
             memory,
             memory_state: Arc::default(),
+            agents,
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
@@ -310,6 +318,7 @@ impl JarvisCore {
         Self::watch_runtime_provider(&core);
         Self::autostart_runtime(&core);
         Self::spawn_memory_tasks(&core);
+        Self::spawn_agent_events(&core);
         Ok(core)
     }
 
@@ -584,6 +593,8 @@ impl JarvisCore {
     pub async fn shutdown(&self) {
         self.events
             .info(EventCategory::Lifecycle, "JARVIS core shutting down");
+        // Running agent tasks pause and can be resumed after a restart.
+        self.agents.manager.shutdown().await;
         self.chat.cancel_all();
         self.runtime.shutdown().await;
         // Last: the action history records the steps above.

@@ -16,7 +16,7 @@ Key risks: prompt injection that leads to tool misuse, command injection,
 exfiltration of local data to cloud providers, compromise of the WebView
 leading to privileged IPC calls, secrets leaking into logs or files.
 
-## Implemented controls (Phase 1)
+## Implemented controls
 
 | Control | Where |
 | --- | --- |
@@ -42,6 +42,16 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 | Deleting all memory requires a fixed confirmation phrase in the IPC call, sent only after the user typed a confirmation word; conversations and facts are deleted individually with inline confirmation. | `memory_commands.rs`, Memory screen |
 | Memory import accepts only the JARVIS export format and version, checks sizes (≤ 256 MB, item counts) and field lengths, never overwrites existing items and runs in one transaction. Export and import files are chosen in native dialogs in Rust. | `jarvis-memory::export`, `memory_commands.rs` |
 | The action history stores what JARVIS did (events), never message text, and is pruned after the retention period. | `jarvis-core::memory` |
+| **Security Policy Engine** for every tool call: a tool describes the call (capabilities, risk, paths, program, URL) before anything happens; tools that are off, paths outside the workspace folders or inside JARVIS's own settings/data/log folders (canonical paths: `..`, symlinks and junctions cannot escape), programs not on the allowlist, and non-public URLs are refused. | `jarvis-security::policy`, `::scope` |
+| **Approvals**: high-risk actions (overwrite or delete files, run or stop programs) always ask; medium-risk actions ask unless the user allowed them; files that may hold secrets (`.ssh`, `.env`, keys, `id_rsa`, …) always ask. The dialog shows the exact input, focuses "Deny", expires (default 5 min) and is withdrawn on cancel or exit. | `ApprovalBroker`, approval dialog |
+| **Tamper-evident audit log** of every decision and result (SHA-256 chain, integrity check in the UI); entries outlive deleted tasks. | `jarvis-security::audit` |
+| **Commands without a shell**: plain program names from the user's allowlist, resolved only from absolute `PATH` entries, argument vectors (no metacharacters interpreted), stdin closed, time limit, output limit, killed on cancel; the local model's API key variables are removed from the environment. | `jarvis-tools::command` |
+| **git** runs without hooks, fsmonitor, pager, external diff/textconv or credential helpers, read-only subcommands only. | `jarvis-tools::git` |
+| **Web fetching** is off by default; only public `http(s)` URLs without credentials; every address the host resolves to is checked (no loopback, private, link-local, CGNAT, multicast…), the connection is pinned to the checked address, redirects are re-checked (≤ 5), no proxies, text only, ≤ 2 MiB. | `jarvis-tools::web`, `jarvis-security::policy` |
+| **Prompt injection**: tool output is passed to the model as framed data that cannot close its frame, and the model is told never to follow instructions in it; whatever the model then asks for still goes through the policy and approvals. | `jarvis-agent::protocol` |
+| **Agent bounds**: steps, wall-clock time, invalid replies, consecutive failures, model errors and concurrent tasks are limited; no action is retried automatically; running tasks pause on exit and resume from the journal without re-running actions. | `jarvis-agent` |
+| **Agents and cloud models**: a cloud model can be used by agents only with a separate permission (`privacy.allowCloudAgents`) on top of `allowCloudProviders`, because agents send file contents and program output to the model. | `jarvis-core::agents` |
+| Workspace folders are added through a native folder dialog in Rust. | `agent_commands.rs` |
 | Microphone, camera and screen are not accessed at all. | — |
 
 Known trade-off: the *Test connection* action on the Models screen lets the
@@ -51,24 +61,20 @@ window only.
 
 ## Planned controls (not implemented yet)
 
-- Security Policy Engine with capability-based tool permissions, allowlists,
-  scoped file access and per-action user approval for risky operations
-  (Phase 5).
-- Tamper-evident audit log of tool executions (Phase 5).
 - Secrets (API keys, tokens) in the OS keychain (Windows Credential Manager,
   Secret Service on Linux); never in `config.toml`, logs or the UI
   (remaining Phase 2 work, required before cloud providers).
-- Separation of trusted instructions and untrusted content in prompts;
-  prompt-injection mitigations for tool use (Phase 5).
-- Command execution without a shell (argument vectors), working-directory and
-  timeout limits (Phase 5).
 - Visible indicators and explicit consent for microphone, camera and screen
   capture (Phase 6).
 - Encryption of the memory database at rest with a key in the OS keychain.
 - Signed installers and updates (Phase 8).
 
 Process isolation/sandboxing of tools is **not** implemented; do not assume
-it exists.
+it exists. Tools run with the user's rights: the policy limits what they are
+asked to do (folders, programs, URLs, approvals), it does not contain a
+program once the user allowed and approved it. Prompt-injection mitigations
+reduce the risk; they do not remove it — approvals are the safeguard for
+anything that changes data.
 
 ## Reporting a vulnerability
 

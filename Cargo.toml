@@ -7,6 +7,9 @@ members = [
     "crates/jarvis-runtime",
     "crates/jarvis-storage",
     "crates/jarvis-memory",
+    "crates/jarvis-security",
+    "crates/jarvis-tools",
+    "crates/jarvis-agent",
     "crates/jarvis-core",
     "apps/desktop/src-tauri",
 ]
@@ -19,12 +22,15 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
+jarvis-agent = { path = "crates/jarvis-agent" }
 jarvis-ai = { path = "crates/jarvis-ai" }
 jarvis-core = { path = "crates/jarvis-core" }
 jarvis-events = { path = "crates/jarvis-events" }
 jarvis-platform = { path = "crates/jarvis-platform" }
 jarvis-memory = { path = "crates/jarvis-memory" }
 jarvis-runtime = { path = "crates/jarvis-runtime" }
+jarvis-security = { path = "crates/jarvis-security" }
+jarvis-tools = { path = "crates/jarvis-tools" }
 jarvis-storage = { path = "crates/jarvis-storage" }
 
 # Async runtime and utilities

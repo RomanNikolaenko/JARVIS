@@ -1,3 +1,4 @@
+use jarvis_agent::AgentError;
 use jarvis_ai::AiError;
 use jarvis_memory::{MemoryError, StorageError};
 use jarvis_runtime::RuntimeError;
@@ -89,6 +90,9 @@ pub enum CoreError {
     #[error(transparent)]
     Memory(#[from] MemoryError),
 
+    #[error(transparent)]
+    Agent(#[from] AgentError),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -153,6 +157,14 @@ impl CoreError {
                 MemoryError::NotFound(_) => ErrorCode::NotFound,
                 MemoryError::Invalid(_) => ErrorCode::Validation,
                 MemoryError::MessageTooLong { .. } => ErrorCode::LimitExceeded,
+            },
+            Self::Agent(err) => match err {
+                AgentError::NotFound => ErrorCode::NotFound,
+                AgentError::Invalid(_) => ErrorCode::Validation,
+                AgentError::LimitExceeded(_) => ErrorCode::LimitExceeded,
+                AgentError::Model(_) => ErrorCode::Unavailable,
+                AgentError::Storage(StorageError::Io { .. }) => ErrorCode::Io,
+                AgentError::Storage(_) | AgentError::Internal(_) => ErrorCode::Internal,
             },
         }
     }
