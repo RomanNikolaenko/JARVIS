@@ -380,6 +380,69 @@ async fn semantic_recall_finds_what_text_search_misses() {
 }
 
 #[tokio::test]
+async fn semantic_matches_far_below_the_best_one_are_dropped() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let project = memory
+        .save_project(ProjectInput {
+            id: None,
+            name: "Garage".into(),
+            description: String::new(),
+            instructions: String::new(),
+        })
+        .await
+        .unwrap();
+    memory
+        .save_fact(
+            fact("My automobile is a red Tesla.", false, None),
+            FactSource::User,
+        )
+        .await
+        .unwrap();
+    memory
+        .save_fact(
+            fact("Automobile: car, drive.", false, Some(project.id)),
+            FactSource::User,
+        )
+        .await
+        .unwrap();
+    let embedder: Arc<dyn Embedder> = Arc::new(ConceptEmbedder);
+    memory.index_pending(embedder.as_ref(), 64).await.unwrap();
+    let question = "What car do I drive?";
+
+    // The Tesla fact is similar (0.52) but far below the best match (0.89).
+    let hits = memory
+        .search(
+            SearchQuery {
+                text: question.into(),
+                kinds: vec![MemoryKind::Fact],
+                limit: 10,
+            },
+            Some(Arc::clone(&embedder)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(hits[0].snippet.contains("drive"));
+
+    // Outside the project the best match cannot be recalled, so the Tesla
+    // fact is measured against the facts that can.
+    let conversation = memory.create_conversation(None, false).await.unwrap();
+    let context = memory
+        .prepare_context(request(
+            conversation.id,
+            question,
+            Retrieval {
+                embedder: Some(embedder),
+                ..text_retrieval()
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(context.report.facts_included, 1);
+    assert!(context.messages[0].content.contains("red Tesla"));
+}
+
+#[tokio::test]
 async fn search_covers_all_kinds_with_highlights() {
     let memory = MemoryEngine::in_memory().unwrap();
     let conversation = memory.create_conversation(None, false).await.unwrap();

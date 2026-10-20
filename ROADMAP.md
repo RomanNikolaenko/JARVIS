@@ -67,6 +67,9 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   opt-in
 - ✅ Embedding model served by the embedded runtime: semantic search works
   without Ollama (indexing starts when the embedding model comes up)
+- ✅ Similarity cuts per embedding model (floor + margin below the best
+  hit), measured for BGE-M3 on Ukrainian and English facts; other models
+  not measured yet
 - ⬜ Encryption at rest (key in the OS keychain)
 - ⬜ Automatic fact extraction (opt-in)
 
@@ -108,6 +111,6 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Live verification of Phase 5 on Linux, calibration of the semantic search
-thresholds for BGE-M3, then Phase 6 (voice and vision). Open Phase 2 items:
+Live verification of Phase 5 on Linux, then Phase 6 (voice and vision).
+Open Phase 2 items:
 keychain-backed API keys and cloud providers.

@@ -34,7 +34,7 @@ use crate::types::{
     MAX_PROJECTS, MAX_TITLE_CHARS, MemoryCounts, MemoryKind, MessageRole, MessageStatus,
     NewMessage, Project, ProjectInput, SearchHit, SearchQuery, StoredMessage,
 };
-use crate::vector::{self, Embedder, VectorIndex, VectorKind};
+use crate::vector::{self, Embedder, SimilarityCuts, VectorIndex, VectorKind};
 
 pub const DEFAULT_TITLE: &str = "New conversation";
 const TITLE_CHARS: usize = 60;
@@ -42,9 +42,6 @@ const TITLE_CHARS: usize = 60;
 const RRF_K: f32 = 60.0;
 /// Minimum share of query terms a text match must contain to be recalled.
 const MIN_TERM_OVERLAP: f32 = 0.5;
-/// Minimum cosine similarity for automatic recall (search is more lenient).
-const MIN_RECALL_SIMILARITY: f32 = 0.5;
-const MIN_SEARCH_SIMILARITY: f32 = 0.35;
 const MAX_RELEVANT_FACTS: usize = 6;
 const MAX_RECALLS: usize = 3;
 const MAX_RECALLS_PER_CONVERSATION: usize = 2;
@@ -552,37 +549,42 @@ impl MemoryEngine {
             })
             .await?;
 
-        let (vector_facts, vector_messages) = match &query_vector {
+        let (recall_cut, vector_facts, vector_messages) = match &query_vector {
             Some((key, vector)) => {
+                let cut = SimilarityCuts::for_model(key).recall;
                 let index = self.vector_index(&db, key).await?;
                 let index = index.as_ref();
+                let search = |kind, limit| {
+                    index
+                        .map(|i| i.search(kind, vector, limit))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|(_, s)| *s >= cut.min)
+                        .collect::<Vec<_>>()
+                };
                 (
+                    Some(cut),
                     if want_facts {
-                        index
-                            .map(|i| i.search(VectorKind::Fact, vector, 20))
-                            .unwrap_or_default()
+                        search(VectorKind::Fact, 20)
                     } else {
                         Vec::new()
                     },
                     if want_recall {
-                        index
-                            .map(|i| i.search(VectorKind::Message, vector, 40))
-                            .unwrap_or_default()
+                        search(VectorKind::Message, 40)
                     } else {
                         Vec::new()
                     },
                 )
             }
-            None => (Vec::new(), Vec::new()),
+            None => (None, Vec::new(), Vec::new()),
         };
-        let vector_facts: Vec<(i64, f32)> = vector_facts
-            .into_iter()
-            .filter(|(_, s)| *s >= MIN_RECALL_SIMILARITY)
-            .collect();
-        let vector_messages: Vec<(i64, f32)> = vector_messages
-            .into_iter()
-            .filter(|(_, s)| *s >= MIN_RECALL_SIMILARITY)
-            .collect();
+        // Applied to the hits that may be recalled, so the margin is measured
+        // from the best of them, not from a fact of another project or a
+        // message of this conversation.
+        let cut = |hits: Vec<(i64, f32)>| match recall_cut {
+            Some(cut) => cut.apply(hits),
+            None => hits,
+        };
 
         // Rows for vector-only candidates.
         let fact_ids: Vec<i64> = vector_facts.iter().map(|(id, _)| *id).collect();
@@ -618,11 +620,17 @@ impl MemoryEngine {
                 .or_insert((0.0, hit.item.fact.clone()));
             entry.0 += rrf(rank);
         }
-        for (rank, (row_id, _)) in vector_facts.iter().enumerate() {
-            if let Some(row) = vector_fact_rows
+        let recallable_fact = |row_id: i64| {
+            vector_fact_rows
                 .iter()
-                .find(|r| r.row_id == *row_id && !r.fact.pinned && in_scope(&r.fact))
-            {
+                .find(|r| r.row_id == row_id && !r.fact.pinned && in_scope(&r.fact))
+        };
+        let vector_facts = cut(vector_facts
+            .into_iter()
+            .filter(|(id, _)| recallable_fact(*id).is_some())
+            .collect());
+        for (rank, (row_id, _)) in vector_facts.iter().enumerate() {
+            if let Some(row) = recallable_fact(*row_id) {
                 let entry = fused.entry(*row_id).or_insert((0.0, row.fact.clone()));
                 entry.0 += rrf(rank);
             }
@@ -656,11 +664,17 @@ impl MemoryEngine {
             let entry = fused.entry(hit.row_id).or_insert((0.0, hit.clone()));
             entry.0 += rrf(rank);
         }
-        for (rank, (row_id, _)) in vector_messages.iter().enumerate() {
-            if let Some(hit) = vector_message_rows
+        let recallable_message = |row_id: i64| {
+            vector_message_rows
                 .iter()
-                .find(|h| h.row_id == *row_id && eligible(h))
-            {
+                .find(|h| h.row_id == row_id && eligible(h))
+        };
+        let vector_messages = cut(vector_messages
+            .into_iter()
+            .filter(|(id, _)| recallable_message(*id).is_some())
+            .collect());
+        for (rank, (row_id, _)) in vector_messages.iter().enumerate() {
+            if let Some(hit) = recallable_message(*row_id) {
                 let entry = fused.entry(*row_id).or_insert((0.0, hit.clone()));
                 entry.0 += rrf(rank);
             }
@@ -981,15 +995,15 @@ impl MemoryEngine {
 
         if let Some((key, vector)) = query_vector {
             let (message_scores, fact_scores) = {
+                let cut = SimilarityCuts::for_model(&key).search;
                 let index = self.vector_index(&db, &key).await?;
                 let index = index.as_ref();
                 let search = |kind| {
-                    index
-                        .map(|i| i.search(kind, &vector, 50))
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|(_, s)| *s >= MIN_SEARCH_SIMILARITY)
-                        .collect::<Vec<_>>()
+                    cut.apply(
+                        index
+                            .map(|i| i.search(kind, &vector, 50))
+                            .unwrap_or_default(),
+                    )
                 };
                 (
                     if want_messages {

@@ -116,8 +116,8 @@ and a stuck or crashed engine must never take the UI down.
 - Live check (Windows, llama.cpp b11739, CPU): BGE-M3 loads in ~5 s; the
   right Ukrainian fact ranks first for queries without a shared word, also
   for English queries; a chat turn with Qwen2.5 3B received only the
-  relevant fact. Unrelated facts still pass the search similarity threshold
-  (0.35) and appear lower in the list, so the thresholds need calibrating
-  for this model.
+  relevant fact. Unrelated facts passed the search similarity threshold
+  (0.35) and appeared lower in the list; the similarity cuts were then
+  measured and calibrated for BGE-M3 (ADR 0009).
 - On forced termination of JARVIS (e.g. killed by the OS) the server may
   outlive it until the next start, which cleans it up.

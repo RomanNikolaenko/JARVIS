@@ -264,7 +264,10 @@ A conversation turn (`JarvisCore::send_message`):
 3. retrieves pinned and relevant facts and excerpts of other conversations
    of the same project scope — only for on-device/LAN models unless
    `privacy.shareMemoryWithCloud` is on — with FTS5 and, when an embedding
-   model is available, vector similarity (reciprocal rank fusion);
+   model is available, vector similarity (reciprocal rank fusion); vector
+   hits must reach the embedding model's floor and lie within 0.10 of the
+   best recallable hit (`SimilarityCuts`; measured for BGE-M3: recall 0.55,
+   search 0.52);
 4. the Context Manager assembles system prompt, project, note, memory,
    summary and recent messages within the budget and reports what it used
    (`ContextReport`, sent with the `started` event);
@@ -480,6 +483,12 @@ must be granted by a capability; anything not granted is denied. See
   takes at most 2 048 tokens per text (less for models trained with a
   shorter context, e.g. 512 for multilingual-e5; longer texts then fail to
   index). No query/passage prefixes are added.
+- Similarity cuts are measured for BGE-M3 only (ADR 0009: unrelated facts
+  score up to 0.61, median 0.39; floors 0.52 for search and 0.55 for recall,
+  margin 0.10 below the best hit). Other embedding models keep the earlier,
+  unmeasured floors (0.35 / 0.50) with the same margin. Facts the model
+  places close to the query (e.g. two allergies, two appointments) still
+  match; weaker relevant matches below the floor are found only by words.
 - Vector search is brute force in memory (fine for tens of thousands of
   items).
 - The memory database is not encrypted at rest.
