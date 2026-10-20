@@ -31,6 +31,20 @@ const ICONS = {
     'M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6',
   ],
   monitor: ['M3 4h18v12H3z', 'M8 20h8M12 16v4'],
+  brain: [
+    'M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3h1V4z',
+    'M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-3 3h-1V4z',
+    'M10 9H8M14 9h2M10 15H8M14 15h2',
+  ],
+  plus: ['M12 5v14M5 12h14'],
+  pin: ['M9 3h6l-1 6 3 3H7l3-3z', 'M12 12v9'],
+  edit: ['M4 20h4L19 9l-4-4L4 16z', 'M13 7l4 4'],
+  search: ['M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z', 'M16 16l5 5'],
+  download: ['M12 4v11', 'M7 10l5 5 5-5', 'M4 20h16'],
+  upload: ['M12 20V9', 'M7 14l5-5 5 5', 'M4 4h16'],
+  clock: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M12 7v5l3 2'],
+  folder: ['M3 6h6l2 2h10v11H3z'],
+  ghost: ['M5 20V10a7 7 0 0 1 14 0v10l-2.5-2-2.5 2-2-2-2 2-2.5-2z', 'M9.5 10h.01M14.5 10h.01'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICONS;

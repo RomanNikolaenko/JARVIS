@@ -1,0 +1,128 @@
+<jv-hud-panel [heading]="editingId() ? 'Edit fact' : 'New fact'">
+  <div class="form">
+    <label class="field">
+      <span class="field-label">What should JARVIS remember?</span>
+      <textarea
+        rows="3"
+        placeholder="e.g. I prefer short answers with code examples in TypeScript."
+        [attr.maxlength]="maxLength"
+        [value]="content()"
+        (input)="content.set(valueOf($event))"
+      ></textarea>
+    </label>
+    <div class="toolbar">
+      <label class="field">
+        <span class="field-label">Applies to</span>
+        <select (change)="projectId.set(valueOf($event) || null)">
+          <option value="" [selected]="projectId() === null">All conversations</option>
+          @for (project of store.projects(); track project.id) {
+            <option [value]="project.id" [selected]="project.id === projectId()">
+              Project: {{ project.name }}
+            </option>
+          }
+        </select>
+      </label>
+      <label class="check">
+        <input type="checkbox" [checked]="pinned()" (change)="pinned.set(checkedOf($event))" />
+        <span>Always include (pinned)</span>
+      </label>
+      <span class="grow"></span>
+      @if (editingId()) {
+        <button type="button" class="ghost" (click)="reset()">Cancel</button>
+      }
+      <button type="button" class="primary" [disabled]="!canSave()" (click)="save()">
+        <jv-icon name="check" [size]="15" />
+        {{ editingId() ? 'Save changes' : 'Remember' }}
+      </button>
+    </div>
+    <p class="hint">
+      <jv-icon name="shield" [size]="14" />
+      Pinned facts go into every request; others only when they are relevant. Facts are sent to
+      local models only, unless you allow sharing memory with cloud models.
+    </p>
+  </div>
+</jv-hud-panel>
+
+<jv-hud-panel heading="Facts">
+  <div class="toolbar">
+    <input
+      class="grow"
+      type="search"
+      placeholder="Filter facts"
+      aria-label="Filter facts"
+      [value]="filter()"
+      (input)="filter.set(valueOf($event))"
+    />
+    <select aria-label="Scope" (change)="scope.set(valueOf($event))">
+      <option value="all">All</option>
+      <option value="global">Global</option>
+      @for (project of store.projects(); track project.id) {
+        <option [value]="project.id">{{ project.name }}</option>
+      }
+    </select>
+  </div>
+  <ul class="list">
+    @for (fact of visible(); track fact.id) {
+      <li class="row" [class.editing]="fact.id === editingId()">
+        <div class="row-main">
+          <div class="row-text">{{ fact.content }}</div>
+          <div class="row-meta">
+            @if (fact.pinned) {
+              <span class="chip accent"><jv-icon name="pin" [size]="11" /> pinned</span>
+            }
+            <span class="chip">{{ projectName(fact.projectId) }}</span>
+            <span>{{ sourceLabel(fact) }}</span>
+            <span>· {{ formatDate(fact.updatedAtMs) }}</span>
+          </div>
+        </div>
+        @if (confirmDeleteId() === fact.id) {
+          <div class="confirm">
+            <span>Forget this fact?</span>
+            <button type="button" class="danger small" (click)="remove(fact)">Forget</button>
+            <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">
+              Cancel
+            </button>
+          </div>
+        } @else {
+          <div class="actions">
+            <button
+              type="button"
+              class="ghost small"
+              [title]="fact.pinned ? 'Unpin' : 'Pin: always include'"
+              [attr.aria-label]="fact.pinned ? 'Unpin' : 'Pin'"
+              (click)="store.togglePinned(fact)"
+            >
+              <jv-icon name="pin" [size]="13" />
+            </button>
+            <button
+              type="button"
+              class="ghost small"
+              title="Edit"
+              aria-label="Edit"
+              (click)="edit(fact)"
+            >
+              <jv-icon name="edit" [size]="13" />
+            </button>
+            <button
+              type="button"
+              class="ghost small"
+              title="Forget"
+              aria-label="Forget"
+              (click)="confirmDeleteId.set(fact.id)"
+            >
+              <jv-icon name="trash" [size]="13" />
+            </button>
+          </div>
+        }
+      </li>
+    } @empty {
+      <li class="empty">
+        @if (store.facts().length) {
+          No facts match the filter.
+        } @else {
+          No facts yet. Add one above, or use “Remember” on a chat message.
+        }
+      </li>
+    }
+  </ul>
+</jv-hud-panel>

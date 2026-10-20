@@ -14,5 +14,6 @@ earlier one instead of editing it.
 | [0006](0006-http-ai-providers.md) | HTTP AI providers and URL-based privacy classification | Accepted |
 | [0007](0007-model-routing.md) | Model routing by task category | Accepted |
 | [0008](0008-embedded-llama-runtime.md) | Embedded runtime: supervised llama.cpp server | Accepted |
+| [0009](0009-local-memory.md) | Local memory: SQLite storage, Memory Engine and Context Manager | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.

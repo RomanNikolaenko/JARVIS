@@ -3,22 +3,27 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 3 — Embedded runtime.** JARVIS chats with local models
-> served by **Ollama**, any **OpenAI-compatible** server (LM Studio, llama.cpp
-> server, vLLM, …) or its own **embedded llama.cpp runtime** (verified
-> install, GGUF import and verified downloads), with streaming, cancellation,
-> Markdown and per-task model routing. Not yet: API keys / cloud providers,
-> memory, agents, voice. See [ROADMAP.md](ROADMAP.md).
+> **Status: Phase 4 — Memory.** JARVIS chats with local models served by
+> **Ollama**, any **OpenAI-compatible** server (LM Studio, llama.cpp server,
+> vLLM, …) or its own **embedded llama.cpp runtime**, and remembers:
+> saved conversations, facts, projects and an action history in a local
+> SQLite database, with full-text and semantic search and a context manager
+> that fits the relevant parts into the model's window. Not yet: API keys /
+> cloud providers, agents, voice. See [ROADMAP.md](ROADMAP.md).
 
 ## What works today
 
 - Desktop app (Tauri 2 + Angular 22) with a dark HUD-style UI:
-  Dashboard, Chat (Markdown, code highlighting, stop), Models, Event log,
-  Settings.
+  Dashboard, Chat (history, Markdown, code highlighting, stop), Models,
+  Runtime, Memory, Event log, Settings.
 - Local AI: Ollama and OpenAI-compatible servers, auto-detected on their
   default ports; add servers on the Models screen with a connection test.
 - Model routing per task (general, reasoning, coding, vision, embeddings,
   tool calling), automatic or explicit; cloud hosts blocked unless allowed.
+- Memory: conversation history (saved or temporary chats), facts you ask
+  JARVIS to remember, projects with instructions, an action history, search
+  by words and meaning, export/import, delete anything; per-model context
+  budgets with automatic summaries of long conversations.
 - Embedded runtime (Runtime screen): install an official llama.cpp build
   (CPU/Vulkan) after explicit approval, import GGUF files or download
   verified models, start/stop a model with memory checks, GPU offload and

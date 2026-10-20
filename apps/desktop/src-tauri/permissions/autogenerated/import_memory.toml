@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-memory"
+description = "Enables the import_memory command without any pre-configured scope."
+commands.allow = ["import_memory"]
+
+[[permission]]
+identifier = "deny-import-memory"
+description = "Denies the import_memory command without any pre-configured scope."
+commands.deny = ["import_memory"]

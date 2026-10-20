@@ -1,18 +1,21 @@
 [package]
 name = "jarvis-core"
-description = "JARVIS core: composition root of the domain layer (configuration, health, chat orchestration)."
+description = "JARVIS core: composition root of the domain layer (configuration, health, chat orchestration, memory)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 futures.workspace = true
 jarvis-ai.workspace = true
 jarvis-events.workspace = true
+jarvis-memory.workspace = true
 jarvis-platform.workspace = true
 jarvis-runtime.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
 tokio-util.workspace = true
@@ -23,8 +26,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 jarvis-runtime = { workspace = true, features = ["test-support"] }
-async-trait.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 

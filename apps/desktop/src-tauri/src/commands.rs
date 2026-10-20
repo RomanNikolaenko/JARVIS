@@ -7,13 +7,12 @@
 
 use jarvis_ai::ProviderConfig;
 use jarvis_core::{
-    AppInfo, ChatStartRequest, ChatStreamEvent, ErrorPayload, HealthReport, ProviderModels,
-    ProviderTestResult, RouteResolution, Settings, SinkClosed, UiErrorReport,
+    AppInfo, ErrorPayload, HealthReport, ProviderModels, ProviderTestResult, RouteResolution,
+    Settings, UiErrorReport,
 };
 use jarvis_events::SystemEvent;
 use jarvis_platform::{PlatformInfo, SystemMetrics};
 use tauri::State;
-use tauri::ipc::Channel;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -88,18 +87,6 @@ pub async fn test_ai_provider(
     config: ProviderConfig,
 ) -> CommandResult<ProviderTestResult> {
     Ok(state.core().test_provider(config).await?)
-}
-
-/// Starts a chat request and streams [`ChatStreamEvent`]s through `on_event`.
-/// Returns the request id, which can be passed to [`cancel_chat`].
-#[tauri::command]
-pub async fn start_chat(
-    state: State<'_, AppState>,
-    request: ChatStartRequest,
-    on_event: Channel<ChatStreamEvent>,
-) -> CommandResult<Uuid> {
-    let sink = move |event: ChatStreamEvent| on_event.send(event).map_err(|_| SinkClosed);
-    Ok(state.core().chat().start(request, sink).await?)
 }
 
 /// Returns `false` if the request is not running (already finished or unknown).

@@ -17,7 +17,15 @@ describe('App shell', () => {
     const links = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('.nav-link'),
     ).map((a) => a.textContent?.trim());
-    expect(links).toEqual(['Dashboard', 'Chat', 'Models', 'Runtime', 'Event log', 'Settings']);
+    expect(links).toEqual([
+      'Dashboard',
+      'Chat',
+      'Models',
+      'Runtime',
+      'Memory',
+      'Event log',
+      'Settings',
+    ]);
   });
 
   it('shows an offline banner when the core is unreachable', async () => {

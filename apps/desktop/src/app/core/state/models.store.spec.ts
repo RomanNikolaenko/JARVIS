@@ -8,6 +8,7 @@ import type {
 
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ModelsStore, supportsCategory } from './models.store';
+import { SETTINGS } from '../../testing/settings.fixture';
 import { SettingsStore } from './settings.store';
 
 const CHAT: ModelCapabilities = {
@@ -35,43 +36,6 @@ function provider(id: string, kind: 'diagnostic' | 'localServer', error: string 
     error,
   } satisfies ProviderModels;
 }
-
-const SETTINGS = {
-  schemaVersion: 1,
-  general: { assistantLanguage: 'uk' },
-  interface: { reducedMotion: false },
-  ai: {
-    providers: [
-      {
-        id: 'ollama',
-        backend: 'ollama',
-        displayName: 'Ollama',
-        baseUrl: 'http://127.0.0.1:11434',
-        enabled: true,
-      },
-    ],
-    routing: {
-      general: { providerId: 'ollama', model: 'x' },
-      reasoning: null,
-      coding: null,
-      vision: null,
-      embeddings: null,
-      toolCalling: null,
-    },
-    requestTimeoutSecs: 300,
-    idleTimeoutSecs: 120,
-  },
-  runtime: {
-    contextSize: 4096,
-    threads: null,
-    gpuOffload: 'auto',
-    gpuLayers: 0,
-    autostartModel: null,
-    startupTimeoutSecs: 180,
-  },
-  privacy: { allowCloudProviders: false },
-  logging: { level: 'info' },
-} satisfies Settings;
 
 describe('ModelsStore', () => {
   let api: {

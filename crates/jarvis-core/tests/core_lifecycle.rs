@@ -166,7 +166,13 @@ async fn initialization_creates_directories_and_reports_health() {
     assert!(info.config_file.ends_with("config.toml"));
 
     let report = test.core.health().await;
-    assert_eq!(report.components.len(), 6);
+    assert_eq!(report.components.len(), 7);
+    let memory = report
+        .components
+        .iter()
+        .find(|c| c.id == "memory")
+        .expect("memory component");
+    assert_eq!(memory.status, HealthStatus::Healthy, "{}", memory.message);
     let ai = report
         .components
         .iter()

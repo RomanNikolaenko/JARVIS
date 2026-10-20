@@ -12,9 +12,11 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use jarvis_ai::{
     AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatRole, FinishReason,
-    GenerationOptions, ModelCapabilities, ModelInfo, ProviderId, ProviderRegistry, TokenUsage,
+    GenerationOptions, ModelCapabilities, ModelInfo, ProviderDescriptor, ProviderId,
+    ProviderRegistry, TokenUsage,
 };
 use jarvis_events::{EventBus, EventCategory, EventLevel};
+use jarvis_memory::ContextReport;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
@@ -60,6 +62,12 @@ pub enum ChatStreamEvent {
         request_id: Uuid,
         provider_id: ProviderId,
         model: String,
+        /// Conversation the reply belongs to (conversation turns only).
+        conversation_id: Option<Uuid>,
+        /// Id the reply will be saved under (conversation turns only).
+        message_id: Option<Uuid>,
+        /// How the context was built (conversation turns only).
+        context: Option<ContextReport>,
     },
     Delta {
         text: String,
@@ -124,10 +132,31 @@ pub struct ChatService {
 }
 
 /// Provider, model and capabilities chosen for a request.
-struct Resolved {
-    provider: Arc<dyn AiProvider>,
-    model: String,
-    capabilities: ModelCapabilities,
+pub(crate) struct ResolvedModel {
+    pub provider: Arc<dyn AiProvider>,
+    pub descriptor: ProviderDescriptor,
+    pub model: String,
+    pub capabilities: ModelCapabilities,
+    /// Context window the provider reports for the model, if any.
+    pub context_window: Option<u32>,
+}
+
+/// A reserved slot among the concurrent requests. Dropping it without
+/// launching releases the slot.
+pub(crate) struct Reservation {
+    request_id: Uuid,
+    token: CancellationToken,
+    guard: ActiveGuard,
+}
+
+/// A request ready to run.
+pub(crate) struct PreparedChat {
+    pub model: ResolvedModel,
+    pub messages: Vec<ChatMessage>,
+    pub options: GenerationOptions,
+    pub conversation_id: Option<Uuid>,
+    pub message_id: Option<Uuid>,
+    pub context: Option<ContextReport>,
 }
 
 impl ChatService {
@@ -158,53 +187,78 @@ impl ChatService {
     ) -> Result<Uuid, CoreError> {
         validate_request(&request)?;
         let settings = self.config.current();
-
-        let resolved = self.resolve(&request, &settings).await.inspect_err(|err| {
-            if err.code() == ErrorCode::PermissionDenied {
-                self.events.warning(
-                    EventCategory::Security,
-                    format!("Blocked a chat request: {err}"),
-                );
-            }
-        })?;
-        let descriptor = resolved.provider.descriptor().clone();
-        if !resolved.capabilities.chat {
-            return Err(AiError::Unsupported {
-                provider: descriptor.id,
-                operation: "chat",
-            }
-            .into());
-        }
-
-        let token = self.shutdown.child_token();
-        let request_id = Uuid::new_v4();
-        {
-            let mut active = lock(&self.active);
-            if active.len() >= MAX_CONCURRENT_CHATS {
-                return Err(CoreError::LimitExceeded(format!(
-                    "At most {MAX_CONCURRENT_CHATS} chat requests can run at the same time"
-                )));
-            }
-            active.insert(request_id, token.clone());
-        }
-        let guard = ActiveGuard {
-            active: Arc::clone(&self.active),
-            request_id,
-        };
-
-        let job = ChatJob {
-            request_id,
-            provider: resolved.provider,
-            provider_id: descriptor.id,
-            streaming: resolved.capabilities.streaming,
-            request: ChatRequest {
-                model: resolved.model,
+        let model = self
+            .resolve_model(
+                request.provider_id.as_ref(),
+                request.model.as_deref(),
+                &settings,
+            )
+            .await?;
+        let reservation = self.reserve()?;
+        Ok(self.launch(
+            reservation,
+            PreparedChat {
+                model,
                 messages: request.messages,
                 options: GenerationOptions {
                     temperature: request.temperature,
                     max_output_tokens: request.max_output_tokens,
                 },
+                conversation_id: None,
+                message_id: None,
+                context: None,
             },
+            sink,
+        ))
+    }
+
+    /// Reserves one of the concurrent request slots.
+    pub(crate) fn reserve(&self) -> Result<Reservation, CoreError> {
+        let token = self.shutdown.child_token();
+        let request_id = Uuid::new_v4();
+        let mut active = lock(&self.active);
+        if active.len() >= MAX_CONCURRENT_CHATS {
+            return Err(CoreError::LimitExceeded(format!(
+                "At most {MAX_CONCURRENT_CHATS} chat requests can run at the same time"
+            )));
+        }
+        active.insert(request_id, token.clone());
+        Ok(Reservation {
+            request_id,
+            token,
+            guard: ActiveGuard {
+                active: Arc::clone(&self.active),
+                request_id,
+            },
+        })
+    }
+
+    /// Runs a prepared request in the background; events go to `sink`.
+    pub(crate) fn launch(
+        &self,
+        reservation: Reservation,
+        prepared: PreparedChat,
+        sink: impl ChatEventSink,
+    ) -> Uuid {
+        let settings = self.config.current();
+        let Reservation {
+            request_id,
+            token,
+            guard,
+        } = reservation;
+        let job = ChatJob {
+            request_id,
+            provider: prepared.model.provider,
+            provider_id: prepared.model.descriptor.id,
+            streaming: prepared.model.capabilities.streaming,
+            request: ChatRequest {
+                model: prepared.model.model,
+                messages: prepared.messages,
+                options: prepared.options,
+            },
+            conversation_id: prepared.conversation_id,
+            message_id: prepared.message_id,
+            context: prepared.context,
             total_timeout: Duration::from_secs(u64::from(settings.ai.request_timeout_secs)),
             idle_timeout: Duration::from_secs(u64::from(settings.ai.idle_timeout_secs)),
             events: self.events.clone(),
@@ -213,7 +267,7 @@ impl ChatService {
             let _guard = guard;
             job.run(token, sink).await;
         });
-        Ok(request_id)
+        request_id
     }
 
     /// Requests cancellation. Returns `false` if the request is not running.
@@ -237,29 +291,67 @@ impl ChatService {
         self.shutdown.cancel();
     }
 
+    /// Chooses a chat-capable provider and model; blocked choices are
+    /// reported as security events.
+    pub(crate) async fn resolve_model(
+        &self,
+        provider_id: Option<&ProviderId>,
+        model: Option<&str>,
+        settings: &Settings,
+    ) -> Result<ResolvedModel, CoreError> {
+        let resolved = self
+            .resolve(provider_id, model, settings)
+            .await
+            .inspect_err(|err| {
+                if err.code() == ErrorCode::PermissionDenied {
+                    self.events.warning(
+                        EventCategory::Security,
+                        format!("Blocked a chat request: {err}"),
+                    );
+                }
+            })?;
+        if !resolved.capabilities.chat {
+            return Err(AiError::Unsupported {
+                provider: resolved.descriptor.id,
+                operation: "chat",
+            }
+            .into());
+        }
+        Ok(resolved)
+    }
+
     /// Chooses provider and model: an explicit pair is used as is (after the
     /// privacy check, before any network call); otherwise the catalog and the
     /// model router decide.
     async fn resolve(
         &self,
-        request: &ChatStartRequest,
+        provider_id: Option<&ProviderId>,
+        model: Option<&str>,
         settings: &Settings,
-    ) -> Result<Resolved, CoreError> {
+    ) -> Result<ResolvedModel, CoreError> {
         let allow_cloud = settings.privacy.allow_cloud_providers;
 
-        if let (Some(provider_id), Some(model)) = (&request.provider_id, &request.model) {
+        if let (Some(provider_id), Some(model)) = (provider_id, model) {
             let provider = self.registry.get(provider_id)?;
             routing::check_privacy(provider.descriptor(), allow_cloud)?;
             let capabilities = provider.capabilities(model).await?;
-            return Ok(Resolved {
+            let catalog = self.catalog.get(&self.registry, false).await;
+            let context_window = catalog
+                .iter()
+                .find(|p| p.provider.id == *provider_id)
+                .and_then(|p| p.models.iter().find(|m| m.id == model))
+                .and_then(|m| m.context_window);
+            return Ok(ResolvedModel {
+                descriptor: provider.descriptor().clone(),
                 provider,
-                model: model.clone(),
+                model: model.to_owned(),
                 capabilities,
+                context_window,
             });
         }
 
         let catalog = self.catalog.get(&self.registry, false).await;
-        let (provider_id, model) = match (&request.provider_id, &request.model) {
+        let (provider_id, model) = match (provider_id, model) {
             (Some(provider_id), _) => first_chat_model(&catalog, provider_id, allow_cloud)?,
             (None, Some(model)) => find_model(&catalog, model, allow_cloud)?,
             (None, None) => {
@@ -272,10 +364,13 @@ impl ChatService {
                 (selection.provider.id, selection.model)
             }
         };
-        Ok(Resolved {
-            provider: self.registry.get(&provider_id)?,
+        let provider = self.registry.get(&provider_id)?;
+        Ok(ResolvedModel {
+            descriptor: provider.descriptor().clone(),
+            provider,
             model: model.id,
             capabilities: model.capabilities,
+            context_window: model.context_window,
         })
     }
 }
@@ -392,6 +487,9 @@ struct ChatJob {
     provider_id: ProviderId,
     streaming: bool,
     request: ChatRequest,
+    conversation_id: Option<Uuid>,
+    message_id: Option<Uuid>,
+    context: Option<ContextReport>,
     total_timeout: Duration,
     idle_timeout: Duration,
     events: EventBus,
@@ -406,6 +504,9 @@ impl ChatJob {
                 request_id: self.request_id,
                 provider_id: self.provider_id.clone(),
                 model: self.request.model.clone(),
+                conversation_id: self.conversation_id,
+                message_id: self.message_id,
+                context: self.context.clone(),
             })
             .is_err()
         {

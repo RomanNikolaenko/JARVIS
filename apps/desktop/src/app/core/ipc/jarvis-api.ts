@@ -2,8 +2,20 @@ import { Injectable, inject } from '@angular/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type {
   AppInfo,
-  ChatStartRequest,
+  ChatTurnRequest,
+  Conversation,
+  ConversationDetail,
+  ConversationPatch,
   CuratedModel,
+  Episode,
+  Fact,
+  FactInput,
+  MemoryStatus,
+  Project,
+  ProjectInput,
+  SearchHit,
+  SearchQuery,
+  TransferReport,
   HardwareInfo,
   LocalModel,
   ModelDownloadRequest,
@@ -84,12 +96,16 @@ export class JarvisApi {
   }
 
   /**
-   * Starts a streamed chat. Events may arrive before the returned promise
-   * resolves; the `started` event carries the request id as well.
+   * Sends a message in a conversation; the core builds the context and saves
+   * both sides. Events may arrive before the returned promise resolves; the
+   * `started` event carries the request id as well.
    */
-  startChat(request: ChatStartRequest, onEvent: (event: ChatStreamEvent) => void): Promise<string> {
+  sendMessage(
+    request: ChatTurnRequest,
+    onEvent: (event: ChatStreamEvent) => void,
+  ): Promise<string> {
     const channel = this.bridge.channel<ChatStreamEvent>(onEvent);
-    return this.bridge.invoke('start_chat', { request, onEvent: channel });
+    return this.bridge.invoke('send_message', { request, onEvent: channel });
   }
 
   cancelChat(requestId: string): Promise<boolean> {
@@ -152,6 +168,83 @@ export class JarvisApi {
 
   stopLocalModel(): Promise<void> {
     return this.bridge.invoke('stop_local_model');
+  }
+
+  // ---- Memory ----
+
+  listConversations(query?: string): Promise<Conversation[]> {
+    return this.bridge.invoke('list_conversations', { query: query ?? null, limit: null });
+  }
+
+  getConversation(id: string): Promise<ConversationDetail> {
+    return this.bridge.invoke('get_conversation', { id });
+  }
+
+  createConversation(projectId: string | null, temporary: boolean): Promise<Conversation> {
+    return this.bridge.invoke('create_conversation', { projectId, temporary });
+  }
+
+  updateConversation(id: string, patch: ConversationPatch): Promise<Conversation> {
+    return this.bridge.invoke('update_conversation', { id, patch });
+  }
+
+  deleteConversation(id: string): Promise<void> {
+    return this.bridge.invoke('delete_conversation', { id });
+  }
+
+  listFacts(): Promise<Fact[]> {
+    return this.bridge.invoke('list_facts');
+  }
+
+  saveFact(input: FactInput): Promise<Fact> {
+    return this.bridge.invoke('save_fact', { input });
+  }
+
+  deleteFact(id: string): Promise<void> {
+    return this.bridge.invoke('delete_fact', { id });
+  }
+
+  listProjects(): Promise<Project[]> {
+    return this.bridge.invoke('list_projects');
+  }
+
+  saveProject(input: ProjectInput): Promise<Project> {
+    return this.bridge.invoke('save_project', { input });
+  }
+
+  deleteProject(id: string): Promise<void> {
+    return this.bridge.invoke('delete_project', { id });
+  }
+
+  listEpisodes(limit: number, beforeMs: number | null): Promise<Episode[]> {
+    return this.bridge.invoke('list_episodes', { limit, beforeMs });
+  }
+
+  clearEpisodes(): Promise<number> {
+    return this.bridge.invoke('clear_episodes');
+  }
+
+  searchMemory(query: SearchQuery): Promise<SearchHit[]> {
+    return this.bridge.invoke('search_memory', { query });
+  }
+
+  getMemoryStatus(): Promise<MemoryStatus> {
+    return this.bridge.invoke('get_memory_status');
+  }
+
+  /** Opens a save dialog in the core; `null` when the user cancelled. */
+  exportMemory(): Promise<TransferReport | null> {
+    return this.bridge.invoke('export_memory');
+  }
+
+  /** Opens a file dialog in the core; `null` when the user cancelled. */
+  importMemory(): Promise<TransferReport | null> {
+    return this.bridge.invoke('import_memory');
+  }
+
+  /** Deletes all saved memory; `confirmation` must be the agreed phrase. */
+  clearMemory(confirmation: string): Promise<void> {
+    return this.bridge.invoke('clear_memory', { confirmation });
   }
 
   reportUiError(report: UiErrorReport): Promise<void> {

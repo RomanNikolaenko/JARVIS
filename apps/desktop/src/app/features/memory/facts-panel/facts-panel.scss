@@ -1,0 +1,8 @@
+.row.editing {
+  border-left: 2px solid var(--jv-accent);
+  padding-left: 10px;
+}
+
+.toolbar .field select {
+  min-width: 220px;
+}

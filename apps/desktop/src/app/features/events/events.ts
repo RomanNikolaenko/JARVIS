@@ -26,6 +26,7 @@ export class Events {
     'health',
     'ai',
     'runtime',
+    'memory',
     'chat',
     'security',
     'platform',

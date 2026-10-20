@@ -134,6 +134,11 @@ button {
   &.ghost {
     background: transparent;
   }
+
+  &.small {
+    padding: 3px 9px;
+    font-size: 12px;
+  }
 }
 
 a:focus-visible {

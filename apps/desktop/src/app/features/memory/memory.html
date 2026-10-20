@@ -1,0 +1,72 @@
+<header class="page-header">
+  <div>
+    <h1 class="title">Memory</h1>
+    <p class="subtitle">
+      What JARVIS remembers, kept in a local database on this computer.
+      @if (summary()) {
+        <span class="dim">{{ summary() }}</span>
+      }
+    </p>
+  </div>
+</header>
+
+@if (store.status(); as status) {
+  @if (!status.available) {
+    <p class="banner error" role="alert">
+      <jv-icon name="warning" [size]="16" />
+      The memory database is unavailable, so only temporary chats work: {{ status.error }}
+    </p>
+  } @else if (!status.savingEnabled) {
+    <p class="banner">
+      <jv-icon name="shield" [size]="16" />
+      Saving is off: new chats are temporary and nothing new is remembered. Turn it on under
+      <button type="button" class="link" (click)="tab.set('data')">Data &amp; settings</button>.
+    </p>
+  }
+}
+@if (store.error(); as error) {
+  <p class="banner error" role="alert">
+    <jv-icon name="warning" [size]="16" />
+    {{ error.message }}
+  </p>
+}
+
+<nav class="tabs" role="tablist" aria-label="Memory sections">
+  @for (item of tabs; track item.id) {
+    <button
+      type="button"
+      role="tab"
+      class="tab"
+      [class.active]="tab() === item.id"
+      [attr.aria-selected]="tab() === item.id"
+      (click)="tab.set(item.id)"
+    >
+      <jv-icon [name]="item.icon" [size]="15" />
+      {{ item.label }}
+    </button>
+  }
+  <a class="to-chat" routerLink="/chat">
+    <jv-icon name="chat" [size]="15" />
+    Open chat
+  </a>
+</nav>
+
+<div role="tabpanel" class="panel">
+  @switch (tab()) {
+    @case ('facts') {
+      <jv-facts-panel />
+    }
+    @case ('projects') {
+      <jv-projects-panel />
+    }
+    @case ('history') {
+      <jv-history-panel />
+    }
+    @case ('search') {
+      <jv-search-panel />
+    }
+    @case ('data') {
+      <jv-data-panel />
+    }
+  }
+</div>

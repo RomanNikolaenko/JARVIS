@@ -36,6 +36,12 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 | The local model server listens on 127.0.0.1 with a random per-launch API key passed in the environment, not on the command line (enforcement checked after start-up), runs without a console window, is stopped on exit and cleaned up after crashes only if the pid still runs the recorded executable. | `jarvis-runtime` |
 | Model files: GGUF headers parsed with strict bounds; downloads only from Hugging Face over HTTPS, pinned to a commit and SHA-256 verified; JARVIS deletes a model file only on request and only inside its own models folder (checked on canonical paths, not trusted from the index); files imported from elsewhere are never deleted. | `jarvis-runtime::gguf`, `::download`, `::library` |
 | File pickers run in Rust; the WebView gets no file system or dialog permissions and cannot pass arbitrary paths. | `runtime_commands.rs` |
+| Memory stays on this computer in one SQLite file (`memory/jarvis.db`, mode 0600 in a 0700 directory on Unix). Deleted items are overwritten (`secure_delete`), deleting everything also compacts the file. The database is **not encrypted at rest**. | `jarvis-storage` |
+| Schema migrations are versioned and checksummed; a database from a newer build or with a changed migration is refused, a backup is written before migrating existing data, a damaged file is reported and never replaced. | `jarvis-storage::migrations` |
+| Saving can be turned off (nothing is written; chats are temporary); temporary chats are never written. Saved memory (facts, excerpts of other conversations, texts to embed) is sent only to on-device/LAN models unless the user allows sharing with cloud models. Memory is given to the model as information, not instructions. | `jarvis-core::memory` |
+| Deleting all memory requires a fixed confirmation phrase in the IPC call, sent only after the user typed a confirmation word; conversations and facts are deleted individually with inline confirmation. | `memory_commands.rs`, Memory screen |
+| Memory import accepts only the JARVIS export format and version, checks sizes (≤ 256 MB, item counts) and field lengths, never overwrites existing items and runs in one transaction. Export and import files are chosen in native dialogs in Rust. | `jarvis-memory::export`, `memory_commands.rs` |
+| The action history stores what JARVIS did (events), never message text, and is pruned after the retention period. | `jarvis-core::memory` |
 | Microphone, camera and screen are not accessed at all. | — |
 
 Known trade-off: the *Test connection* action on the Models screen lets the
@@ -58,6 +64,7 @@ window only.
   timeout limits (Phase 5).
 - Visible indicators and explicit consent for microphone, camera and screen
   capture (Phase 6).
+- Encryption of the memory database at rest with a key in the OS keychain.
 - Signed installers and updates (Phase 8).
 
 Process isolation/sandboxing of tools is **not** implemented; do not assume

@@ -83,6 +83,11 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "get_runtime_status",
     "get_hardware_info",
     "list_curated_models",
+    "list_conversations",
+    "list_facts",
+    "list_projects",
+    "list_episodes",
+    "get_memory_status",
 ];
 
 #[test]
@@ -110,9 +115,22 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "remove_model",
         "start_local_model",
         "stop_local_model",
-        "start_chat",
+        "send_message",
         "cancel_chat",
         "report_ui_error",
+        "get_conversation",
+        "create_conversation",
+        "update_conversation",
+        "delete_conversation",
+        "save_fact",
+        "delete_fact",
+        "save_project",
+        "delete_project",
+        "clear_episodes",
+        "search_memory",
+        "export_memory",
+        "import_memory",
+        "clear_memory",
     ]);
     for cmd in all {
         let result = invoke(&h.other, cmd, json!({}));
@@ -141,7 +159,9 @@ fn health_report_lists_components() {
         .iter()
         .filter_map(|c| c["id"].as_str())
         .collect();
-    for expected in ["config", "storage", "events", "platform", "ai", "runtime"] {
+    for expected in [
+        "config", "storage", "events", "platform", "ai", "runtime", "memory",
+    ] {
         assert!(ids.contains(&expected), "missing component {expected}");
     }
     // Only the diagnostic provider is registered.
@@ -205,28 +225,46 @@ fn recent_events_include_startup() {
     );
 }
 
+fn turn(conversation_id: &Value, content: &str) -> Value {
+    json!({
+        "request": {
+            "conversationId": conversation_id,
+            "content": content,
+            "providerId": null,
+            "model": null,
+            "temperature": null,
+            "maxOutputTokens": null
+        },
+        "onEvent": "__CHANNEL__:1"
+    })
+}
+
 #[test]
-fn chat_can_be_started_and_unknown_requests_are_not_cancelled() {
+fn messages_are_sent_in_saved_conversations() {
     let h = harness();
-    let request_id = invoke(
+    let conversation = invoke(
         &h.main,
-        "start_chat",
-        json!({
-            "request": {
-                "providerId": null,
-                "model": null,
-                "messages": [{ "role": "user", "content": "hello" }],
-                "temperature": null,
-                "maxOutputTokens": null
-            },
-            "onEvent": "__CHANNEL__:1"
-        }),
+        "create_conversation",
+        json!({ "projectId": null, "temporary": false }),
     )
-    .expect("start chat");
+    .expect("create conversation");
+    assert_eq!(conversation["temporary"], false);
+    let request_id =
+        invoke(&h.main, "send_message", turn(&conversation["id"], "hello")).expect("send");
     assert!(
         request_id.as_str().is_some_and(|id| id.len() == 36),
         "{request_id}"
     );
+    let detail = invoke(
+        &h.main,
+        "get_conversation",
+        json!({ "id": conversation["id"] }),
+    )
+    .expect("detail");
+    assert_eq!(detail["messages"][0]["content"], "hello");
+    assert_eq!(detail["conversation"]["title"], "hello");
+    let listed = invoke(&h.main, "list_conversations", json!({ "query": "hello" })).expect("list");
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
 
     let cancelled = invoke(
         &h.main,
@@ -240,22 +278,95 @@ fn chat_can_be_started_and_unknown_requests_are_not_cancelled() {
 #[test]
 fn invalid_chat_requests_return_validation_errors() {
     let h = harness();
+    let conversation = invoke(
+        &h.main,
+        "create_conversation",
+        json!({ "projectId": null, "temporary": true }),
+    )
+    .expect("create");
+    let error = invoke(&h.main, "send_message", turn(&conversation["id"], "   "))
+        .expect_err("empty message");
+    assert_eq!(error["code"], "validation");
     let error = invoke(
         &h.main,
-        "start_chat",
-        json!({
-            "request": {
-                "providerId": null,
-                "model": null,
-                "messages": [],
-                "temperature": null,
-                "maxOutputTokens": null
-            },
-            "onEvent": "__CHANNEL__:2"
-        }),
+        "send_message",
+        turn(&json!("00000000-0000-4000-8000-000000000000"), "hi"),
     )
-    .expect_err("empty chat");
+    .expect_err("unknown conversation");
+    assert_eq!(error["code"], "notFound");
+}
+
+#[test]
+fn facts_projects_and_search() {
+    let h = harness();
+    let project = invoke(
+        &h.main,
+        "save_project",
+        json!({ "input": { "id": null, "name": "Atlas", "description": "", "instructions": "Be brief." } }),
+    )
+    .expect("project");
+    let fact = invoke(
+        &h.main,
+        "save_fact",
+        json!({ "input": {
+            "id": null,
+            "content": "The Atlas deadline is Friday.",
+            "projectId": project["id"],
+            "pinned": true,
+            "sourceConversationId": null
+        }}),
+    )
+    .expect("fact");
+    assert_eq!(fact["source"], "user");
+    let facts = invoke(&h.main, "list_facts", json!({})).expect("facts");
+    assert_eq!(facts.as_array().map(Vec::len), Some(1));
+    let hits = invoke(
+        &h.main,
+        "search_memory",
+        json!({ "query": { "text": "deadline", "kinds": [], "limit": 10 } }),
+    )
+    .expect("search");
+    assert_eq!(hits[0]["kind"], "fact");
+    let status = invoke(&h.main, "get_memory_status", json!({})).expect("status");
+    assert_eq!(status["available"], true);
+    assert_eq!(status["counts"]["facts"], 1);
+    assert_eq!(status["embedding"]["state"], "unavailable");
+
+    let error = invoke(&h.main, "save_fact", json!({ "input": {
+        "id": null, "content": "", "projectId": null, "pinned": false, "sourceConversationId": null
+    }}))
+    .expect_err("empty fact");
     assert_eq!(error["code"], "validation");
+
+    invoke(&h.main, "delete_fact", json!({ "id": fact["id"] })).expect("delete fact");
+    invoke(&h.main, "delete_project", json!({ "id": project["id"] })).expect("delete project");
+    let error = invoke(&h.main, "delete_fact", json!({ "id": fact["id"] })).expect_err("gone");
+    assert_eq!(error["code"], "notFound");
+}
+
+#[test]
+fn clearing_memory_needs_the_confirmation_phrase() {
+    let h = harness();
+    invoke(&h.main, "save_fact", json!({ "input": {
+        "id": null, "content": "keep me", "projectId": null, "pinned": false, "sourceConversationId": null
+    }}))
+    .expect("fact");
+    let error = invoke(&h.main, "clear_memory", json!({ "confirmation": "yes" }))
+        .expect_err("wrong phrase");
+    assert_eq!(error["code"], "validation");
+    let status = invoke(&h.main, "get_memory_status", json!({})).expect("status");
+    assert_eq!(status["counts"]["facts"], 1, "nothing was deleted");
+
+    invoke(
+        &h.main,
+        "clear_memory",
+        json!({ "confirmation": crate::memory_commands::CLEAR_CONFIRMATION }),
+    )
+    .expect("clear");
+    let status = invoke(&h.main, "get_memory_status", json!({})).expect("status");
+    assert_eq!(status["counts"]["facts"], 0);
+    let removed = invoke(&h.main, "clear_episodes", json!({})).expect("clear episodes");
+    assert!(removed.as_u64().is_some());
 }
 
 #[test]

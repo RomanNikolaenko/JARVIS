@@ -43,6 +43,7 @@ export class SettingsPage {
       validators: [Validators.required, Validators.min(5), Validators.max(600)],
     }),
     allowCloudProviders: new FormControl(false, { nonNullable: true }),
+    shareMemoryWithCloud: new FormControl(false, { nonNullable: true }),
     logLevel: new FormControl<LogLevel>('info', { nonNullable: true }),
   });
 
@@ -74,7 +75,11 @@ export class SettingsPage {
         requestTimeoutSecs: value.requestTimeoutSecs,
         idleTimeoutSecs: value.idleTimeoutSecs,
       },
-      privacy: { ...current.privacy, allowCloudProviders: value.allowCloudProviders },
+      privacy: {
+        ...current.privacy,
+        allowCloudProviders: value.allowCloudProviders,
+        shareMemoryWithCloud: value.shareMemoryWithCloud,
+      },
       logging: { ...current.logging, level: value.logLevel },
     };
 
@@ -100,6 +105,7 @@ function toFormValue(settings: Settings) {
     requestTimeoutSecs: ai.requestTimeoutSecs,
     idleTimeoutSecs: ai.idleTimeoutSecs,
     allowCloudProviders: settings.privacy.allowCloudProviders,
+    shareMemoryWithCloud: settings.privacy.shareMemoryWithCloud,
     logLevel: settings.logging.level,
   };
 }

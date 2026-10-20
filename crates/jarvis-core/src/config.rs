@@ -16,7 +16,7 @@ use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
 
 use crate::error::CoreError;
-use crate::routing::ModelRouting;
+use crate::routing::{ModelRef, ModelRouting};
 
 /// Version of the settings schema written by this build.
 pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
@@ -38,6 +38,7 @@ pub struct Settings {
     pub ai: AiSettings,
     /// Embedded llama.cpp runtime.
     pub runtime: RuntimeSettings,
+    pub memory: MemorySettings,
     pub privacy: PrivacySettings,
     pub logging: LoggingSettings,
 }
@@ -50,9 +51,87 @@ impl Default for Settings {
             interface: InterfaceSettings::default(),
             ai: AiSettings::default(),
             runtime: RuntimeSettings::default(),
+            memory: MemorySettings::default(),
             privacy: PrivacySettings::default(),
             logging: LoggingSettings::default(),
         }
+    }
+}
+
+pub const MIN_CONTEXT_LIMIT_TOKENS: u32 = 1024;
+pub const MAX_CONTEXT_LIMIT_TOKENS: u32 = 1_048_576;
+pub const MAX_EPISODE_RETENTION_DAYS: u32 = 3650;
+
+/// Long-term memory and context management.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export_to = "core.ts")]
+pub struct MemorySettings {
+    /// Save conversations, facts and the action history. When off, new
+    /// chats are temporary and nothing is written to disk.
+    pub enabled: bool,
+    /// Add pinned and relevant facts to requests.
+    pub use_facts: bool,
+    /// Add excerpts of earlier conversations to requests.
+    pub recall_conversations: bool,
+    /// Summarize the older part of long conversations with the chat model.
+    pub auto_summarize: bool,
+    /// Model for semantic search; unset picks a local model that supports
+    /// embeddings. Without one, search is text-only.
+    pub embedding_model: Option<ModelRef>,
+    /// Upper bound for the context window of a request, in tokens; unset
+    /// uses the model's window.
+    pub context_limit_tokens: Option<u32>,
+    /// Days to keep the action history (0 keeps it forever).
+    pub episode_retention_days: u32,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            use_facts: true,
+            recall_conversations: true,
+            auto_summarize: true,
+            embedding_model: None,
+            context_limit_tokens: None,
+            episode_retention_days: 90,
+        }
+    }
+}
+
+impl MemorySettings {
+    fn problems(&self, providers: &[ProviderConfig]) -> Vec<String> {
+        let mut problems = Vec::new();
+        if let Some(limit) = self.context_limit_tokens
+            && !(MIN_CONTEXT_LIMIT_TOKENS..=MAX_CONTEXT_LIMIT_TOKENS).contains(&limit)
+        {
+            problems.push(format!(
+                "memory.contextLimitTokens must be between {MIN_CONTEXT_LIMIT_TOKENS} and {MAX_CONTEXT_LIMIT_TOKENS}"
+            ));
+        }
+        if self.episode_retention_days > MAX_EPISODE_RETENTION_DAYS {
+            problems.push(format!(
+                "memory.episodeRetentionDays must be at most {MAX_EPISODE_RETENTION_DAYS}"
+            ));
+        }
+        if let Some(model_ref) = &self.embedding_model {
+            let known = is_reserved_provider_id(model_ref.provider_id.as_str())
+                || providers.iter().any(|p| p.id == model_ref.provider_id);
+            if !known {
+                problems.push(format!(
+                    "memory.embeddingModel: unknown provider \"{}\"",
+                    model_ref.provider_id
+                ));
+            }
+            let model = model_ref.model.trim();
+            if model.is_empty() || model.len() > MAX_MODEL_ID_LEN {
+                problems.push(format!(
+                    "memory.embeddingModel: model id must be 1..={MAX_MODEL_ID_LEN} characters"
+                ));
+            }
+        }
+        problems
     }
 }
 
@@ -114,6 +193,10 @@ pub struct PrivacySettings {
     /// Whether conversation data may be sent to third-party cloud providers.
     /// Off by default (local first).
     pub allow_cloud_providers: bool,
+    /// Whether saved memory (facts, excerpts of other conversations,
+    /// embeddings) may be sent to cloud providers. Off by default; the
+    /// current conversation itself goes wherever the chat goes.
+    pub share_memory_with_cloud: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -177,6 +260,7 @@ impl Settings {
         validate_providers(&ai.providers, &mut problems);
         validate_routing(&ai.routing, &ai.providers, &mut problems);
         problems.extend(self.runtime.problems());
+        problems.extend(self.memory.problems(&ai.providers));
 
         if problems.is_empty() {
             Ok(())

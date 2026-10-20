@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-fact"
+description = "Enables the save_fact command without any pre-configured scope."
+commands.allow = ["save_fact"]
+
+[[permission]]
+identifier = "deny-save-fact"
+description = "Denies the save_fact command without any pre-configured scope."
+commands.deny = ["save_fact"]

@@ -1,0 +1,51 @@
+<jv-hud-panel heading="Action history">
+  <div panelActions class="toolbar">
+    <button type="button" class="ghost small" (click)="store.loadEpisodes()">
+      <jv-icon name="refresh" [size]="13" />
+      Refresh
+    </button>
+    @if (confirmClear()) {
+      <span class="confirm">
+        Delete the whole history?
+        <button type="button" class="danger small" (click)="clear()">Delete</button>
+        <button type="button" class="ghost small" (click)="confirmClear.set(false)">Cancel</button>
+      </span>
+    } @else {
+      <button
+        type="button"
+        class="ghost small"
+        [disabled]="!store.episodes().length"
+        (click)="confirmClear.set(true)"
+      >
+        <jv-icon name="trash" [size]="13" />
+        Clear
+      </button>
+    }
+  </div>
+  <p class="hint">
+    <jv-icon name="clock" [size]="14" />
+    What JARVIS did: started models, answered, saved or deleted memory. Message text is not kept
+    here. Older entries are removed after the retention period set under Data &amp; settings.
+  </p>
+  <ul class="list">
+    @for (episode of store.episodes(); track episode.id) {
+      <li class="row">
+        <span class="time mono">{{ time(episode.occurredAtMs) }}</span>
+        <span
+          class="chip"
+          [class.warning]="episode.level === 'warning'"
+          [class.danger]="episode.level === 'error'"
+          >{{ episode.category }}</span
+        >
+        <span class="row-main row-text">{{ episode.summary }}</span>
+      </li>
+    } @empty {
+      <li class="empty">No actions recorded yet.</li>
+    }
+  </ul>
+  @if (store.episodes().length && !store.episodesComplete()) {
+    <div class="form-actions">
+      <button type="button" class="ghost" (click)="store.loadEpisodes(true)">Load more</button>
+    </div>
+  }
+</jv-hud-panel>

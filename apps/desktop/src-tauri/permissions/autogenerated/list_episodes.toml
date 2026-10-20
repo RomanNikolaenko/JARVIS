@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-episodes"
+description = "Enables the list_episodes command without any pre-configured scope."
+commands.allow = ["list_episodes"]
+
+[[permission]]
+identifier = "deny-list-episodes"
+description = "Denies the list_episodes command without any pre-configured scope."
+commands.deny = ["list_episodes"]

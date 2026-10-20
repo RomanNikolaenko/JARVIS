@@ -43,16 +43,29 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   detection, safe stop, orphan cleanup, memory check, GPU layers, threads,
   context size, autostart (opt-in)
 - ✅ Runtime screen; embedded provider in routing and health
-- ⬜ Verification with the real llama.cpp engine on Windows and Linux
+- ✅ Verified with the real llama.cpp engine on Windows (b11739, Qwen2.5 3B)
+- ⬜ Verification with the real engine on Linux
 - ⬜ CUDA build installation (needs the separate CUDA runtime archive)
 - ⬜ Embedding model serving (second server instance with `--embedding`)
 
-## Phase 4 — Memory ⬜
+## Phase 4 — Memory 🟡
 
-`jarvis-storage` (SQLite + migrations), conversation history, memory layers
-(working, conversation, semantic, project, episodic), FTS + vector search,
-Context Manager (token budgets, summarization, compaction), export/import,
-"don't remember" mode.
+- ✅ `jarvis-storage`: SQLite (bundled, FTS5), versioned migrations with
+  checksums, downgrade protection, backups before migrating
+- ✅ Memory layers: working (pinned note + recent turns), conversation
+  (history + summaries), semantic (facts, pinned/relevant, per project),
+  project (instructions), episodic (action history)
+- ✅ Hybrid search: FTS5 + vector similarity (embeddings from a provider),
+  reciprocal rank fusion; text-only fallback
+- ✅ Context Manager: per-model token budgets, tiered context, compaction by
+  the serving model, reasoning stripped
+- ✅ Conversation history UI, temporary chats, Memory screen, export/import,
+  delete selected items or everything, "don't remember" mode, cloud sharing
+  opt-in
+- ⬜ Embedding model served by the embedded runtime (second llama.cpp
+  instance); until then semantic search needs Ollama or another provider
+- ⬜ Encryption at rest (key in the OS keychain)
+- ⬜ Automatic fact extraction (opt-in)
 
 ## Phase 5 — Tools and agents ⬜
 
@@ -78,6 +91,5 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Verify the embedded runtime with real llama.cpp builds and models, then
-Phase 4 (memory: SQLite, conversation history, context manager, semantic
-search). Open Phase 2 items: keychain-backed API keys and cloud providers.
+Embeddings in the embedded runtime, then Phase 5 (tools and agents). Open
+Phase 2 items: keychain-backed API keys and cloud providers.

@@ -1,0 +1,77 @@
+<jv-hud-panel heading="Search memory">
+  <div class="toolbar">
+    <input
+      class="grow"
+      type="search"
+      placeholder="What are you looking for?"
+      aria-label="Search text"
+      maxlength="500"
+      [value]="text()"
+      (input)="text.set(valueOf($event))"
+      (keydown.enter)="search()"
+    />
+    @for (kind of kinds; track kind.id) {
+      <label class="check">
+        <input
+          type="checkbox"
+          [checked]="selected().has(kind.id)"
+          (change)="toggle(kind.id, checkedOf($event))"
+        />
+        <span>{{ kind.label }}</span>
+      </label>
+    }
+    <button
+      type="button"
+      class="primary"
+      [disabled]="!text().trim() || !selected().size || store.busy()"
+      (click)="search()"
+    >
+      <jv-icon name="search" [size]="15" />
+      Search
+    </button>
+  </div>
+  @if (store.status()?.embedding?.state === 'unavailable') {
+    <p class="hint">
+      <jv-icon name="warning" [size]="14" />
+      Text search only: no embedding model is available for semantic search (see Data &amp;
+      settings).
+    </p>
+  }
+
+  @if (store.results(); as results) {
+    <ul class="list">
+      @for (hit of results; track hit.kind + hit.id) {
+        <li class="row">
+          <div class="row-main">
+            <div class="row-meta top">
+              <span class="chip">{{ label(hit) }}</span>
+              @if (hit.matchedText) {
+                <span class="chip">text</span>
+              }
+              @if (hit.matchedSemantic) {
+                <span class="chip accent">meaning</span>
+              }
+              <span>{{ formatDate(hit.createdAtMs) }}</span>
+            </div>
+            <div class="row-text">
+              <!-- Elements only: whitespace between them is dropped, text keeps its own. -->
+              @for (part of parts(hit.snippet); track $index) {
+                <span [class.match]="part.match">{{ part.text }}</span>
+              }
+            </div>
+          </div>
+          @if (hit.kind === 'message') {
+            <div class="actions">
+              <button type="button" class="ghost small" (click)="open(hit)">
+                <jv-icon name="chat" [size]="13" />
+                Open
+              </button>
+            </div>
+          }
+        </li>
+      } @empty {
+        <li class="empty">Nothing found.</li>
+      }
+    </ul>
+  }
+</jv-hud-panel>

@@ -45,3 +45,26 @@ export function formatClock(timestampMs: number): string {
     hour12: false,
   });
 }
+
+/** Token counts: `850`, `3.2k`. */
+export function formatTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`;
+}
+
+/** Time for today, otherwise the date (local time). */
+export function formatShortDate(timestampMs: number, now = Date.now()): string {
+  const date = new Date(timestampMs);
+  const today = new Date(now);
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+  });
+}

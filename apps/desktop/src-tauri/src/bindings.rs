@@ -6,8 +6,12 @@
 //! that crosses the IPC boundary must be reachable from one of these roots.
 
 use jarvis_ai::ProviderConfig;
+use jarvis_core::jarvis_memory::{
+    Conversation, ConversationDetail, ConversationPatch, Episode, Fact, FactInput, MemoryStatus,
+    Project, ProjectInput, SearchHit, SearchQuery, TransferReport,
+};
 use jarvis_core::{
-    AppInfo, ChatStartRequest, ChatStreamEvent, ErrorPayload, HealthReport, ProviderModels,
+    AppInfo, ChatStreamEvent, ChatTurnRequest, ErrorPayload, HealthReport, ProviderModels,
     ProviderTestResult, RouteResolution, Settings, UiErrorReport,
 };
 use jarvis_events::SystemEvent;
@@ -40,7 +44,7 @@ fn export_typescript_bindings() {
         RouteResolution,
         ProviderConfig,
         ProviderTestResult,
-        ChatStartRequest,
+        ChatTurnRequest,
         ChatStreamEvent,
         ErrorPayload,
         UiErrorReport,
@@ -49,5 +53,17 @@ fn export_typescript_bindings() {
         CuratedModel,
         ModelDownloadRequest,
         HardwareInfo,
+        Conversation,
+        ConversationDetail,
+        ConversationPatch,
+        Fact,
+        FactInput,
+        Project,
+        ProjectInput,
+        Episode,
+        SearchQuery,
+        SearchHit,
+        MemoryStatus,
+        TransferReport,
     );
 }

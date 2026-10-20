@@ -23,6 +23,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/runtime/runtime').then((m) => m.RuntimePage),
   },
   {
+    path: 'memory',
+    title: 'Memory · JARVIS',
+    loadComponent: () => import('./features/memory/memory').then((m) => m.MemoryPage),
+  },
+  {
     path: 'events',
     title: 'Event log · JARVIS',
     loadComponent: () => import('./features/events/events').then((m) => m.Events),

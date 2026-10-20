@@ -1,0 +1,159 @@
+// Styles shared by the panels of the Memory screen.
+
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+
+  .grow {
+    flex: 1;
+    min-width: 180px;
+  }
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--jv-border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-text {
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--jv-text-dim);
+}
+
+.actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--jv-border-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--jv-text-muted);
+
+  &.accent {
+    border-color: rgba(56, 189, 248, 0.45);
+    color: var(--jv-accent);
+  }
+  &.warning {
+    border-color: rgba(251, 191, 36, 0.45);
+    color: var(--jv-warning);
+  }
+  &.danger {
+    border-color: rgba(248, 113, 113, 0.45);
+    color: var(--jv-danger);
+  }
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  textarea {
+    resize: vertical;
+    line-height: 1.5;
+  }
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--jv-text-muted);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--jv-danger);
+}
+
+.empty {
+  padding: 18px 0;
+  font-size: 13px;
+  color: var(--jv-text-dim);
+  text-align: center;
+}
+
+.hint {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--jv-text-dim);
+}
+
+.dim {
+  color: var(--jv-text-dim);
+}
+
+.mono {
+  font-family: var(--jv-mono);
+}

@@ -118,6 +118,31 @@ pub(crate) async fn storage_health(dir: &std::path::Path) -> (HealthStatus, Stri
 
 /// Local runtime health. The runtime is optional, so "not installed" is
 /// healthy; a failed server is degraded.
+/// The memory database: open, and how much it holds.
+pub(crate) async fn memory_health(
+    memory: &jarvis_memory::MemoryEngine,
+    saving: bool,
+) -> (HealthStatus, String) {
+    if let Some(reason) = memory.unavailable_reason() {
+        return (
+            HealthStatus::Degraded,
+            format!("Unavailable, only temporary chats work: {reason}"),
+        );
+    }
+    match memory.counts().await {
+        Ok(counts) => (
+            HealthStatus::Healthy,
+            format!(
+                "{} conversations, {} facts{}",
+                counts.conversations,
+                counts.facts,
+                if saving { "" } else { " · saving off" }
+            ),
+        ),
+        Err(err) => (HealthStatus::Degraded, format!("Memory error: {err}")),
+    }
+}
+
 pub(crate) fn runtime_health(
     installed: bool,
     state: &jarvis_runtime::ServerState,

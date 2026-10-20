@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-memory"
+description = "Enables the export_memory command without any pre-configured scope."
+commands.allow = ["export_memory"]
+
+[[permission]]
+identifier = "deny-export-memory"
+description = "Denies the export_memory command without any pre-configured scope."
+commands.deny = ["export_memory"]

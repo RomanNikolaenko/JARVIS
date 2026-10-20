@@ -1,4 +1,5 @@
 use jarvis_ai::AiError;
+use jarvis_memory::{MemoryError, StorageError};
 use jarvis_runtime::RuntimeError;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -85,6 +86,9 @@ pub enum CoreError {
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
 
+    #[error(transparent)]
+    Memory(#[from] MemoryError),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -133,6 +137,22 @@ impl CoreError {
                 RuntimeError::Cancelled => ErrorCode::Cancelled,
                 RuntimeError::Io { .. } => ErrorCode::Io,
                 RuntimeError::Internal(_) => ErrorCode::Internal,
+            },
+            Self::Memory(err) => match err {
+                MemoryError::Storage(StorageError::Io { .. }) => ErrorCode::Io,
+                MemoryError::Storage(
+                    StorageError::Corrupt { .. }
+                    | StorageError::NewerSchema { .. }
+                    | StorageError::MigrationChanged { .. }
+                    | StorageError::MissingFts5,
+                )
+                | MemoryError::Unavailable(_)
+                | MemoryError::Embedding(_) => ErrorCode::Unavailable,
+                MemoryError::Storage(_) | MemoryError::Internal(_) => ErrorCode::Internal,
+                MemoryError::Disabled(_) => ErrorCode::PermissionDenied,
+                MemoryError::NotFound(_) => ErrorCode::NotFound,
+                MemoryError::Invalid(_) => ErrorCode::Validation,
+                MemoryError::MessageTooLong { .. } => ErrorCode::LimitExceeded,
             },
         }
     }

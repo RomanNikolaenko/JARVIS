@@ -1,7 +1,7 @@
 //! JARVIS core: the composition root of the domain layer.
 //!
 //! [`JarvisCore`] wires the subsystems (configuration, event bus, platform
-//! layer, AI providers, chat orchestration) and exposes a small, UI-agnostic
+//! layer, AI providers, chat orchestration, memory) and exposes a small, UI-agnostic
 //! API. It has no dependency on Tauri or any UI technology: the desktop shell
 //! is just one adapter on top of it.
 
@@ -10,6 +10,7 @@ pub mod chat;
 pub mod config;
 pub mod error;
 pub mod health;
+mod memory;
 pub mod routing;
 mod ui_errors;
 
@@ -22,6 +23,7 @@ use jarvis_ai::{
     ProviderConfig, ProviderFactory, ProviderRegistry,
 };
 use jarvis_events::{EventBus, EventCategory};
+use jarvis_memory::MemoryEngine;
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
 use jarvis_runtime::process::CommandFactory;
 use jarvis_runtime::{RuntimeManager, RuntimeOptions};
@@ -35,6 +37,8 @@ pub use chat::{ChatEventSink, ChatService, ChatStartRequest, ChatStreamEvent, Si
 pub use config::{ConfigSource, ConfigStore, Settings};
 pub use error::{CoreError, ErrorCode, ErrorPayload};
 pub use health::{ComponentHealth, HealthReport, HealthStatus};
+pub use jarvis_memory;
+pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
 
@@ -161,6 +165,8 @@ pub struct JarvisCore {
     catalog: Arc<ModelCatalog>,
     runtime: Arc<RuntimeManager>,
     chat: ChatService,
+    memory: Arc<MemoryEngine>,
+    memory_state: Arc<memory::MemoryState>,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
@@ -245,6 +251,25 @@ impl JarvisCore {
             format!("AI providers: {}", provider_names(&registry)),
         );
 
+        let memory =
+            Arc::new(MemoryEngine::open(paths.data_dir.join("memory").join("jarvis.db")).await);
+        match memory.unavailable_reason() {
+            Some(reason) => events.error(
+                EventCategory::Memory,
+                format!("Memory database unavailable, only temporary chats work: {reason}"),
+            ),
+            None => {
+                let counts = memory.counts().await.unwrap_or_default();
+                events.info(
+                    EventCategory::Memory,
+                    format!(
+                        "Memory: {} conversations, {} facts, {} projects",
+                        counts.conversations, counts.facts, counts.projects
+                    ),
+                )
+            }
+        };
+
         let catalog = Arc::new(ModelCatalog::default());
         let chat = ChatService::new(
             Arc::clone(&registry),
@@ -275,6 +300,8 @@ impl JarvisCore {
             catalog,
             runtime,
             chat,
+            memory,
+            memory_state: Arc::default(),
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
@@ -282,6 +309,7 @@ impl JarvisCore {
         });
         Self::watch_runtime_provider(&core);
         Self::autostart_runtime(&core);
+        Self::spawn_memory_tasks(&core);
         Ok(core)
     }
 
@@ -485,7 +513,8 @@ impl JarvisCore {
 
         let runtime_installed = self.runtime.binary().is_some();
         let runtime_state = self.runtime.server_state();
-        let (config, storage, events, platform, ai, runtime) = tokio::join!(
+        let saving = self.config.current().memory.enabled;
+        let (config, storage, events, platform, ai, runtime, memory) = tokio::join!(
             health::run_probe("config", "Configuration", health::PROBE_TIMEOUT, async {
                 health::config_health(&config_source)
             }),
@@ -516,9 +545,15 @@ impl JarvisCore {
             health::run_probe("runtime", "Local runtime", health::PROBE_TIMEOUT, async {
                 health::runtime_health(runtime_installed, &runtime_state)
             }),
+            health::run_probe(
+                "memory",
+                "Memory",
+                health::PROBE_TIMEOUT,
+                health::memory_health(&self.memory, saving)
+            ),
         );
 
-        let components = vec![config, storage, events, platform, ai, runtime];
+        let components = vec![config, storage, events, platform, ai, runtime, memory];
         HealthReport {
             status: HealthReport::aggregate(&components),
             version: self.version.clone(),
@@ -551,6 +586,8 @@ impl JarvisCore {
             .info(EventCategory::Lifecycle, "JARVIS core shutting down");
         self.chat.cancel_all();
         self.runtime.shutdown().await;
+        // Last: the action history records the steps above.
+        self.stop_memory_tasks().await;
     }
 }
 
@@ -606,7 +643,7 @@ async fn monitor_handle(cell: &MonitorCell) -> Result<Arc<SystemMonitor>, CoreEr
     .cloned()
 }
 
-fn unix_millis() -> u64 {
+pub(crate) fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))

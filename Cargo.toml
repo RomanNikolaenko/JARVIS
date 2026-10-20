@@ -5,6 +5,8 @@ members = [
     "crates/jarvis-platform",
     "crates/jarvis-ai",
     "crates/jarvis-runtime",
+    "crates/jarvis-storage",
+    "crates/jarvis-memory",
     "crates/jarvis-core",
     "apps/desktop/src-tauri",
 ]
@@ -21,7 +23,9 @@ jarvis-ai = { path = "crates/jarvis-ai" }
 jarvis-core = { path = "crates/jarvis-core" }
 jarvis-events = { path = "crates/jarvis-events" }
 jarvis-platform = { path = "crates/jarvis-platform" }
+jarvis-memory = { path = "crates/jarvis-memory" }
 jarvis-runtime = { path = "crates/jarvis-runtime" }
+jarvis-storage = { path = "crates/jarvis-storage" }
 
 # Async runtime and utilities
 async-trait = "0.1.89"
@@ -47,6 +51,9 @@ flate2 = "1.1"
 sha2 = "0.10"
 tar = "0.4.44"
 zip = { version = "9", default-features = false, features = ["deflate"] }
+
+# Local database (bundled SQLite with FTS5)
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Observability
 tracing = "0.1.41"

@@ -129,6 +129,26 @@ Developers can run the supervisor tests without llama.cpp: they start the
 test binary itself as a fake `llama-server`
 (`cargo test -p jarvis-runtime`).
 
+### Memory
+
+Conversations, facts, projects and the action history live in
+`memory/jarvis.db` (SQLite) in the local data folder; the **Memory** screen
+shows the path, size and contents.
+
+- **Semantic search** needs an embedding model. With Ollama:
+  `ollama pull nomic-embed-text` (or another embedding model); JARVIS picks
+  a local model that reports embeddings automatically, or choose one under
+  *Memory → Data & settings*. Without one, search and recall are text-only.
+- **Context size:** for the embedded runtime JARVIS plans with the context
+  size it started llama.cpp with; for Ollama with at most 4 096 tokens
+  (Ollama's default). *Context limit* lowers it further.
+- **Changing the schema:** add `crates/jarvis-storage/migrations/NNNN_name.sql`
+  and append it to `MIGRATIONS` in `migrations.rs`. Never edit a released
+  migration: databases record a checksum of every applied migration and
+  refuse to open if one changed.
+- Tests use in-memory or temporary databases (`cargo test -p jarvis-memory`,
+  `cargo test -p jarvis-core --test memory_turns`).
+
 ## Where JARVIS stores data
 
 | What | Windows | Linux |
@@ -136,6 +156,7 @@ test binary itself as a fake `llama-server`
 | Settings (`config.toml`) | `%APPDATA%\ai.jarvis.desktop\` | `~/.config/ai.jarvis.desktop/` |
 | Local data | `%LOCALAPPDATA%\ai.jarvis.desktop\` | `~/.local/share/ai.jarvis.desktop/` |
 | Runtime engine, models | `…\runtime\`, `…\models\` in local data | `runtime/`, `models/` in local data |
+| Memory database | `…\memory\jarvis.db` in local data | `memory/jarvis.db` in local data |
 | Logs (`jarvis.YYYY-MM-DD.log`) | `%LOCALAPPDATA%\ai.jarvis.desktop\logs\` | `~/.local/share/ai.jarvis.desktop/logs/` |
 
 The exact paths are shown on the Settings screen.

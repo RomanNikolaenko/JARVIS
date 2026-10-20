@@ -6,6 +6,7 @@
 
 mod commands;
 mod logging;
+mod memory_commands;
 mod runtime_commands;
 mod state;
 
@@ -41,7 +42,6 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::list_ai_models,
         commands::get_model_routes,
         commands::test_ai_provider,
-        commands::start_chat,
         commands::cancel_chat,
         commands::report_ui_error,
         runtime_commands::get_runtime_status,
@@ -57,6 +57,25 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         runtime_commands::remove_model,
         runtime_commands::start_local_model,
         runtime_commands::stop_local_model,
+        memory_commands::send_message,
+        memory_commands::list_conversations,
+        memory_commands::get_conversation,
+        memory_commands::create_conversation,
+        memory_commands::update_conversation,
+        memory_commands::delete_conversation,
+        memory_commands::list_facts,
+        memory_commands::save_fact,
+        memory_commands::delete_fact,
+        memory_commands::list_projects,
+        memory_commands::save_project,
+        memory_commands::delete_project,
+        memory_commands::list_episodes,
+        memory_commands::clear_episodes,
+        memory_commands::search_memory,
+        memory_commands::get_memory_status,
+        memory_commands::export_memory,
+        memory_commands::import_memory,
+        memory_commands::clear_memory,
     ])
 }
 

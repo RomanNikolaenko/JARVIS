@@ -1,0 +1,111 @@
+@if (editingId() !== null) {
+  <jv-hud-panel [heading]="editingId() ? 'Edit project' : 'New project'">
+    <div class="form">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input
+          [attr.maxlength]="limits.name"
+          [value]="name()"
+          (input)="name.set(valueOf($event))"
+        />
+      </label>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <textarea
+          rows="2"
+          [attr.maxlength]="limits.description"
+          [value]="description()"
+          (input)="description.set(valueOf($event))"
+        ></textarea>
+      </label>
+      <label class="field">
+        <span class="field-label">Instructions for JARVIS in this project</span>
+        <textarea
+          rows="5"
+          placeholder="e.g. The project is a TypeScript monorepo; answer with code that follows its conventions."
+          [attr.maxlength]="limits.instructions"
+          [value]="instructions()"
+          (input)="instructions.set(valueOf($event))"
+        ></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="ghost" (click)="cancel()">Cancel</button>
+        <button type="button" class="primary" [disabled]="!canSave()" (click)="save()">
+          <jv-icon name="check" [size]="15" />
+          Save project
+        </button>
+      </div>
+    </div>
+  </jv-hud-panel>
+}
+
+<jv-hud-panel heading="Projects">
+  <button panelActions type="button" class="small" (click)="create()">
+    <jv-icon name="plus" [size]="14" />
+    New project
+  </button>
+  <p class="hint">
+    <jv-icon name="folder" [size]="14" />
+    Chats in a project get its description, instructions and facts, and recall only other chats of
+    the same project.
+  </p>
+  <ul class="list">
+    @for (project of store.projects(); track project.id) {
+      <li class="row">
+        <div class="row-main">
+          <div class="row-text">
+            <strong>{{ project.name }}</strong>
+          </div>
+          @if (project.description) {
+            <div class="row-text dim">{{ project.description }}</div>
+          }
+          <div class="row-meta">
+            <span class="chip">{{ project.conversationCount }} chats</span>
+            <span class="chip">{{ project.factCount }} facts</span>
+            @if (project.instructions) {
+              <span class="chip accent">instructions</span>
+            }
+          </div>
+        </div>
+        @if (confirmDeleteId() === project.id) {
+          <div class="confirm">
+            <span>
+              Delete the project and its {{ project.factCount }} facts? Its chats are kept.
+            </span>
+            <button type="button" class="danger small" (click)="remove(project)">Delete</button>
+            <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">
+              Cancel
+            </button>
+          </div>
+        } @else {
+          <div class="actions">
+            <button type="button" class="ghost small" (click)="startChat(project)">
+              <jv-icon name="chat" [size]="13" />
+              Chat
+            </button>
+            <button
+              type="button"
+              class="ghost small"
+              title="Edit"
+              aria-label="Edit"
+              (click)="edit(project)"
+            >
+              <jv-icon name="edit" [size]="13" />
+            </button>
+            <button
+              type="button"
+              class="ghost small"
+              title="Delete"
+              aria-label="Delete"
+              (click)="confirmDeleteId.set(project.id)"
+            >
+              <jv-icon name="trash" [size]="13" />
+            </button>
+          </div>
+        }
+      </li>
+    } @empty {
+      <li class="empty">No projects yet.</li>
+    }
+  </ul>
+</jv-hud-panel>

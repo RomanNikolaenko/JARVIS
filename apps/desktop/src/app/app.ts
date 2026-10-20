@@ -43,6 +43,7 @@ export class App {
     { path: '/chat', label: 'Chat', icon: 'chat' },
     { path: '/models', label: 'Models', icon: 'spark' },
     { path: '/runtime', label: 'Runtime', icon: 'cpu' },
+    { path: '/memory', label: 'Memory', icon: 'brain' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];

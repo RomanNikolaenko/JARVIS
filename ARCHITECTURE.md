@@ -54,18 +54,27 @@ crates/
                               features, RAM, GPUs, Vulkan), process helpers
   jarvis-runtime/             RuntimeManager: llama.cpp installer, GGUF library,
                               verified downloads, supervised llama-server
+  jarvis-storage/             SQLite database (bundled, FTS5), versioned
+                              migrations with checksums and backups
+  jarvis-memory/              MemoryEngine (conversations, facts, projects,
+                              episodes, FTS + vector search, export/import),
+                              Context Manager (token budgets, compaction)
   jarvis-ai/                  AiProvider trait, ProviderRegistry, ProviderFactory,
                               Ollama + OpenAI-compatible HTTP providers,
                               EchoProvider, provider config + URL privacy class
   jarvis-core/                JarvisCore, Settings/ConfigStore, health checks,
-                              ChatService, model catalog + router, error codes
+                              ChatService, model catalog + router, memory
+                              integration (turns, embeddings, action history),
+                              error codes
 apps/desktop/
   src/                        Angular UI
     app/core/ipc/             TauriBridge (only user of @tauri-apps/api), JarvisApi
-    app/core/state/           signal stores (system, events, settings, chat)
+    app/core/state/           signal stores (system, events, settings, models,
+                              runtime, chat, memory)
     app/core/errors/          global error handler → core log
-    app/features/             dashboard, chat, models, runtime, events,
-                              settings (lazy)
+    app/features/             dashboard, chat (+ conversation list), models,
+                              runtime, memory (facts, projects, history, search,
+                              data), events, settings (lazy)
     app/shared/               HUD panel, AI core, icons, status badge, Markdown,
                               formatters
   src-tauri/                  Tauri 2 shell (crate jarvis-desktop)
@@ -76,9 +85,9 @@ docs/decisions/               Architecture Decision Records
 .github/workflows/ci.yml      Windows + Linux CI
 ```
 
-Crates that exist only on the roadmap (`jarvis-memory`, `jarvis-storage`,
-`jarvis-voice`, `jarvis-vision`, `jarvis-tools`, `jarvis-security`,
-`jarvis-agent`, `jarvis-sync`) are **not created yet**; they
+Crates that exist only on the roadmap (`jarvis-voice`, `jarvis-vision`,
+`jarvis-tools`, `jarvis-security`, `jarvis-agent`, `jarvis-sync`) are
+**not created yet**; they
 are added when their phase starts, so the tree never contains empty modules.
 
 ## 4. Components (implemented)
@@ -220,6 +229,42 @@ record, pid file) and `models/`.
 Every accepted request ends with exactly one `finished` (reason `stop`,
 `length` or `cancelled`) or `failed` event, unless the receiver disappears.
 
+### 4.3a Memory (`jarvis-storage`, `jarvis-memory`, `jarvis-core::memory`)
+
+See [ADR 0009](docs/decisions/0009-local-memory.md).
+
+| Layer | Stored as | Used for |
+| --- | --- | --- |
+| Working | pinned note per conversation + recent turns | every request of the conversation |
+| Conversation | `conversations`, `messages`, `summaries` | history, recall from other chats, compaction |
+| Semantic | `facts` (global or per project, pinned or not) | pinned facts always, others when relevant |
+| Project | `projects` (description, instructions) | injected into every chat of the project |
+| Episodic | `episodes` (actions from the event bus, no message text) | Memory screen, search |
+
+A conversation turn (`JarvisCore::send_message`):
+
+1. validates the message; refuses saved conversations while saving is off;
+   one turn at a time per conversation;
+2. resolves provider and model (same rules as 4.3) and the context window:
+   the running llama.cpp context for the embedded runtime, at most 4 096 for
+   Ollama, otherwise the reported window, capped by
+   `memory.contextLimitTokens`;
+3. retrieves pinned and relevant facts and excerpts of other conversations
+   of the same project scope — only for on-device/LAN models unless
+   `privacy.shareMemoryWithCloud` is on — with FTS5 and, when an embedding
+   model is available, vector similarity (reciprocal rank fusion);
+4. the Context Manager assembles system prompt, project, note, memory,
+   summary and recent messages within the budget and reports what it used
+   (`ContextReport`, sent with the `started` event);
+5. saves the user message, streams the reply through `ChatService`, saves
+   the reply (or the partial reply of a stopped request) when it ends;
+6. if older messages no longer fit, the same model writes a summary of the
+   oldest uncovered ones in the background.
+
+Background tasks: the indexer embeds new facts and messages (batches of 32,
+on change and every 60 s), the recorder writes actions to the history every
+5 s and on shutdown, the pruner removes actions older than the retention.
+
 ### 4.4 `jarvis-events` — event bus
 
 Typed `SystemEvent { id, timestampMs, level, category, message }`, published
@@ -270,7 +315,7 @@ notification instead of blocking publishers.
 | `list_ai_models` | `refresh?: boolean` | `ProviderModels[]` |
 | `get_model_routes` | – | `RouteResolution[]` |
 | `test_ai_provider` | `config: ProviderConfig` | `ProviderTestResult` |
-| `start_chat` | `request: ChatStartRequest`, `onEvent: Channel<ChatStreamEvent>` | request id |
+| `send_message` | `request: ChatTurnRequest`, `onEvent: Channel<ChatStreamEvent>` | request id |
 | `cancel_chat` | `requestId: string` | `boolean` |
 | `report_ui_error` | `report: UiErrorReport` | – |
 | `get_runtime_status` | – | `RuntimeStatus` |
@@ -284,6 +329,15 @@ notification instead of blocking publishers.
 | `cancel_download` | `id` | `boolean` |
 | `remove_model` | `id`, `deleteFile` | – |
 | `start_local_model` / `stop_local_model` | `modelId` / – | – |
+| `list_conversations` / `get_conversation` | `query?`, `limit?` / `id` | `Conversation[]` / `ConversationDetail` |
+| `create_conversation` / `update_conversation` / `delete_conversation` | `projectId?`, `temporary` / `id`, `patch` / `id` | `Conversation` / `Conversation` / – |
+| `list_facts` / `save_fact` / `delete_fact` | – / `input: FactInput` / `id` | `Fact[]` / `Fact` / – |
+| `list_projects` / `save_project` / `delete_project` | – / `input: ProjectInput` / `id` | `Project[]` / `Project` / – |
+| `list_episodes` / `clear_episodes` | `limit?`, `beforeMs?` / – | `Episode[]` / count |
+| `search_memory` | `query: SearchQuery` | `SearchHit[]` |
+| `get_memory_status` | – | `MemoryStatus` |
+| `export_memory` / `import_memory` | – (native dialogs in Rust) | `TransferReport \| null` |
+| `clear_memory` | `confirmation` (fixed phrase) | – |
 
 Event: `jarvis://system-event` → `SystemEvent`.
 
@@ -305,8 +359,15 @@ must be granted by a capability; anything not granted is denied. See
   dashboard only, paused while the window is hidden), `EventLogStore`
   (subscribe first, then load history, dedupe by id), `SettingsStore`,
   `ModelsStore` (providers, catalog, routes, provider tests), `ChatStore`
-  (streaming state machine `idle → connecting → streaming → idle`;
-  "Automatic" lets the core route).
+  (conversation list and the open chat; streaming state machine
+  `idle → connecting → streaming → idle`; "Automatic" lets the core route),
+  `MemoryStore` (facts, projects, action history, search, data).
+- **Chat** keeps a history of saved and temporary conversations (search,
+  rename, delete), a project and a pinned note per conversation, shows how
+  each reply's context was built and lets the user save a message as a fact.
+- **Memory screen**: facts (pin, scope, edit), projects (instructions),
+  action history, search with highlights, database status, memory settings,
+  export/import and deleting everything after typing a confirmation word.
 - **Models screen** (AI Model Manager): add/edit/enable/remove providers with
   a connection test, model list with capabilities and context length,
   per-category routing.
@@ -344,9 +405,13 @@ must be granted by a capability; anything not granted is denied. See
 - Capabilities of OpenAI-compatible models are inferred, not reported.
 - Tested against protocol mocks; compatibility with every server version is
   not guaranteed.
-- Conversations live in UI memory only; nothing is persisted (Phase 4).
-- The UI sends up to the last 40 messages as context; token-aware context
-  management arrives with the Memory Engine.
+- Token counts are estimated, not tokenized; the budget keeps a margin.
+- Semantic search needs an embedding model from a provider (e.g. Ollama with
+  an embedding model); the embedded runtime does not serve embeddings yet.
+- Vector search is brute force in memory (fine for tens of thousands of
+  items).
+- The memory database is not encrypted at rest.
+- Facts are saved explicitly; JARVIS does not extract them automatically.
 - UI text is English; the assistant language setting is stored but not used
   until real models and voice exist.
 - Linux builds are verified in CI only (not on the development machine).
@@ -356,8 +421,6 @@ must be granted by a capability; anything not granted is denied. See
 
 See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
-- `jarvis-storage` / `jarvis-memory`: SQLite with migrations, FTS, vector
-  search, layered memory, context manager.
 - `jarvis-security`: policy engine (capabilities, allowlists, scoped file
   access, approvals, audit log, OS keychain for secrets).
 - `jarvis-tools` / `jarvis-agent`: tool registry, planner/executor/verifier,

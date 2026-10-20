@@ -1,0 +1,222 @@
+<div class="columns">
+  <jv-hud-panel heading="Database">
+    @if (store.status(); as status) {
+      <dl class="facts-list">
+        <div>
+          <dt>State</dt>
+          <dd>
+            @if (status.available) {
+              <span class="chip accent">open</span>
+            } @else {
+              <span class="chip danger">unavailable</span>
+            }
+            @if (!status.savingEnabled) {
+              <span class="chip warning">saving off</span>
+            }
+          </dd>
+        </div>
+        <div>
+          <dt>File</dt>
+          <dd class="mono path">{{ status.databasePath ?? '—' }}</dd>
+        </div>
+        <div>
+          <dt>Size</dt>
+          <dd>{{ formatBytes(status.sizeBytes) }} · schema v{{ status.schemaVersion }}</dd>
+        </div>
+        <div>
+          <dt>Contents</dt>
+          <dd>
+            {{ status.counts.conversations }} conversations, {{ status.counts.messages }} messages,
+            {{ status.counts.facts }} facts, {{ status.counts.projects }} projects,
+            {{ status.counts.episodes }} actions
+          </dd>
+        </div>
+        <div>
+          <dt>Semantic search</dt>
+          <dd>
+            @switch (status.embedding.state) {
+              @case ('ready') {
+                <span class="chip accent">ready</span>
+              }
+              @case ('indexing') {
+                <span class="chip">indexing</span>
+              }
+              @default {
+                <span class="chip warning">text only</span>
+              }
+            }
+            @if (status.embedding.model) {
+              <span class="mono">{{ status.embedding.model }}</span>
+              · {{ status.embedding.indexed }} indexed, {{ status.embedding.pending }} pending
+            }
+            @if (status.embedding.detail) {
+              <div class="dim">{{ status.embedding.detail }}</div>
+            }
+          </dd>
+        </div>
+      </dl>
+    }
+    <p class="hint">
+      <jv-icon name="shield" [size]="14" />
+      Stored only on this computer, without encryption: it relies on your user account's protection.
+      Deleted items are overwritten in the database file.
+    </p>
+  </jv-hud-panel>
+
+  <jv-hud-panel heading="Export and import">
+    <p class="hint">
+      A JSON file with conversations, facts, projects and the action history. Importing adds what is
+      missing and skips what already exists.
+    </p>
+    <div class="form-actions start">
+      <button type="button" [disabled]="store.busy()" (click)="store.exportMemory()">
+        <jv-icon name="download" [size]="15" />
+        Export…
+      </button>
+      <button type="button" [disabled]="store.busy()" (click)="store.importMemory()">
+        <jv-icon name="upload" [size]="15" />
+        Import…
+      </button>
+    </div>
+    @if (store.lastTransfer(); as transfer) {
+      <p class="result">
+        <jv-icon name="check" [size]="14" />
+        {{ transfer.kind === 'export' ? 'Exported' : 'Imported' }}
+        {{ transfer.report.counts.conversations }} conversations,
+        {{ transfer.report.counts.facts }} facts, {{ transfer.report.counts.projects }} projects
+        @if (transfer.report.skipped) {
+          ({{ transfer.report.skipped }} already present)
+        }
+        <span class="mono path">{{ transfer.report.path }}</span>
+      </p>
+    }
+  </jv-hud-panel>
+</div>
+
+@if (form(); as memory) {
+  <jv-hud-panel heading="Memory settings">
+    <div class="form">
+      <label class="check">
+        <input
+          type="checkbox"
+          [checked]="memory.enabled"
+          (change)="update({ enabled: checkedOf($event) })"
+        />
+        <span>Save conversations, facts and the action history</span>
+      </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          [checked]="memory.useFacts"
+          (change)="update({ useFacts: checkedOf($event) })"
+        />
+        <span>Use facts in answers</span>
+      </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          [checked]="memory.recallConversations"
+          (change)="update({ recallConversations: checkedOf($event) })"
+        />
+        <span>Recall relevant parts of other conversations</span>
+      </label>
+      <label class="check">
+        <input
+          type="checkbox"
+          [checked]="memory.autoSummarize"
+          (change)="update({ autoSummarize: checkedOf($event) })"
+        />
+        <span>Summarize the older part of long conversations</span>
+      </label>
+      <div class="grid">
+        <label class="field">
+          <span class="field-label">Embedding model (semantic search)</span>
+          <select (change)="onEmbedding($event)">
+            <option [value]="automatic" [selected]="embeddingKey() === automatic">
+              Automatic: a local model that supports embeddings
+            </option>
+            @for (option of embeddingOptions(); track keyOf(option)) {
+              <option [value]="keyOf(option)" [selected]="keyOf(option) === embeddingKey()">
+                {{ option.provider.displayName }} — {{ option.model.displayName }}
+                {{ option.model.capabilities.embeddings ? '' : '(not reported as embedding)' }}
+              </option>
+            }
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Context limit (tokens)</span>
+          <input
+            type="number"
+            min="1024"
+            max="1048576"
+            step="512"
+            placeholder="model's window"
+            [value]="memory.contextLimitTokens ?? ''"
+            (input)="onContextLimit($event)"
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">Keep the action history (days, 0 = forever)</span>
+          <input
+            type="number"
+            min="0"
+            max="3650"
+            [value]="memory.episodeRetentionDays"
+            (input)="update({ episodeRetentionDays: +valueOf($event) })"
+          />
+        </label>
+      </div>
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        @if (shareWithCloud()) {
+          Memory may be sent to cloud models.
+        } @else {
+          Memory is sent to local models only.
+        }
+        Change it in <a routerLink="/settings">Settings → Privacy</a>.
+      </p>
+      @if (settingsError(); as error) {
+        <p class="error-text">{{ error.message }}</p>
+      }
+      <div class="form-actions">
+        @if (saved() && !dirty()) {
+          <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
+        }
+        <button type="button" class="ghost" [disabled]="!dirty()" (click)="discard()">
+          Discard
+        </button>
+        <button type="button" class="primary" [disabled]="!dirty() || saving()" (click)="save()">
+          Save
+        </button>
+      </div>
+    </div>
+  </jv-hud-panel>
+}
+
+<jv-hud-panel heading="Delete all memory" class="danger-zone">
+  <p class="hint">
+    <jv-icon name="warning" [size]="14" />
+    Deletes every saved conversation, fact, project and action from this computer. This cannot be
+    undone; export first if you may need it.
+  </p>
+  <div class="toolbar">
+    <label class="field">
+      <span class="field-label">Type {{ clearWord }} to confirm</span>
+      <input
+        aria-label="Confirmation"
+        autocomplete="off"
+        [value]="confirmation()"
+        (input)="confirmation.set(valueOf($event))"
+      />
+    </label>
+    <button
+      type="button"
+      class="danger"
+      [disabled]="confirmation() !== clearWord || store.busy()"
+      (click)="clearAll()"
+    >
+      <jv-icon name="trash" [size]="15" />
+      Delete all memory
+    </button>
+  </div>
+</jv-hud-panel>

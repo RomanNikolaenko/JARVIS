@@ -45,6 +45,7 @@ pub enum EventCategory {
     Health,
     Ai,
     Runtime,
+    Memory,
     Chat,
     Security,
     Platform,
