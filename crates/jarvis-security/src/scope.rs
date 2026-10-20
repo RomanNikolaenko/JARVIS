@@ -43,9 +43,11 @@ impl FileScope {
                 }
             })
             .collect();
+        // Resolved like the paths they are compared with, so short (8.3)
+        // names or links in the given form cannot make them miss.
         let protected = protected
             .into_iter()
-            .map(|dir| std::fs::canonicalize(&dir).map(simplify).unwrap_or(dir))
+            .map(|dir| canonical_with_missing_tail(&dir).unwrap_or(dir))
             .collect();
         Self { roots, protected }
     }
@@ -110,13 +112,30 @@ impl FileScope {
             return Err(ScopeError::NoWorkspace);
         }
         let shown = path.display().to_string();
-        if self.protected.iter().any(|dir| path.starts_with(dir)) {
+        if self.protected.iter().any(|dir| is_within(path, dir)) {
             return Err(ScopeError::Protected(shown));
         }
-        if !self.roots.iter().any(|root| path.starts_with(root)) {
+        if !self.roots.iter().any(|root| is_within(path, root)) {
             return Err(ScopeError::Outside(shown));
         }
         Ok(())
+    }
+}
+
+/// `path` is `dir` or inside it. Windows file names are case-insensitive:
+/// the part of a path that does not exist yet keeps the case it was given
+/// in, so `.JARVIS\x` must still match a protected `.jarvis`.
+fn is_within(path: &Path, dir: &Path) -> bool {
+    if cfg!(windows) {
+        let mut parts = path.components();
+        dir.components().all(|expected| {
+            parts.next().is_some_and(|part| {
+                part.as_os_str().to_string_lossy().to_lowercase()
+                    == expected.as_os_str().to_string_lossy().to_lowercase()
+            })
+        })
+    } else {
+        path.starts_with(dir)
     }
 }
 
@@ -254,6 +273,12 @@ mod tests {
         ));
         assert!(matches!(
             scope.resolve(".jarvis/state.json"),
+            Err(ScopeError::Protected(_))
+        ));
+        // Windows names ignore case, also in the part that does not exist.
+        #[cfg(windows)]
+        assert!(matches!(
+            scope.resolve(".JARVIS/state.json"),
             Err(ScopeError::Protected(_))
         ));
         assert!(matches!(scope.resolve("  "), Err(ScopeError::Invalid(_))));
