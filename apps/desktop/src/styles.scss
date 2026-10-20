@@ -9,19 +9,15 @@
   --jv-surface-2: #17212c;
   --jv-border: #1c2733;
   --jv-border-strong: #273646;
-
   --jv-text: #d6e2ed;
   --jv-text-muted: #8a9cae;
   --jv-text-dim: #5b6d7f;
-
   --jv-accent: #38bdf8;
   --jv-accent-2: #2dd4bf;
-  --jv-accent-glow: rgba(56, 189, 248, 0.35);
-
+  --jv-accent-glow: rgb(56 189 248 / 35%);
   --jv-success: #34d399;
   --jv-warning: #fbbf24;
   --jv-danger: #f87171;
-
   --jv-radius: 10px;
   --jv-radius-sm: 6px;
 
@@ -48,8 +44,7 @@ body {
 body {
   overflow: hidden;
   background:
-    radial-gradient(1200px 600px at 70% -10%, rgba(56, 189, 248, 0.06), transparent 60%),
-    var(--jv-bg);
+    radial-gradient(1200px 600px at 70% -10%, rgb(56 189 248 / 6%), transparent 60%), var(--jv-bg);
   color: var(--jv-text);
   font: 14px/1.45 var(--jv-font);
   -webkit-font-smoothing: antialiased;
@@ -75,7 +70,7 @@ textarea {
   &:focus-visible {
     outline: none;
     border-color: var(--jv-accent);
-    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+    box-shadow: 0 0 0 3px rgb(56 189 248 / 15%);
   }
 
   &:disabled {
@@ -116,18 +111,18 @@ button {
   }
 
   &.primary {
-    border-color: rgba(56, 189, 248, 0.55);
-    background: rgba(56, 189, 248, 0.14);
+    border-color: rgb(56 189 248 / 55%);
+    background: rgb(56 189 248 / 14%);
     color: var(--jv-accent);
 
     &:hover:not(:disabled) {
-      background: rgba(56, 189, 248, 0.22);
+      background: rgb(56 189 248 / 22%);
     }
   }
 
   &.danger {
-    border-color: rgba(248, 113, 113, 0.5);
-    background: rgba(248, 113, 113, 0.1);
+    border-color: rgb(248 113 113 / 50%);
+    background: rgb(248 113 113 / 10%);
     color: var(--jv-danger);
   }
 
@@ -147,7 +142,7 @@ a:focus-visible {
 }
 
 ::selection {
-  background: rgba(56, 189, 248, 0.3);
+  background: rgb(56 189 248 / 30%);
 }
 
 ::-webkit-scrollbar {

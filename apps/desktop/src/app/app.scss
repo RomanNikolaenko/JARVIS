@@ -76,8 +76,8 @@
 
   &.active {
     color: var(--jv-accent);
-    background: rgba(56, 189, 248, 0.08);
-    border-color: rgba(56, 189, 248, 0.25);
+    background: rgb(56 189 248 / 8%);
+    border-color: rgb(56 189 248 / 25%);
   }
 }
 
@@ -135,9 +135,9 @@
   gap: 10px;
   margin: 14px 24px 0;
   padding: 10px 14px;
-  border: 1px solid rgba(248, 113, 113, 0.4);
+  border: 1px solid rgb(248 113 113 / 40%);
   border-radius: var(--jv-radius-sm);
-  background: rgba(248, 113, 113, 0.08);
+  background: rgb(248 113 113 / 8%);
   color: var(--jv-danger);
   font-size: 13px;
 }

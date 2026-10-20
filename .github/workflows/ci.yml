@@ -20,7 +20,7 @@ env:
 
 jobs:
   frontend:
-    name: Frontend (format, test, build)
+    name: Frontend (format, lint, test, build)
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -34,6 +34,8 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm ci
       - run: npm run format:check
+      - run: npm run lint
+      - run: npm run lint:styles
       - run: npm run test:ci
       - run: npm run build
 

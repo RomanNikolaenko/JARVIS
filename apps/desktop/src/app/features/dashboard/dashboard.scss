@@ -9,43 +9,51 @@
   grid-column: 1 / span 5;
   grid-row: 1 / span 2;
 }
+
 .health {
   grid-column: 6 / span 4;
   grid-row: 1 / span 2;
 }
+
 .resources {
   grid-column: 10 / span 3;
   grid-row: 1;
 }
+
 .model {
   grid-column: 10 / span 3;
   grid-row: 2;
 }
+
 .events {
   grid-column: 1 / span 8;
   grid-row: 3 / span 2;
 }
+
 .voice {
   grid-column: 9 / span 4;
   grid-row: 3;
 }
+
 .platform {
   grid-column: 9 / span 4;
   grid-row: 4;
 }
 
-@media (max-width: 1280px) {
+@media (width <= 1280px) {
   .hero,
   .health,
   .events {
     grid-column: span 12;
   }
+
   .resources,
   .model,
   .voice,
   .platform {
     grid-column: span 6;
   }
+
   .hero,
   .health,
   .resources,
@@ -91,14 +99,14 @@
   gap: 8px;
   padding: 8px 16px;
   border-radius: var(--jv-radius-sm);
-  border: 1px solid rgba(56, 189, 248, 0.45);
-  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgb(56 189 248 / 45%);
+  background: rgb(56 189 248 / 10%);
   color: var(--jv-accent);
   text-decoration: none;
   font-size: 13px;
 
   &:hover {
-    background: rgba(56, 189, 248, 0.18);
+    background: rgb(56 189 248 / 18%);
   }
 }
 
@@ -112,6 +120,7 @@
 .component-list li {
   padding: 10px 0;
   border-bottom: 1px solid var(--jv-border);
+
   &:last-child {
     border-bottom: none;
   }
@@ -177,10 +186,12 @@
     justify-content: space-between;
     gap: 12px;
   }
+
   dt {
     font-size: 12px;
     color: var(--jv-text-dim);
   }
+
   dd {
     margin: 0;
     font-size: 12.5px;
@@ -193,6 +204,7 @@
   font-size: 16px;
   font-weight: 600;
 }
+
 .model-meta {
   margin-top: 4px;
   font-size: 12px;
@@ -238,6 +250,7 @@
   padding: 7px 0;
   font-size: 12.5px;
   border-bottom: 1px solid var(--jv-border);
+
   &:last-child {
     border-bottom: none;
   }
@@ -253,6 +266,7 @@
   font-size: 12px;
   color: var(--jv-accent);
   text-decoration: none;
+
   &:hover {
     text-decoration: underline;
   }
@@ -263,9 +277,11 @@
   font-size: 12.5px;
   color: var(--jv-text-dim);
 }
+
 .mono {
   font-family: var(--jv-mono);
 }
+
 .dim {
   color: var(--jv-text-dim);
 }

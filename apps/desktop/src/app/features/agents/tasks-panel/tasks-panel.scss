@@ -5,7 +5,7 @@
   align-items: start;
 }
 
-@media (max-width: 1000px) {
+@media (width <= 1000px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -81,8 +81,8 @@
   text-align: left;
 
   &.active {
-    border-color: rgba(56, 189, 248, 0.45);
-    background: rgba(56, 189, 248, 0.06);
+    border-color: rgb(56 189 248 / 45%);
+    background: rgb(56 189 248 / 6%);
   }
 }
 
@@ -154,11 +154,12 @@
   overflow-wrap: anywhere;
 
   &.warning {
-    border-color: rgba(251, 191, 36, 0.4);
+    border-color: rgb(251 191 36 / 40%);
     color: var(--jv-warning);
   }
+
   &.danger {
-    border-color: rgba(248, 113, 113, 0.4);
+    border-color: rgb(248 113 113 / 40%);
     color: var(--jv-danger);
   }
 }
@@ -180,7 +181,7 @@
 }
 
 .result {
-  border-color: rgba(52, 211, 153, 0.35);
+  border-color: rgb(52 211 153 / 35%);
 }
 
 .result-label {

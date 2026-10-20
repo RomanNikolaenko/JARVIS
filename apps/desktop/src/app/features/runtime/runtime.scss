@@ -31,7 +31,7 @@
   grid-column: 1 / -1;
 }
 
-@media (max-width: 1240px) {
+@media (width <= 1240px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -94,9 +94,9 @@
 .release {
   margin-top: 14px;
   padding: 12px 14px;
-  border: 1px solid rgba(56, 189, 248, 0.35);
+  border: 1px solid rgb(56 189 248 / 35%);
   border-radius: var(--jv-radius-sm);
-  background: rgba(56, 189, 248, 0.05);
+  background: rgb(56 189 248 / 5%);
 }
 
 .release-title {
@@ -150,7 +150,7 @@
   margin-right: 4px;
   padding: 0 6px;
   border-radius: 999px;
-  background: rgba(56, 189, 248, 0.1);
+  background: rgb(56 189 248 / 10%);
   font: 500 10.5px/1.7 var(--jv-mono);
   color: var(--jv-accent);
 }

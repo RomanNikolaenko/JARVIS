@@ -48,8 +48,13 @@ npm start
 # frontend unit tests (Vitest)
 npm run test:ci
 
-# frontend formatting
+# frontend formatting (Prettier; .prettierignore lists what it skips)
 npm run format:check   # or: npm run format
+
+# frontend lint: ESLint with angular-eslint (TypeScript + templates, incl.
+# accessibility; OnPush and standalone enforced) and Stylelint for SCSS
+npm run lint
+npm run lint:styles    # or: npx stylelint "src/**/*.scss" --fix
 
 # release binary without installers
 npm run tauri -- build --no-bundle

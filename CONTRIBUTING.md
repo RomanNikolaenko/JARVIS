@@ -15,6 +15,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace            # also regenerates packages/shared-types
 cd apps/desktop
 npm run format:check
+npm run lint
+npm run lint:styles
 npm run test:ci
 npm run build
 ```

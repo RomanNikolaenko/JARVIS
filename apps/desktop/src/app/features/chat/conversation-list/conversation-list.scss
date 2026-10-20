@@ -30,13 +30,14 @@
     border: none;
     background: transparent;
     padding: 6px 0;
+
     &:focus {
       outline: none;
     }
   }
 
   &:focus-within {
-    border-color: rgba(56, 189, 248, 0.5);
+    border-color: rgb(56 189 248 / 50%);
   }
 }
 
@@ -60,7 +61,8 @@
     }
 
     &.active {
-      background: rgba(56, 189, 248, 0.1);
+      background: rgb(56 189 248 / 10%);
+
       .conversation-title {
         color: var(--jv-accent);
       }

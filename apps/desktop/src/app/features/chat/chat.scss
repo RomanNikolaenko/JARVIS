@@ -64,7 +64,7 @@
 
   button.on {
     color: var(--jv-accent);
-    border-color: rgba(56, 189, 248, 0.45);
+    border-color: rgb(56 189 248 / 45%);
   }
 }
 
@@ -85,10 +85,11 @@
   }
 }
 
-@media (max-width: 1240px) {
+@media (width <= 1240px) {
   .chat-layout {
     grid-template-columns: 210px minmax(0, 1fr);
   }
+
   .select span {
     display: none;
   }
@@ -106,7 +107,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  border: 1px solid rgb(56 189 248 / 30%);
   border-radius: var(--jv-radius-sm);
   background: var(--jv-bg-elevated);
 
@@ -198,16 +199,16 @@ button.link {
   display: flex;
   gap: 10px;
   padding: 10px 14px;
-  border: 1px solid rgba(251, 191, 36, 0.35);
+  border: 1px solid rgb(251 191 36 / 35%);
   border-radius: var(--jv-radius-sm);
-  background: rgba(251, 191, 36, 0.06);
+  background: rgb(251 191 36 / 6%);
   color: var(--jv-warning);
   font-size: 12.5px;
   line-height: 1.5;
 
   &.error {
-    border-color: rgba(248, 113, 113, 0.4);
-    background: rgba(248, 113, 113, 0.06);
+    border-color: rgb(248 113 113 / 40%);
+    background: rgb(248 113 113 / 6%);
     color: var(--jv-danger);
   }
 }
@@ -232,6 +233,7 @@ button.link {
     align-self: flex-end;
     align-items: flex-end;
   }
+
   &.assistant {
     align-self: flex-start;
   }
@@ -255,11 +257,12 @@ button.link {
 
   &.live {
     color: var(--jv-accent-2);
-    border-color: rgba(45, 212, 191, 0.4);
+    border-color: rgb(45 212 191 / 40%);
   }
+
   &.bad {
     color: var(--jv-danger);
-    border-color: rgba(248, 113, 113, 0.4);
+    border-color: rgb(248 113 113 / 40%);
   }
 }
 
@@ -277,8 +280,8 @@ button.link {
   }
 
   .user & {
-    background: rgba(56, 189, 248, 0.1);
-    border-color: rgba(56, 189, 248, 0.3);
+    background: rgb(56 189 248 / 10%);
+    border-color: rgb(56 189 248 / 30%);
   }
 }
 
@@ -295,15 +298,18 @@ button.link {
 .thinking {
   display: flex;
   gap: 5px;
+
   span {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: var(--jv-accent);
     animation: bounce 1.2s ease-in-out infinite;
+
     &:nth-child(2) {
       animation-delay: 0.15s;
     }
+
     &:nth-child(3) {
       animation-delay: 0.3s;
     }
@@ -337,7 +343,7 @@ button.link {
   background: var(--jv-bg-elevated);
 
   &:focus-within {
-    border-color: rgba(56, 189, 248, 0.5);
+    border-color: rgb(56 189 248 / 50%);
   }
 
   textarea {
@@ -348,6 +354,7 @@ button.link {
     padding: 4px 6px;
     font-size: 14px;
     line-height: 1.5;
+
     &:focus {
       outline: none;
     }
@@ -359,10 +366,12 @@ button.link {
   align-items: center;
   gap: 10px;
 }
+
 .counter {
   font: 11px var(--jv-mono);
   color: var(--jv-warning);
 }
+
 .dim {
   color: var(--jv-text-dim);
 }
@@ -372,6 +381,7 @@ button.link {
     visibility: hidden;
   }
 }
+
 @keyframes bounce {
   0%,
   80%,
@@ -379,6 +389,7 @@ button.link {
     transform: translateY(0);
     opacity: 0.5;
   }
+
   40% {
     transform: translateY(-4px);
     opacity: 1;

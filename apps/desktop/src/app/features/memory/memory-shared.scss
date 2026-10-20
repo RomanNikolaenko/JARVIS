@@ -76,15 +76,17 @@
   color: var(--jv-text-muted);
 
   &.accent {
-    border-color: rgba(56, 189, 248, 0.45);
+    border-color: rgb(56 189 248 / 45%);
     color: var(--jv-accent);
   }
+
   &.warning {
-    border-color: rgba(251, 191, 36, 0.45);
+    border-color: rgb(251 191 36 / 45%);
     color: var(--jv-warning);
   }
+
   &.danger {
-    border-color: rgba(248, 113, 113, 0.45);
+    border-color: rgb(248 113 113 / 45%);
     color: var(--jv-danger);
   }
 }

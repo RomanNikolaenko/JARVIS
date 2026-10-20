@@ -29,7 +29,7 @@
   grid-column: 1 / -1;
 }
 
-@media (max-width: 1240px) {
+@media (width <= 1240px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -84,7 +84,7 @@ button.small {
   color: var(--jv-text-muted);
 
   &.cloud {
-    border-color: rgba(251, 191, 36, 0.5);
+    border-color: rgb(251 191 36 / 50%);
     color: var(--jv-warning);
   }
 }
@@ -248,7 +248,7 @@ button.small {
   margin: 0 4px 2px 0;
   padding: 0 6px;
   border-radius: 999px;
-  background: rgba(56, 189, 248, 0.1);
+  background: rgb(56 189 248 / 10%);
   font: 500 10.5px/1.7 var(--jv-mono);
   color: var(--jv-accent);
 }
