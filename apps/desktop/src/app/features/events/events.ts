@@ -49,7 +49,7 @@ export class Events {
         (e) =>
           LEVEL_RANK[e.level] >= minRank &&
           (category === 'all' || e.category === category) &&
-          (!query || e.message.toLowerCase().includes(query)),
+          (!query || e.message.toLowerCase().includes(query))
       )
       .slice()
       .reverse();

@@ -1,11 +1,4 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  effect,
-  inject,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import type { MemorySettings } from '@jarvis/shared-types';
 
@@ -36,8 +29,7 @@ export class DataPanel {
   protected readonly clearWord = CLEAR_WORD;
   protected readonly formatBytes = formatBytes;
   protected readonly automatic = AUTOMATIC;
-  protected readonly keyOf = (option: ModelOption): string =>
-    optionKey(option.provider.id, option.model.id);
+  protected readonly keyOf = (option: ModelOption): string => optionKey(option.provider.id, option.model.id);
 
   protected readonly form = signal<MemorySettings | null>(null);
   protected readonly dirty = signal(false);
@@ -45,9 +37,7 @@ export class DataPanel {
   protected readonly confirmation = signal('');
   protected readonly settingsError = this.settingsStore.error;
   protected readonly saving = this.settingsStore.saving;
-  protected readonly shareWithCloud = computed(
-    () => this.settingsStore.settings()?.privacy.shareMemoryWithCloud ?? false,
-  );
+  protected readonly shareWithCloud = computed(() => this.settingsStore.settings()?.privacy.shareMemoryWithCloud ?? false);
   /** Models that report embeddings first; any other model can be chosen too. */
   protected readonly embeddingOptions = computed(() => {
     const options = this.models.options().filter((o) => o.provider.kind !== 'diagnostic');

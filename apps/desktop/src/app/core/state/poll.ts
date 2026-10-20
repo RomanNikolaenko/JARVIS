@@ -5,11 +5,7 @@ import { DestroyRef } from '@angular/core';
  * visible. Stops when `destroyRef` is destroyed. Keeps idle CPU usage low:
  * hidden or minimized windows do not poll.
  */
-export function pollWhileVisible(
-  task: () => unknown,
-  intervalMs: number,
-  destroyRef: DestroyRef,
-): void {
+export function pollWhileVisible(task: () => unknown, intervalMs: number, destroyRef: DestroyRef): void {
   const tick = (): void => {
     if (typeof document === 'undefined' || !document.hidden) {
       void task();

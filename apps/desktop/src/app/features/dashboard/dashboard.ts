@@ -51,9 +51,7 @@ export class Dashboard {
     if (!route?.providerId || !route.model) {
       return null;
     }
-    const option = this.models
-      .options()
-      .find((o) => o.provider.id === route.providerId && o.model.id === route.model);
+    const option = this.models.options().find((o) => o.provider.id === route.providerId && o.model.id === route.model);
     return option ? { ...option, automatic: route.automatic } : null;
   });
   protected readonly chatPhase = this.chat.phase;
@@ -93,9 +91,7 @@ export class Dashboard {
     return m && m.memoryTotalBytes > 0 ? (m.memoryUsedBytes / m.memoryTotalBytes) * 100 : null;
   });
 
-  protected readonly recentEvents = computed(() =>
-    this.eventLog.events().slice(-RECENT_EVENT_COUNT).reverse(),
-  );
+  protected readonly recentEvents = computed(() => this.eventLog.events().slice(-RECENT_EVENT_COUNT).reverse());
 
   constructor() {
     pollWhileVisible(() => this.system.refreshMetrics(), METRICS_POLL_MS, inject(DestroyRef));

@@ -30,9 +30,9 @@ function model(pooling: PoolingType | null): LocalModel {
 
 describe('Runtime page helpers', () => {
   it('describes where the engine came from', () => {
-    expect(
-      describeSource({ kind: 'release', tag: 'b11734', asset: 'llama.zip', url: 'https://x' }),
-    ).toBe('Official llama.cpp b11734 (llama.zip)');
+    expect(describeSource({ kind: 'release', tag: 'b11734', asset: 'llama.zip', url: 'https://x' })).toBe(
+      'Official llama.cpp b11734 (llama.zip)'
+    );
     expect(describeSource({ kind: 'userSelected' })).toBe('Selected by you');
   });
 

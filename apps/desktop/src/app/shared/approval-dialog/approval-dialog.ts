@@ -34,8 +34,7 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
           role="alertdialog"
           aria-modal="true"
           aria-labelledby="approval-title"
-          aria-describedby="approval-summary"
-        >
+          aria-describedby="approval-summary">
           <header>
             <jv-icon name="shield" [size]="20" />
             <h2 id="approval-title">An agent asks for permission</h2>
@@ -63,8 +62,7 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
           @if (approval.risk === 'high') {
             <p class="warning">
               <jv-icon name="warning" [size]="14" />
-              This action can change or delete data or run programs. Allow it only if you expected
-              it.
+              This action can change or delete data or run programs. Allow it only if you expected it.
             </p>
           }
           <footer>
@@ -74,12 +72,8 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
             @if (approval.taskId) {
               <a class="task-link" routerLink="/agents">Open the task</a>
             }
-            <button #deny type="button" class="ghost" (click)="decide(approval.id, false)">
-              Deny
-            </button>
-            <button type="button" class="primary" (click)="decide(approval.id, true)">
-              Allow once
-            </button>
+            <button #deny type="button" class="ghost" (click)="decide(approval.id, false)">Deny</button>
+            <button type="button" class="primary" (click)="decide(approval.id, true)">Allow once</button>
           </footer>
         </section>
       </div>

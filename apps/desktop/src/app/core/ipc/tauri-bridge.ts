@@ -17,8 +17,7 @@ export class TauriBridge {
     }
     // Checks `invoke` itself: a leftover global without it (e.g. after the
     // Tauri test mocks are cleared) cannot reach the core.
-    const internals = (window as { __TAURI_INTERNALS__?: { invoke?: unknown } })
-      .__TAURI_INTERNALS__;
+    const internals = (window as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__;
     return typeof internals?.invoke === 'function';
   }
 
@@ -48,7 +47,7 @@ export class TauriBridge {
     if (!this.available) {
       throw new IpcError(
         'unavailable',
-        'The JARVIS core is not reachable. Start the UI through the desktop app (npm run tauri dev).',
+        'The JARVIS core is not reachable. Start the UI through the desktop app (npm run tauri dev).'
       );
     }
   }

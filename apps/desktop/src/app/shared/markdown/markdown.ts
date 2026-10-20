@@ -73,9 +73,7 @@ const renderer: RendererObject = {
   code({ text, lang }: Tokens.Code) {
     const language = (lang ?? '').trim().split(/\s+/)[0]?.toLowerCase() ?? '';
     const highlighted = language && hljs.getLanguage(language);
-    const body = highlighted
-      ? hljs.highlight(text, { language, ignoreIllegals: true }).value
-      : escapeHtml(text);
+    const body = highlighted ? hljs.highlight(text, { language, ignoreIllegals: true }).value : escapeHtml(text);
     const label = language ? `<span class="md-code-lang">${escapeHtml(language)}</span>` : '';
     return `<pre class="md-code">${label}<code class="hljs">${body}</code></pre>`;
   },

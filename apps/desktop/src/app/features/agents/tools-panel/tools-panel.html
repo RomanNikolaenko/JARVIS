@@ -3,8 +3,8 @@
     <section class="card">
       <h2>Workspace folders</h2>
       <p class="hint">
-        File tools see only these folders (and what is inside them). JARVIS's own settings, data and
-        logs stay off limits even inside a workspace folder.
+        File tools see only these folders (and what is inside them). JARVIS's own settings, data and logs stay off limits even
+        inside a workspace folder.
       </p>
       @if (d.tools.workspaceFolders.length === 0) {
         <p class="empty">No folders yet.</p>
@@ -22,8 +22,7 @@
                 class="ghost small"
                 [attr.aria-label]="'Remove ' + folder"
                 (click)="removeFolder(folder)"
-                [disabled]="saving()"
-              >
+                [disabled]="saving()">
                 <jv-icon name="trash" [size]="13" />
               </button>
             </li>
@@ -44,22 +43,17 @@
         <input
           type="checkbox"
           [ngModel]="d.tools.autoApproveReadOnly"
-          (ngModelChange)="setTools('autoApproveReadOnly', $event)"
-        />
+          (ngModelChange)="setTools('autoApproveReadOnly', $event)" />
         <span>Run read-only actions without asking</span>
       </label>
       <label class="check">
-        <input
-          type="checkbox"
-          [ngModel]="d.tools.autoApproveChanges"
-          (ngModelChange)="setTools('autoApproveChanges', $event)"
-        />
+        <input type="checkbox" [ngModel]="d.tools.autoApproveChanges" (ngModelChange)="setTools('autoApproveChanges', $event)" />
         <span>Run changes (create, edit, copy, move files; load pages) without asking</span>
       </label>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
-        High-risk actions (overwrite or delete files, run or stop programs) and files that may hold
-        secrets (keys, .env) always ask. Requests expire after the approval timeout.
+        High-risk actions (overwrite or delete files, run or stop programs) and files that may hold secrets (keys, .env) always
+        ask. Requests expire after the approval timeout.
       </p>
       <label class="field narrow">
         <span class="field-label">Approval timeout (s)</span>
@@ -68,8 +62,7 @@
           min="30"
           max="3600"
           [ngModel]="d.agents.approvalTimeoutSecs"
-          (ngModelChange)="setAgents('approvalTimeoutSecs', $event)"
-        />
+          (ngModelChange)="setAgents('approvalTimeoutSecs', $event)" />
       </label>
     </section>
 
@@ -87,8 +80,7 @@
                 <input
                   type="checkbox"
                   [checked]="isEnabled(tool.spec.name)"
-                  (change)="toggleTool(tool.spec.name, $any($event.target).checked)"
-                />
+                  (change)="toggleTool(tool.spec.name, $any($event.target).checked)" />
                 <span>
                   <span class="tool-title">{{ tool.spec.title }}</span>
                   <span class="mono dim"> {{ tool.spec.name }}</span>
@@ -105,15 +97,10 @@
       <h2>Programs and network</h2>
       <label class="field">
         <span class="field-label">Programs tools may run</span>
-        <input
-          type="text"
-          placeholder="git, cargo, npm"
-          [ngModel]="d.programs"
-          (ngModelChange)="setPrograms($event)"
-        />
+        <input type="text" placeholder="git, cargo, npm" [ngModel]="d.programs" (ngModelChange)="setPrograms($event)" />
         <span class="hint"
-          >Plain names, separated by commas. Programs run without a shell, with your user rights,
-          only from folders on PATH. Each run still needs approval.</span
+          >Plain names, separated by commas. Programs run without a shell, with your user rights, only from folders on PATH. Each
+          run still needs approval.</span
         >
       </label>
       <label class="field narrow">
@@ -123,21 +110,13 @@
           min="5"
           max="600"
           [ngModel]="d.tools.commandTimeoutSecs"
-          (ngModelChange)="setTools('commandTimeoutSecs', $event)"
-        />
+          (ngModelChange)="setTools('commandTimeoutSecs', $event)" />
       </label>
       <label class="check">
-        <input
-          type="checkbox"
-          [ngModel]="d.tools.allowNetwork"
-          (ngModelChange)="setTools('allowNetwork', $event)"
-        />
+        <input type="checkbox" [ngModel]="d.tools.allowNetwork" (ngModelChange)="setTools('allowNetwork', $event)" />
         <span>Let tools load public web pages</span>
       </label>
-      <p class="hint">
-        Local addresses (localhost, your network, link-local) are always refused, also after
-        redirects.
-      </p>
+      <p class="hint">Local addresses (localhost, your network, link-local) are always refused, also after redirects.</p>
       @if (store.status()?.launchedPrograms?.length) {
         <div class="launched">
           <span class="field-label">Programs started by agents</span>
@@ -151,23 +130,13 @@
     <section class="card">
       <h2>Agents</h2>
       <label class="check">
-        <input
-          type="checkbox"
-          [ngModel]="d.agents.enabled"
-          (ngModelChange)="setAgents('enabled', $event)"
-        />
+        <input type="checkbox" [ngModel]="d.agents.enabled" (ngModelChange)="setAgents('enabled', $event)" />
         <span>Allow agent tasks</span>
       </label>
       <div class="row">
         <label class="field">
           <span class="field-label">Default steps</span>
-          <input
-            type="number"
-            min="1"
-            max="50"
-            [ngModel]="d.agents.maxSteps"
-            (ngModelChange)="setAgents('maxSteps', $event)"
-          />
+          <input type="number" min="1" max="50" [ngModel]="d.agents.maxSteps" (ngModelChange)="setAgents('maxSteps', $event)" />
         </label>
         <label class="field">
           <span class="field-label">Default time limit (s)</span>
@@ -176,29 +145,24 @@
             min="30"
             max="3600"
             [ngModel]="d.agents.maxDurationSecs"
-            (ngModelChange)="setAgents('maxDurationSecs', $event)"
-          />
+            (ngModelChange)="setAgents('maxDurationSecs', $event)" />
         </label>
       </div>
       <label class="check">
-        <input
-          type="checkbox"
-          [ngModel]="d.allowCloudAgents"
-          (ngModelChange)="setCloudAgents($event)"
-        />
+        <input type="checkbox" [ngModel]="d.allowCloudAgents" (ngModelChange)="setCloudAgents($event)" />
         <span>Let agents use cloud models</span>
       </label>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
-        Agents send file contents and program output to the model. Off by default; it also needs
-        cloud providers to be allowed in Settings{{ allowCloudProviders() ? '' : ' (now off)' }}.
+        Agents send file contents and program output to the model. Off by default; it also needs cloud providers to be allowed in
+        Settings{{ allowCloudProviders() ? '' : ' (now off)' }}.
       </p>
     </section>
 
     <p class="note wide">
       <jv-icon name="warning" [size]="14" />
-      Tools run with your user rights. JARVIS limits what they are asked to do (folders, program
-      list, approvals, limits) and logs every decision; it does not isolate them in a sandbox.
+      Tools run with your user rights. JARVIS limits what they are asked to do (folders, program list, approvals, limits) and logs
+      every decision; it does not isolate them in a sandbox.
     </p>
 
     <div class="actions wide">
@@ -207,9 +171,7 @@
       } @else if (savedAt() && !dirty()) {
         <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
       }
-      <button type="button" class="ghost" (click)="discard()" [disabled]="!dirty() || saving()">
-        Discard
-      </button>
+      <button type="button" class="ghost" (click)="discard()" [disabled]="!dirty() || saving()">Discard</button>
       <button type="button" class="primary" (click)="save()" [disabled]="!dirty() || saving()">
         {{ saving() ? 'Saving…' : 'Save' }}
       </button>

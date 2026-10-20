@@ -6,9 +6,7 @@
         <div class="eyebrow">J.A.R.V.I.S. status</div>
         <h1 class="headline">{{ headline() }}</h1>
         @if (health(); as report) {
-          <p class="sub">
-            Uptime {{ formatUptime(report.uptimeSecs) }} · core v{{ report.version }}
-          </p>
+          <p class="sub">Uptime {{ formatUptime(report.uptimeSecs) }} · core v{{ report.version }}</p>
         }
         <a class="primary-action" routerLink="/chat">
           <jv-icon name="chat" />
@@ -50,9 +48,7 @@
       <div class="meter">
         <div class="meter-label">
           <span><jv-icon name="memory" [size]="15" /> Memory</span>
-          <span class="mono"
-            >{{ formatBytes(m.memoryUsedBytes) }} / {{ formatBytes(m.memoryTotalBytes) }}</span
-          >
+          <span class="mono">{{ formatBytes(m.memoryUsedBytes) }} / {{ formatBytes(m.memoryTotalBytes) }}</span>
         </div>
         <div class="meter-track">
           <div class="meter-fill" [style.width]="meterWidth(memoryPercent())"></div>
@@ -105,8 +101,7 @@
       <div>
         <div class="voice-state">Microphone off</div>
         <div class="model-meta">
-          Voice engine is not installed yet (Phase 6). JARVIS never listens without a visible
-          indicator.
+          Voice engine is not installed yet (Phase 6). JARVIS never listens without a visible indicator.
         </div>
       </div>
     </div>

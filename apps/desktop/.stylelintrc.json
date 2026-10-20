@@ -10,9 +10,6 @@
         "message": "Expected class selector \"%s\" to be kebab-case (highlight.js classes excepted)"
       }
     ],
-    "value-keyword-case": [
-      "lower",
-      { "camelCaseSvgKeywords": true, "ignoreProperties": ["/^--jv-(font|mono)$/"] }
-    ]
+    "value-keyword-case": ["lower", { "camelCaseSvgKeywords": true, "ignoreProperties": ["/^--jv-(font|mono)$/"] }]
   }
 }

@@ -36,9 +36,7 @@ export class AuditPanel {
   /** Time for today's entries, date and time for older ones. */
   protected when(timestampMs: number): string {
     const today = new Date(timestampMs).toDateString() === new Date().toDateString();
-    return today
-      ? formatClock(timestampMs)
-      : `${formatShortDate(timestampMs)} ${formatClock(timestampMs)}`;
+    return today ? formatClock(timestampMs) : `${formatShortDate(timestampMs)} ${formatClock(timestampMs)}`;
   }
 
   protected eventLabel(event: AuditEvent): string {

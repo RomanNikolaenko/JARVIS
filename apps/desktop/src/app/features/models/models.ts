@@ -112,15 +112,11 @@ export class Models {
 
   /** Configured providers joined with their live status. */
   protected readonly rows = computed(() => {
-    const live = new Map<string, ProviderModels>(
-      this.store.providers().map((p) => [p.provider.id, p]),
-    );
+    const live = new Map<string, ProviderModels>(this.store.providers().map((p) => [p.provider.id, p]));
     return this.store.configured().map((config) => ({ config, live: live.get(config.id) }));
   });
 
-  protected readonly availableProviders = computed(() =>
-    this.store.providers().filter((p) => !p.error && p.models.length > 0),
-  );
+  protected readonly availableProviders = computed(() => this.store.providers().filter((p) => !p.error && p.models.length > 0));
 
   protected readonly routing = computed(() => this.routingDraft() ?? this.store.routing());
   protected readonly routingDirty = computed(() => this.routingDraft() !== null);
@@ -224,9 +220,7 @@ export class Models {
   }
 
   protected async toggle(config: ProviderConfig): Promise<void> {
-    await this.store.saveProviders(
-      this.store.configured().map((p) => (p.id === config.id ? { ...p, enabled: !p.enabled } : p)),
-    );
+    await this.store.saveProviders(this.store.configured().map((p) => (p.id === config.id ? { ...p, enabled: !p.enabled } : p)));
   }
 
   protected askRemove(config: ProviderConfig): void {
@@ -238,7 +232,7 @@ export class Models {
     const routing = this.store.routing();
     await this.store.saveProviders(
       this.store.configured().filter((p) => p.id !== config.id),
-      routing ? withoutProvider(routing, config.id) : undefined,
+      routing ? withoutProvider(routing, config.id) : undefined
     );
   }
 
@@ -286,9 +280,7 @@ export class Models {
       return;
     }
     const option = this.store.options().find((o) => optionKey(o.provider.id, o.model.id) === key);
-    const ref: ModelRef | null = option
-      ? { providerId: option.provider.id, model: option.model.id }
-      : null;
+    const ref: ModelRef | null = option ? { providerId: option.provider.id, model: option.model.id } : null;
     this.routingDraft.set({ ...base, [ROUTING_KEYS[category]]: ref });
   }
 

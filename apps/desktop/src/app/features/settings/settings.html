@@ -43,10 +43,7 @@
           }
         </label>
       </div>
-      <span class="hint"
-        >Idle timeout: maximum silence between streamed chunks. Must not exceed the request
-        timeout.</span
-      >
+      <span class="hint">Idle timeout: maximum silence between streamed chunks. Must not exceed the request timeout.</span>
     </jv-hud-panel>
 
     <jv-hud-panel heading="Privacy">
@@ -56,8 +53,7 @@
       </label>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
-        Off by default. When off, the core rejects every request to a cloud provider, regardless of
-        the UI.
+        Off by default. When off, the core rejects every request to a cloud provider, regardless of the UI.
       </p>
       <label class="check">
         <input type="checkbox" formControlName="shareMemoryWithCloud" />
@@ -65,8 +61,8 @@
       </label>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
-        Facts, excerpts of other conversations and texts for semantic search stay on local models
-        unless this is on. The current conversation goes wherever you send it.
+        Facts, excerpts of other conversations and texts for semantic search stay on local models unless this is on. The current
+        conversation goes wherever you send it.
       </p>
       <label class="check">
         <input type="checkbox" formControlName="allowCloudAgents" />
@@ -113,14 +109,7 @@
       } @else if (savedAt() && form.pristine) {
         <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
       }
-      <button
-        type="button"
-        class="ghost"
-        (click)="discard()"
-        [disabled]="form.pristine || saving()"
-      >
-        Discard
-      </button>
+      <button type="button" class="ghost" (click)="discard()" [disabled]="form.pristine || saving()">Discard</button>
       <button type="submit" class="primary" [disabled]="form.pristine || saving()">
         {{ saving() ? 'Saving…' : 'Save settings' }}
       </button>

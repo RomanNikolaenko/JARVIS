@@ -55,21 +55,12 @@ export class MemoryStore {
   readonly results = signal<readonly SearchHit[] | null>(null);
   readonly error = signal<IpcError | null>(null);
   readonly busy = signal(false);
-  readonly lastTransfer = signal<{ kind: 'export' | 'import'; report: TransferReport } | null>(
-    null,
-  );
+  readonly lastTransfer = signal<{ kind: 'export' | 'import'; report: TransferReport } | null>(null);
 
-  readonly projectNames = computed(
-    () => new Map(this.projects().map((p) => [p.id, p.name] as const)),
-  );
+  readonly projectNames = computed(() => new Map(this.projects().map((p) => [p.id, p.name] as const)));
 
   async loadAll(): Promise<void> {
-    await Promise.all([
-      this.refreshStatus(),
-      this.loadFacts(),
-      this.loadProjects(),
-      this.loadEpisodes(),
-    ]);
+    await Promise.all([this.refreshStatus(), this.loadFacts(), this.loadProjects(), this.loadEpisodes()]);
   }
 
   refreshStatus(): Promise<void> {
@@ -151,9 +142,7 @@ export class MemoryStore {
       this.results.set(null);
       return Promise.resolve();
     }
-    return this.run(async () =>
-      this.results.set(await this.api.searchMemory({ text: query, kinds, limit: 50 })),
-    );
+    return this.run(async () => this.results.set(await this.api.searchMemory({ text: query, kinds, limit: 50 })));
   }
 
   exportMemory(): Promise<void> {

@@ -1,10 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import type {
-  ModelCapabilities,
-  ProviderModels,
-  RouteResolution,
-  Settings,
-} from '@jarvis/shared-types';
+import type { ModelCapabilities, ProviderModels, RouteResolution, Settings } from '@jarvis/shared-types';
 
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ModelsStore, supportsCategory } from './models.store';

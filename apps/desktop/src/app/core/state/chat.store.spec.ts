@@ -148,10 +148,7 @@ class FakeApi {
     this.deleted.push(id);
   }
 
-  async sendMessage(
-    request: ChatTurnRequest,
-    onEvent: (e: ChatStreamEvent) => void,
-  ): Promise<string> {
+  async sendMessage(request: ChatTurnRequest, onEvent: (e: ChatStreamEvent) => void): Promise<string> {
     if (this.sendError) {
       throw this.sendError;
     }

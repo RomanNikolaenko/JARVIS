@@ -1,12 +1,4 @@
-import type {
-  AgentStatus,
-  AgentTask,
-  AuditEntry,
-  PendingApproval,
-  RiskLevel,
-  TaskStatus,
-  ToolInfo,
-} from '@jarvis/shared-types';
+import type { AgentStatus, AgentTask, AuditEntry, PendingApproval, RiskLevel, TaskStatus, ToolInfo } from '@jarvis/shared-types';
 
 export function agentTask(id: string, status: TaskStatus, updatedAtMs = 1): AgentTask {
   return {

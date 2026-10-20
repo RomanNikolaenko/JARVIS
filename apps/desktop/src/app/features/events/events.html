@@ -1,9 +1,7 @@
 <header class="page-header">
   <div>
     <h1 class="title">Event log</h1>
-    <p class="subtitle">
-      System events of the current session. Diagnostic logs are written to the log directory.
-    </p>
+    <p class="subtitle">System events of the current session. Diagnostic logs are written to the log directory.</p>
   </div>
   <div class="filters">
     <label>
@@ -23,13 +21,7 @@
         }
       </select>
     </label>
-    <input
-      type="search"
-      placeholder="Search…"
-      aria-label="Search events"
-      [value]="query()"
-      (input)="onQuery($event)"
-    />
+    <input type="search" placeholder="Search…" aria-label="Search events" [value]="query()" (input)="onQuery($event)" />
   </div>
 </header>
 

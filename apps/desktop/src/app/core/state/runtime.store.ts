@@ -69,9 +69,7 @@ export class RuntimeStore {
       status.downloads.some((d) => !['completed', 'failed', 'cancelled'].includes(d.phase))
     );
   });
-  readonly settings = computed<RuntimeSettings | null>(
-    () => this.settingsStore.settings()?.runtime ?? null,
-  );
+  readonly settings = computed<RuntimeSettings | null>(() => this.settingsStore.settings()?.runtime ?? null);
 
   async refresh(): Promise<void> {
     if (this.refreshing) {
@@ -81,15 +79,11 @@ export class RuntimeStore {
     try {
       const status = await this.api.getRuntimeStatus();
       this.status.set(status);
-      const phases: [ServerPhase, ServerPhase] = [
-        status.server.phase,
-        status.embeddingServer.phase,
-      ];
+      const phases: [ServerPhase, ServerPhase] = [status.server.phase, status.embeddingServer.phase];
       // The set of AI models changes when a local model starts or stops.
       const last = this.lastPhases;
       const changed = phases.some(
-        (phase, i) =>
-          last !== null && phase !== last[i] && (phase === 'running' || last[i] === 'running'),
+        (phase, i) => last !== null && phase !== last[i] && (phase === 'running' || last[i] === 'running')
       );
       if (changed) {
         void this.models.refresh(true);
@@ -104,10 +98,7 @@ export class RuntimeStore {
 
   async loadStatic(): Promise<void> {
     await this.run(async () => {
-      const [hardware, curated] = await Promise.all([
-        this.api.getHardwareInfo(),
-        this.api.listCuratedModels(),
-      ]);
+      const [hardware, curated] = await Promise.all([this.api.getHardwareInfo(), this.api.listCuratedModels()]);
       this.hardware.set(hardware);
       this.curated.set(curated);
     });

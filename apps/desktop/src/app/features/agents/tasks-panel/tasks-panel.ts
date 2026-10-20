@@ -59,10 +59,7 @@ export class TasksPanel {
   protected readonly modelOptions = this.models.chatOptions;
   protected readonly defaults = computed(() => this.settings.settings()?.agents ?? null);
   protected readonly canStart = computed(
-    () =>
-      this.goal().trim().length > 0 &&
-      this.goal().length <= MAX_GOAL_LENGTH &&
-      (this.store.status()?.enabled ?? true),
+    () => this.goal().trim().length > 0 && this.goal().length <= MAX_GOAL_LENGTH && (this.store.status()?.enabled ?? true)
   );
   protected readonly task = this.store.selected;
   protected readonly finished = computed(() => {
@@ -70,7 +67,7 @@ export class TasksPanel {
     return task ? isFinished(task.status) : true;
   });
   protected readonly actionCount = computed(
-    () => this.task()?.steps.filter((s) => s.kind === 'action' || s.kind === 'answer').length ?? 0,
+    () => this.task()?.steps.filter((s) => s.kind === 'action' || s.kind === 'answer').length ?? 0
   );
 
   constructor() {
@@ -116,9 +113,7 @@ export class TasksPanel {
     if (!this.canStart()) {
       return;
     }
-    const option = this.modelOptions().find(
-      (o) => optionKey(o.provider.id, o.model.id) === this.modelKey(),
-    );
+    const option = this.modelOptions().find((o) => optionKey(o.provider.id, o.model.id) === this.modelKey());
     const minutes = this.maxMinutes();
     const task = await this.store.startTask({
       goal: this.goal().trim(),

@@ -57,9 +57,7 @@ describe('AgentsPage', () => {
   }
 
   function button(element: HTMLElement, text: string): HTMLButtonElement {
-    const found = [...element.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes(text),
-    );
+    const found = [...element.querySelectorAll('button')].find((b) => b.textContent?.includes(text));
     if (!found) {
       throw new Error(`no button "${text}"`);
     }
@@ -99,15 +97,11 @@ describe('AgentsPage', () => {
     await settle(fixture);
     expect(element.textContent).toContain('/work');
 
-    const writeFile = [...element.querySelectorAll('label.tool')].find((l) =>
-      l.textContent?.includes('write_file'),
-    );
+    const writeFile = [...element.querySelectorAll('label.tool')].find((l) => l.textContent?.includes('write_file'));
     const checkbox = writeFile?.querySelector('input') as HTMLInputElement;
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event('change'));
-    const programs = element.querySelector(
-      'input[placeholder="git, cargo, npm"]',
-    ) as HTMLInputElement;
+    const programs = element.querySelector('input[placeholder="git, cargo, npm"]') as HTMLInputElement;
     programs.value = 'git, cargo,git';
     programs.dispatchEvent(new Event('input'));
     await settle(fixture);

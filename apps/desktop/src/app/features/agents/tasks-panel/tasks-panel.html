@@ -9,8 +9,7 @@
           [maxlength]="maxGoalLength"
           placeholder="e.g. Find the TODO comments in src and list them by file"
           [ngModel]="goal()"
-          (ngModelChange)="goal.set($event)"
-        ></textarea>
+          (ngModelChange)="goal.set($event)"></textarea>
       </label>
       <div class="options">
         <label class="field model">
@@ -33,8 +32,7 @@
             max="50"
             [placeholder]="defaults()?.maxSteps ?? 12"
             [ngModel]="maxSteps()"
-            (ngModelChange)="maxSteps.set($event)"
-          />
+            (ngModelChange)="maxSteps.set($event)" />
         </label>
         <label class="field">
           <span class="field-label">Minutes</span>
@@ -45,14 +43,13 @@
             max="60"
             [placeholder]="(defaults()?.maxDurationSecs ?? 600) / 60"
             [ngModel]="maxMinutes()"
-            (ngModelChange)="maxMinutes.set($event)"
-          />
+            (ngModelChange)="maxMinutes.set($event)" />
         </label>
       </div>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
-        Text from files, pages and programs is treated as data, not as instructions. Changes wait
-        for your approval unless you allowed them in Tools &amp; permissions.
+        Text from files, pages and programs is treated as data, not as instructions. Changes wait for your approval unless you
+        allowed them in Tools &amp; permissions.
       </p>
       <div class="form-actions">
         <button type="submit" class="primary" [disabled]="!canStart() || store.busy()">
@@ -64,12 +61,7 @@
 
     <div class="list-header">
       <h2>Tasks</h2>
-      <button
-        type="button"
-        class="ghost small"
-        (click)="store.clearFinished()"
-        [disabled]="!store.hasFinished()"
-      >
+      <button type="button" class="ghost small" (click)="store.clearFinished()" [disabled]="!store.hasFinished()">
         Clear finished
       </button>
     </div>
@@ -83,14 +75,10 @@
               type="button"
               class="task-item"
               [class.active]="store.selectedId() === item.id"
-              (click)="store.select(item.id)"
-            >
+              (click)="store.select(item.id)">
               <span class="task-goal">{{ item.goal }}</span>
               <span class="task-meta">
-                <jv-status-badge
-                  [status]="statusTone(item.status)"
-                  [label]="statusLabel(item.status)"
-                />
+                <jv-status-badge [status]="statusTone(item.status)" [label]="statusLabel(item.status)" />
                 <span>{{ item.stepCount }} steps</span>
                 <span>{{ formatShortDate(item.updatedAtMs) }}</span>
               </span>
@@ -107,17 +95,11 @@
         <div class="detail-title">
           <h2>{{ task.goal }}</h2>
           <div class="detail-meta">
-            <jv-status-badge
-              [status]="statusTone(task.status)"
-              [label]="statusLabel(task.status)"
-            />
+            <jv-status-badge [status]="statusTone(task.status)" [label]="statusLabel(task.status)" />
             @if (task.model) {
               <span class="mono">{{ task.model }}</span>
             }
-            <span
-              >{{ actionCount() }} / {{ task.limits.maxSteps }} steps ·
-              {{ task.limits.maxDurationSecs / 60 }} min limit</span
-            >
+            <span>{{ actionCount() }} / {{ task.limits.maxSteps }} steps · {{ task.limits.maxDurationSecs / 60 }} min limit</span>
           </div>
         </div>
         <div class="controls">
@@ -125,9 +107,7 @@
             <button type="button" class="small" (click)="store.pause(task.id)">Pause</button>
           }
           @if (task.status === 'paused') {
-            <button type="button" class="small primary" (click)="store.resume(task.id)">
-              Resume
-            </button>
+            <button type="button" class="small primary" (click)="store.resume(task.id)">Resume</button>
           }
           @if (!finished()) {
             <button type="button" class="small danger" (click)="store.cancel(task.id)">
@@ -174,9 +154,7 @@
             <jv-icon class="step-icon" [name]="stepIcon(step)" [size]="15" />
             <div class="step-body">
               <div class="step-head">
-                <span class="step-title" [class.mono]="step.kind === 'action'">{{
-                  stepTitle(step)
-                }}</span>
+                <span class="step-title" [class.mono]="step.kind === 'action'">{{ stepTitle(step) }}</span>
                 @if (step.summary) {
                   <span class="step-summary">{{ step.summary }}</span>
                 }
@@ -215,8 +193,8 @@
       </ol>
     } @else {
       <p class="empty">
-        Start a task or pick one from the list. Tools, folders and approvals are set under Tools
-        &amp; permissions; models on the <a routerLink="/models">Models</a> screen.
+        Start a task or pick one from the list. Tools, folders and approvals are set under Tools &amp; permissions; models on the
+        <a routerLink="/models">Models</a> screen.
       </p>
     }
   </section>

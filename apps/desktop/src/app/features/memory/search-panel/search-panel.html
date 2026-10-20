@@ -8,24 +8,14 @@
       maxlength="500"
       [value]="text()"
       (input)="text.set(valueOf($event))"
-      (keydown.enter)="search()"
-    />
+      (keydown.enter)="search()" />
     @for (kind of kinds; track kind.id) {
       <label class="check">
-        <input
-          type="checkbox"
-          [checked]="selected().has(kind.id)"
-          (change)="toggle(kind.id, checkedOf($event))"
-        />
+        <input type="checkbox" [checked]="selected().has(kind.id)" (change)="toggle(kind.id, checkedOf($event))" />
         <span>{{ kind.label }}</span>
       </label>
     }
-    <button
-      type="button"
-      class="primary"
-      [disabled]="!text().trim() || !selected().size || store.busy()"
-      (click)="search()"
-    >
+    <button type="button" class="primary" [disabled]="!text().trim() || !selected().size || store.busy()" (click)="search()">
       <jv-icon name="search" [size]="15" />
       Search
     </button>

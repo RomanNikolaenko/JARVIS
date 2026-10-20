@@ -3,11 +3,7 @@
     <div class="form">
       <label class="field">
         <span class="field-label">Name</span>
-        <input
-          [attr.maxlength]="limits.name"
-          [value]="name()"
-          (input)="name.set(valueOf($event))"
-        />
+        <input [attr.maxlength]="limits.name" [value]="name()" (input)="name.set(valueOf($event))" />
       </label>
       <label class="field">
         <span class="field-label">Description</span>
@@ -15,8 +11,7 @@
           rows="2"
           [attr.maxlength]="limits.description"
           [value]="description()"
-          (input)="description.set(valueOf($event))"
-        ></textarea>
+          (input)="description.set(valueOf($event))"></textarea>
       </label>
       <label class="field">
         <span class="field-label">Instructions for JARVIS in this project</span>
@@ -25,8 +20,7 @@
           placeholder="e.g. The project is a TypeScript monorepo; answer with code that follows its conventions."
           [attr.maxlength]="limits.instructions"
           [value]="instructions()"
-          (input)="instructions.set(valueOf($event))"
-        ></textarea>
+          (input)="instructions.set(valueOf($event))"></textarea>
       </label>
       <div class="form-actions">
         <button type="button" class="ghost" (click)="cancel()">Cancel</button>
@@ -46,8 +40,7 @@
   </button>
   <p class="hint">
     <jv-icon name="folder" [size]="14" />
-    Chats in a project get its description, instructions and facts, and recall only other chats of
-    the same project.
+    Chats in a project get its description, instructions and facts, and recall only other chats of the same project.
   </p>
   <ul class="list">
     @for (project of store.projects(); track project.id) {
@@ -69,13 +62,9 @@
         </div>
         @if (confirmDeleteId() === project.id) {
           <div class="confirm">
-            <span>
-              Delete the project and its {{ project.factCount }} facts? Its chats are kept.
-            </span>
+            <span> Delete the project and its {{ project.factCount }} facts? Its chats are kept. </span>
             <button type="button" class="danger small" (click)="remove(project)">Delete</button>
-            <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">
-              Cancel
-            </button>
+            <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">Cancel</button>
           </div>
         } @else {
           <div class="actions">
@@ -83,13 +72,7 @@
               <jv-icon name="chat" [size]="13" />
               Chat
             </button>
-            <button
-              type="button"
-              class="ghost small"
-              title="Edit"
-              aria-label="Edit"
-              (click)="edit(project)"
-            >
+            <button type="button" class="ghost small" title="Edit" aria-label="Edit" (click)="edit(project)">
               <jv-icon name="edit" [size]="13" />
             </button>
             <button
@@ -97,8 +80,7 @@
               class="ghost small"
               title="Delete"
               aria-label="Delete"
-              (click)="confirmDeleteId.set(project.id)"
-            >
+              (click)="confirmDeleteId.set(project.id)">
               <jv-icon name="trash" [size]="13" />
             </button>
           </div>

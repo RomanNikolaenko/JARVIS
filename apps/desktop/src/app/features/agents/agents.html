@@ -1,9 +1,6 @@
 <header class="page-header">
   <h1 class="title">Agents</h1>
-  <p class="subtitle">
-    Multi-step tasks with tools. Every action passes the security policy; changes need your
-    approval.
-  </p>
+  <p class="subtitle">Multi-step tasks with tools. Every action passes the security policy; changes need your approval.</p>
 </header>
 
 @if (store.status(); as status) {
@@ -11,22 +8,19 @@
     <p class="banner">
       <jv-icon name="shield" [size]="16" />
       Agents are turned off. Turn them on under
-      <button type="button" class="link" (click)="tab.set('tools')">Tools &amp; permissions</button
-      >.
+      <button type="button" class="link" (click)="tab.set('tools')">Tools &amp; permissions</button>.
     </p>
   } @else if (status.workspaceFolders.length === 0) {
     <p class="banner">
       <jv-icon name="folder" [size]="16" />
       No workspace folder yet: file tools cannot reach any files. Add one under
-      <button type="button" class="link" (click)="tab.set('tools')">Tools &amp; permissions</button
-      >.
+      <button type="button" class="link" (click)="tab.set('tools')">Tools &amp; permissions</button>.
     </p>
   }
   @if (!status.persistent) {
     <p class="banner error" role="alert">
       <jv-icon name="warning" [size]="16" />
-      The database is unavailable: tasks and the audit log are kept in memory only and are lost on
-      exit.
+      The database is unavailable: tasks and the audit log are kept in memory only and are lost on exit.
     </p>
   }
 }
@@ -45,8 +39,7 @@
       class="tab"
       [class.active]="tab() === item.id"
       [attr.aria-selected]="tab() === item.id"
-      (click)="tab.set(item.id)"
-    >
+      (click)="tab.set(item.id)">
       <jv-icon [name]="item.icon" [size]="15" />
       {{ item.label }}
     </button>

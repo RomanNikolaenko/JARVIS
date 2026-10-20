@@ -76,9 +76,7 @@ describe('RuntimeStore', () => {
     expect(recommendedBackend({ ...discrete, vulkanAvailable: false })).toBe('cpu');
     // A small integrated GPU (Radeon Vega 8: 2 GB) or unknown memory: CPU.
     expect(recommendedBackend(HARDWARE)).toBe('cpu');
-    expect(recommendedBackend({ ...HARDWARE, gpus: [{ ...gpu, vramTotalBytes: null }] })).toBe(
-      'cpu',
-    );
+    expect(recommendedBackend({ ...HARDWARE, gpus: [{ ...gpu, vramTotalBytes: null }] })).toBe('cpu');
     expect(recommendedBackend({ ...HARDWARE, gpus: [] })).toBe('cpu');
     expect(recommendedBackend(null)).toBe('cpu');
   });

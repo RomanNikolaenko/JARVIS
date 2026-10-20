@@ -14,19 +14,10 @@ describe('App shell', () => {
   it('renders the main navigation', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
-    const links = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('.nav-link'),
-    ).map((a) => a.textContent?.trim());
-    expect(links).toEqual([
-      'Dashboard',
-      'Chat',
-      'Models',
-      'Runtime',
-      'Agents',
-      'Memory',
-      'Event log',
-      'Settings',
-    ]);
+    const links = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('.nav-link')).map((a) =>
+      a.textContent?.trim()
+    );
+    expect(links).toEqual(['Dashboard', 'Chat', 'Models', 'Runtime', 'Agents', 'Memory', 'Event log', 'Settings']);
   });
 
   it('shows an offline banner when the core is unreachable', async () => {

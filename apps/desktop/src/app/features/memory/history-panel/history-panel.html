@@ -11,12 +11,7 @@
         <button type="button" class="ghost small" (click)="confirmClear.set(false)">Cancel</button>
       </span>
     } @else {
-      <button
-        type="button"
-        class="ghost small"
-        [disabled]="!store.episodes().length"
-        (click)="confirmClear.set(true)"
-      >
+      <button type="button" class="ghost small" [disabled]="!store.episodes().length" (click)="confirmClear.set(true)">
         <jv-icon name="trash" [size]="13" />
         Clear
       </button>
@@ -24,19 +19,16 @@
   </div>
   <p class="hint">
     <jv-icon name="clock" [size]="14" />
-    What JARVIS did: started models, answered, saved or deleted memory. Message text is not kept
-    here. Older entries are removed after the retention period set under Data &amp; settings.
+    What JARVIS did: started models, answered, saved or deleted memory. Message text is not kept here. Older entries are removed
+    after the retention period set under Data &amp; settings.
   </p>
   <ul class="list">
     @for (episode of store.episodes(); track episode.id) {
       <li class="row">
         <span class="time mono">{{ time(episode.occurredAtMs) }}</span>
-        <span
-          class="chip"
-          [class.warning]="episode.level === 'warning'"
-          [class.danger]="episode.level === 'error'"
-          >{{ episode.category }}</span
-        >
+        <span class="chip" [class.warning]="episode.level === 'warning'" [class.danger]="episode.level === 'error'">{{
+          episode.category
+        }}</span>
         <span class="row-main row-text">{{ episode.summary }}</span>
       </li>
     } @empty {

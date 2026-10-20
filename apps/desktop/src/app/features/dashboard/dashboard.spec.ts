@@ -57,9 +57,7 @@ describe('Dashboard', () => {
     const element = fixture.nativeElement as HTMLElement;
 
     expect(element.querySelector('.headline')?.textContent).toContain('Operating with limitations');
-    const components = Array.from(element.querySelectorAll('.component-name')).map((e) =>
-      e.textContent?.trim(),
-    );
+    const components = Array.from(element.querySelectorAll('.component-name')).map((e) => e.textContent?.trim());
     expect(components).toEqual(['Configuration', 'AI providers']);
     expect(element.querySelector('jv-ai-core')?.getAttribute('class')).toContain('state-degraded');
   });

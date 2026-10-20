@@ -7,8 +7,7 @@
         placeholder="e.g. I prefer short answers with code examples in TypeScript."
         [attr.maxlength]="maxLength"
         [value]="content()"
-        (input)="content.set(valueOf($event))"
-      ></textarea>
+        (input)="content.set(valueOf($event))"></textarea>
     </label>
     <div class="toolbar">
       <label class="field">
@@ -16,9 +15,7 @@
         <select (change)="projectId.set(valueOf($event) || null)">
           <option value="" [selected]="projectId() === null">All conversations</option>
           @for (project of store.projects(); track project.id) {
-            <option [value]="project.id" [selected]="project.id === projectId()">
-              Project: {{ project.name }}
-            </option>
+            <option [value]="project.id" [selected]="project.id === projectId()">Project: {{ project.name }}</option>
           }
         </select>
       </label>
@@ -37,8 +34,8 @@
     </div>
     <p class="hint">
       <jv-icon name="shield" [size]="14" />
-      Pinned facts go into every request; others only when they are relevant. Facts are sent to
-      local models only, unless you allow sharing memory with cloud models.
+      Pinned facts go into every request; others only when they are relevant. Facts are sent to local models only, unless you
+      allow sharing memory with cloud models.
     </p>
   </div>
 </jv-hud-panel>
@@ -51,8 +48,7 @@
       placeholder="Filter facts"
       aria-label="Filter facts"
       [value]="filter()"
-      (input)="filter.set(valueOf($event))"
-    />
+      (input)="filter.set(valueOf($event))" />
     <select aria-label="Scope" (change)="scope.set(valueOf($event))">
       <option value="all">All</option>
       <option value="global">Global</option>
@@ -79,9 +75,7 @@
           <div class="confirm">
             <span>Forget this fact?</span>
             <button type="button" class="danger small" (click)="remove(fact)">Forget</button>
-            <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">
-              Cancel
-            </button>
+            <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">Cancel</button>
           </div>
         } @else {
           <div class="actions">
@@ -90,26 +84,13 @@
               class="ghost small"
               [title]="fact.pinned ? 'Unpin' : 'Pin: always include'"
               [attr.aria-label]="fact.pinned ? 'Unpin' : 'Pin'"
-              (click)="store.togglePinned(fact)"
-            >
+              (click)="store.togglePinned(fact)">
               <jv-icon name="pin" [size]="13" />
             </button>
-            <button
-              type="button"
-              class="ghost small"
-              title="Edit"
-              aria-label="Edit"
-              (click)="edit(fact)"
-            >
+            <button type="button" class="ghost small" title="Edit" aria-label="Edit" (click)="edit(fact)">
               <jv-icon name="edit" [size]="13" />
             </button>
-            <button
-              type="button"
-              class="ghost small"
-              title="Forget"
-              aria-label="Forget"
-              (click)="confirmDeleteId.set(fact.id)"
-            >
+            <button type="button" class="ghost small" title="Forget" aria-label="Forget" (click)="confirmDeleteId.set(fact.id)">
               <jv-icon name="trash" [size]="13" />
             </button>
           </div>

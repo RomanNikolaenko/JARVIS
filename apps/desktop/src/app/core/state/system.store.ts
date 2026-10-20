@@ -1,11 +1,5 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
-import type {
-  AppInfo,
-  HealthReport,
-  HealthStatus,
-  PlatformInfo,
-  SystemMetrics,
-} from '@jarvis/shared-types';
+import type { AppInfo, HealthReport, HealthStatus, PlatformInfo, SystemMetrics } from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
@@ -35,10 +29,7 @@ export class SystemStore {
 
   async loadStaticInfo(): Promise<void> {
     try {
-      const [appInfo, platform] = await Promise.all([
-        this.api.getAppInfo(),
-        this.api.getPlatformInfo(),
-      ]);
+      const [appInfo, platform] = await Promise.all([this.api.getAppInfo(), this.api.getPlatformInfo()]);
       this.appInfo.set(appInfo);
       this.platform.set(platform);
     } catch (error) {

@@ -22,11 +22,8 @@
   --jv-radius-sm: 6px;
 
   // System fonts only: nothing is downloaded at runtime (privacy, offline use).
-  --jv-font:
-    'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
-  --jv-mono:
-    'Cascadia Mono', 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', ui-monospace, Consolas,
-    monospace;
+  --jv-font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Ubuntu', 'Cantarell', 'Noto Sans', sans-serif;
+  --jv-mono: 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', 'DejaVu Sans Mono', ui-monospace, Consolas, monospace;
 }
 
 *,
@@ -43,8 +40,7 @@ body {
 
 body {
   overflow: hidden;
-  background:
-    radial-gradient(1200px 600px at 70% -10%, rgb(56 189 248 / 6%), transparent 60%), var(--jv-bg);
+  background: radial-gradient(1200px 600px at 70% -10%, rgb(56 189 248 / 6%), transparent 60%), var(--jv-bg);
   color: var(--jv-text);
   font: 14px/1.45 var(--jv-font);
   -webkit-font-smoothing: antialiased;

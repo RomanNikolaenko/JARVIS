@@ -1,9 +1,7 @@
 <header class="page-header">
   <div>
     <h1 class="title">Local runtime</h1>
-    <p class="subtitle">
-      Run GGUF models inside JARVIS with llama.cpp — no Ollama or LM Studio needed.
-    </p>
+    <p class="subtitle">Run GGUF models inside JARVIS with llama.cpp — no Ollama or LM Studio needed.</p>
   </div>
   @if (store.server(); as server) {
     <jv-status-badge [status]="phaseBadge(server.phase)" [label]="'chat ' + server.phase" />
@@ -42,8 +40,8 @@
       </dl>
     } @else {
       <p class="lead">
-        JARVIS runs models with <strong>llama-server</strong> from the official llama.cpp project.
-        Install a verified build or use one you already have.
+        JARVIS runs models with <strong>llama-server</strong> from the official llama.cpp project. Install a verified build or use
+        one you already have.
       </p>
     }
 
@@ -51,42 +49,26 @@
       <label class="inline">
         <span>Build</span>
         <select (change)="onBackend($event)">
-          <option value="cpu" [selected]="backend() === 'cpu'">
-            CPU{{ recommended() === 'cpu' ? ' (recommended)' : '' }}
-          </option>
+          <option value="cpu" [selected]="backend() === 'cpu'">CPU{{ recommended() === 'cpu' ? ' (recommended)' : '' }}</option>
           <option value="vulkan" [selected]="backend() === 'vulkan'">
             Vulkan GPU{{ recommended() === 'vulkan' ? ' (recommended)' : '' }}
           </option>
         </select>
       </label>
-      <button
-        type="button"
-        (click)="store.checkRelease(backend())"
-        [disabled]="store.checkingRelease()"
-      >
-        {{
-          store.checkingRelease()
-            ? 'Checking…'
-            : store.installed()
-              ? 'Check for update'
-              : 'Find build'
-        }}
+      <button type="button" (click)="store.checkRelease(backend())" [disabled]="store.checkingRelease()">
+        {{ store.checkingRelease() ? 'Checking…' : store.installed() ? 'Check for update' : 'Find build' }}
       </button>
-      <button type="button" class="ghost" (click)="store.selectBinary()">
-        Use existing llama-server…
-      </button>
+      <button type="button" class="ghost" (click)="store.selectBinary()">Use existing llama-server…</button>
     </div>
     <p class="hint">
-      Vulkan is recommended for GPUs with 4 GB or more of dedicated memory. Integrated GPUs are
-      rarely faster than the CPU, and some older drivers produce garbled replies: if that happens,
-      set GPU offload to “Off” in the inference settings or use the CPU build.
+      Vulkan is recommended for GPUs with 4 GB or more of dedicated memory. Integrated GPUs are rarely faster than the CPU, and
+      some older drivers produce garbled replies: if that happens, set GPU offload to “Off” in the inference settings or use the
+      CPU build.
     </p>
 
     @if (store.release(); as release) {
       <div class="release">
-        <div class="release-title">
-          llama.cpp {{ release.tag }} · {{ backendLabels[release.backend] }}
-        </div>
+        <div class="release-title">llama.cpp {{ release.tag }} · {{ backendLabels[release.backend] }}</div>
         <dl class="facts">
           <div>
             <dt>File</dt>
@@ -112,8 +94,8 @@
         <p class="consent">
           <jv-icon name="shield" [size]="14" />
           <span>
-            JARVIS will download this archive from the official llama.cpp GitHub repository, verify
-            the SHA-256 above, extract it into its data folder and run
+            JARVIS will download this archive from the official llama.cpp GitHub repository, verify the SHA-256 above, extract it
+            into its data folder and run
             <code>llama-server</code> locally (bound to 127.0.0.1 only).
           </span>
         </p>
@@ -132,11 +114,7 @@
           <span>{{ download.label }}</span>
           <span class="dim">{{ download.phase }}</span>
         </div>
-        @if (
-          download.phase === 'downloading' ||
-          download.phase === 'verifying' ||
-          download.phase === 'installing'
-        ) {
+        @if (download.phase === 'downloading' || download.phase === 'verifying' || download.phase === 'installing') {
           <div class="meter">
             <div class="meter-fill" [style.width.%]="downloadPercent(download)"></div>
           </div>
@@ -229,8 +207,8 @@
             @if (entry.role === 'chat') {
               No chat model is running. Start one from the library below.
             } @else {
-              No embedding model is running, so memory search is text-only. Start an embedding model
-              from the library below (it runs next to the chat model).
+              No embedding model is running, so memory search is text-only. Start an embedding model from the library below (it
+              runs next to the chat model).
             }
           </p>
         } @else {
@@ -294,9 +272,7 @@
 
   <!-- Library -->
   <jv-hud-panel class="library" heading="Model library">
-    <button panelActions type="button" class="ghost small" (click)="store.importModel()">
-      Import GGUF…
-    </button>
+    <button panelActions type="button" class="ghost small" (click)="store.importModel()">Import GGUF…</button>
     @if (models().length) {
       <table class="model-table">
         <thead>
@@ -336,17 +312,11 @@
               <td class="num mono">{{ formatBytes(model.sizeBytes) }}</td>
               <td class="actions-cell">
                 @if (confirmingRemoval() === model.id) {
-                  <button type="button" class="ghost small" (click)="remove(model, false)">
-                    Remove from list
-                  </button>
+                  <button type="button" class="ghost small" (click)="remove(model, false)">Remove from list</button>
                   @if (model.managed) {
-                    <button type="button" class="danger small" (click)="remove(model, true)">
-                      Delete file
-                    </button>
+                    <button type="button" class="danger small" (click)="remove(model, true)">Delete file</button>
                   }
-                  <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">
-                    Cancel
-                  </button>
+                  <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">Cancel</button>
                 } @else {
                   <button
                     type="button"
@@ -359,17 +329,10 @@
                         : roleOf(model) === 'embeddings'
                           ? 'Serve it for semantic memory search, next to the chat model'
                           : ''
-                    "
-                  >
+                    ">
                     {{ roleOf(model) === 'embeddings' ? 'Start embeddings' : 'Start' }}
                   </button>
-                  <button
-                    type="button"
-                    class="ghost small"
-                    (click)="confirmingRemoval.set(model.id)"
-                  >
-                    Remove
-                  </button>
+                  <button type="button" class="ghost small" (click)="confirmingRemoval.set(model.id)">Remove</button>
                 }
               </td>
             </tr>
@@ -392,9 +355,7 @@
             }
           </span>
           @if (download.phase === 'downloading' || download.phase === 'verifying') {
-            <button type="button" class="ghost small" (click)="store.cancelDownload(download.id)">
-              Cancel
-            </button>
+            <button type="button" class="ghost small" (click)="store.cancelDownload(download.id)">Cancel</button>
           }
         </div>
         @if (download.phase === 'downloading' || download.phase === 'verifying') {
@@ -424,16 +385,9 @@
                 <span class="chip">embeddings</span>
               }
             </div>
-            <div class="dim small-text">
-              {{ model.description }} {{ formatBytes(model.sizeBytes) }} · {{ model.license }}
-            </div>
+            <div class="dim small-text">{{ model.description }} {{ formatBytes(model.sizeBytes) }} · {{ model.license }}</div>
           </div>
-          <button
-            type="button"
-            class="small"
-            (click)="store.downloadCurated(model.id)"
-            [disabled]="isCuratedPresent(model.id)"
-          >
+          <button type="button" class="small" (click)="store.downloadCurated(model.id)" [disabled]="isCuratedPresent(model.id)">
             {{ isCuratedPresent(model.id) ? 'Downloaded' : 'Download' }}
           </button>
         </li>
@@ -442,30 +396,15 @@
     <form class="custom" [formGroup]="customDownload" (ngSubmit)="downloadCustom()">
       <div class="field-label">Other GGUF from Hugging Face</div>
       <div class="custom-grid">
-        <input
-          type="text"
-          formControlName="repo"
-          placeholder="owner/repository"
-          spellcheck="false"
-        />
-        <input
-          type="text"
-          formControlName="file"
-          placeholder="model-Q4_K_M.gguf"
-          spellcheck="false"
-        />
-        <input
-          type="text"
-          formControlName="revision"
-          placeholder="revision (main)"
-          spellcheck="false"
-        />
+        <input type="text" formControlName="repo" placeholder="owner/repository" spellcheck="false" />
+        <input type="text" formControlName="file" placeholder="model-Q4_K_M.gguf" spellcheck="false" />
+        <input type="text" formControlName="revision" placeholder="revision (main)" spellcheck="false" />
         <button type="submit">Download</button>
       </div>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
-        Only public Hugging Face repositories. The file is pinned to a commit and checked against
-        the SHA-256 published by Hugging Face.
+        Only public Hugging Face repositories. The file is pinned to a commit and checked against the SHA-256 published by Hugging
+        Face.
       </p>
     </form>
   </jv-hud-panel>
@@ -480,13 +419,7 @@
         </label>
         <label class="field">
           <span class="field-label">CPU threads</span>
-          <input
-            type="number"
-            min="1"
-            max="256"
-            formControlName="threads"
-            placeholder="auto (physical cores)"
-          />
+          <input type="number" min="1" max="256" formControlName="threads" placeholder="auto (physical cores)" />
         </label>
         <label class="field">
           <span class="field-label">GPU offload</span>
@@ -527,21 +460,14 @@
         </label>
       </div>
       <p class="hint">
-        Larger contexts need more memory. The context size applies to chat models; the embedding
-        model uses up to 2048 tokens per text. Changes apply the next time a model starts. JARVIS
-        refuses to start a model that does not fit into free memory.
+        Larger contexts need more memory. The context size applies to chat models; the embedding model uses up to 2048 tokens per
+        text. Changes apply the next time a model starts. JARVIS refuses to start a model that does not fit into free memory.
       </p>
       <div class="row-actions">
         @if (settingsSaved() && settingsForm.pristine) {
           <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
         }
-        <button
-          type="submit"
-          class="primary"
-          [disabled]="settingsForm.pristine || settingsForm.invalid"
-        >
-          Save
-        </button>
+        <button type="submit" class="primary" [disabled]="settingsForm.pristine || settingsForm.invalid">Save</button>
       </div>
     </form>
   </jv-hud-panel>

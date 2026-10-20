@@ -42,9 +42,7 @@ export class FactsPanel {
     const text = this.filter().trim().toLowerCase();
     return this.store
       .facts()
-      .filter((fact) =>
-        scope === 'all' ? true : scope === 'global' ? !fact.projectId : fact.projectId === scope,
-      )
+      .filter((fact) => (scope === 'all' ? true : scope === 'global' ? !fact.projectId : fact.projectId === scope))
       .filter((fact) => !text || fact.content.toLowerCase().includes(text));
   });
   protected readonly canSave = computed(() => {

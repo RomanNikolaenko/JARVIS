@@ -1,7 +1,7 @@
 <div class="toolbar">
   <p class="hint grow">
-    Every tool call is recorded: the policy decision, your approval and the result. Each entry
-    carries the hash of the one before, so changes made outside JARVIS are detected.
+    Every tool call is recorded: the policy decision, your approval and the result. Each entry carries the hash of the one before,
+    so changes made outside JARVIS are detected.
   </p>
   <button type="button" (click)="store.loadAudit()" [disabled]="store.busy()">
     <jv-icon name="refresh" [size]="14" />
@@ -52,9 +52,7 @@
               <span class="chip" [class]="riskTone(entry.risk)">{{ entry.risk }}</span>
             </td>
             <td>
-              <span class="chip" [class]="eventTone(entry.event)">{{
-                eventLabel(entry.event)
-              }}</span>
+              <span class="chip" [class]="eventTone(entry.event)">{{ eventLabel(entry.event) }}</span>
             </td>
             <td class="detail" [title]="entry.detail">{{ entry.detail }}</td>
           </tr>
@@ -64,9 +62,7 @@
   </div>
   @if (!store.auditComplete()) {
     <div class="more">
-      <button type="button" class="ghost" (click)="store.loadAudit(true)" [disabled]="store.busy()">
-        Load older entries
-      </button>
+      <button type="button" class="ghost" (click)="store.loadAudit(true)" [disabled]="store.busy()">Load older entries</button>
     </div>
   }
 }

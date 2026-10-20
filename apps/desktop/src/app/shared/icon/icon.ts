@@ -7,17 +7,8 @@ const ICONS = {
   events: ['M3 12h4l3-7 4 14 3-7h4'],
   settings: ['M4 6h9M17 6h3M15 4v4', 'M4 12h3M11 12h9M9 10v4', 'M4 18h11M19 18h1M17 16v4'],
   mic: ['M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z', 'M5 11a7 7 0 0 0 14 0', 'M12 18v3'],
-  micOff: [
-    'M9 6a3 3 0 0 1 6 0v6a3 3 0 0 1-.6 1.8',
-    'M5 11a7 7 0 0 0 11.5 5.4',
-    'M12 18v3',
-    'M3 3l18 18',
-  ],
-  cpu: [
-    'M7 7h10v10H7z',
-    'M10 10h4v4h-4z',
-    'M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3',
-  ],
+  micOff: ['M9 6a3 3 0 0 1 6 0v6a3 3 0 0 1-.6 1.8', 'M5 11a7 7 0 0 0 11.5 5.4', 'M12 18v3', 'M3 3l18 18'],
+  cpu: ['M7 7h10v10H7z', 'M10 10h4v4h-4z', 'M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3'],
   memory: ['M3 8h18v8H3z', 'M7 8v8M11 8v8M15 8v8', 'M5 16v3M19 16v3'],
   send: ['M21 3L10 14', 'M21 3l-7 18-4-7-7-4z'],
   stop: ['M7 7h10v10H7z'],
@@ -26,10 +17,7 @@ const ICONS = {
   check: ['M5 12l5 5L20 7'],
   refresh: ['M20 11a8 8 0 1 0-2.3 5.7', 'M20 4v7h-7'],
   shield: ['M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z'],
-  spark: [
-    'M12 3v4M12 17v4M3 12h4M17 12h4',
-    'M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6',
-  ],
+  spark: ['M12 3v4M12 17v4M3 12h4M17 12h4', 'M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6'],
   monitor: ['M3 4h18v12H3z', 'M8 20h8M12 16v4'],
   brain: [
     'M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3h1V4z',
@@ -63,8 +51,7 @@ export type IconName = keyof typeof ICONS;
       stroke="currentColor"
       stroke-width="1.6"
       stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+      stroke-linejoin="round">
       @for (d of paths(); track $index) {
         <path [attr.d]="d" />
       }

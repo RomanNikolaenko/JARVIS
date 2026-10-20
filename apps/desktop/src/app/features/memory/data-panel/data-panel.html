@@ -27,8 +27,7 @@
           <dt>Contents</dt>
           <dd>
             {{ status.counts.conversations }} conversations, {{ status.counts.messages }} messages,
-            {{ status.counts.facts }} facts, {{ status.counts.projects }} projects,
-            {{ status.counts.episodes }} actions
+            {{ status.counts.facts }} facts, {{ status.counts.projects }} projects, {{ status.counts.episodes }} actions
           </dd>
         </div>
         <div>
@@ -58,15 +57,15 @@
     }
     <p class="hint">
       <jv-icon name="shield" [size]="14" />
-      Stored only on this computer, without encryption: it relies on your user account's protection.
-      Deleted items are overwritten in the database file.
+      Stored only on this computer, without encryption: it relies on your user account's protection. Deleted items are overwritten
+      in the database file.
     </p>
   </jv-hud-panel>
 
   <jv-hud-panel heading="Export and import">
     <p class="hint">
-      A JSON file with conversations, facts, projects and the action history. Importing adds what is
-      missing and skips what already exists.
+      A JSON file with conversations, facts, projects and the action history. Importing adds what is missing and skips what
+      already exists.
     </p>
     <div class="form-actions start">
       <button type="button" [disabled]="store.busy()" (click)="store.exportMemory()">
@@ -82,8 +81,8 @@
       <p class="result">
         <jv-icon name="check" [size]="14" />
         {{ transfer.kind === 'export' ? 'Exported' : 'Imported' }}
-        {{ transfer.report.counts.conversations }} conversations,
-        {{ transfer.report.counts.facts }} facts, {{ transfer.report.counts.projects }} projects
+        {{ transfer.report.counts.conversations }} conversations, {{ transfer.report.counts.facts }} facts,
+        {{ transfer.report.counts.projects }} projects
         @if (transfer.report.skipped) {
           ({{ transfer.report.skipped }} already present)
         }
@@ -97,35 +96,22 @@
   <jv-hud-panel heading="Memory settings">
     <div class="form">
       <label class="check">
-        <input
-          type="checkbox"
-          [checked]="memory.enabled"
-          (change)="update({ enabled: checkedOf($event) })"
-        />
+        <input type="checkbox" [checked]="memory.enabled" (change)="update({ enabled: checkedOf($event) })" />
         <span>Save conversations, facts and the action history</span>
       </label>
       <label class="check">
-        <input
-          type="checkbox"
-          [checked]="memory.useFacts"
-          (change)="update({ useFacts: checkedOf($event) })"
-        />
+        <input type="checkbox" [checked]="memory.useFacts" (change)="update({ useFacts: checkedOf($event) })" />
         <span>Use facts in answers</span>
       </label>
       <label class="check">
         <input
           type="checkbox"
           [checked]="memory.recallConversations"
-          (change)="update({ recallConversations: checkedOf($event) })"
-        />
+          (change)="update({ recallConversations: checkedOf($event) })" />
         <span>Recall relevant parts of other conversations</span>
       </label>
       <label class="check">
-        <input
-          type="checkbox"
-          [checked]="memory.autoSummarize"
-          (change)="update({ autoSummarize: checkedOf($event) })"
-        />
+        <input type="checkbox" [checked]="memory.autoSummarize" (change)="update({ autoSummarize: checkedOf($event) })" />
         <span>Summarize the older part of long conversations</span>
       </label>
       <div class="grid">
@@ -152,8 +138,7 @@
             step="512"
             placeholder="model's window"
             [value]="memory.contextLimitTokens ?? ''"
-            (input)="onContextLimit($event)"
-          />
+            (input)="onContextLimit($event)" />
         </label>
         <label class="field">
           <span class="field-label">Keep the action history (days, 0 = forever)</span>
@@ -162,8 +147,7 @@
             min="0"
             max="3650"
             [value]="memory.episodeRetentionDays"
-            (input)="update({ episodeRetentionDays: +valueOf($event) })"
-          />
+            (input)="update({ episodeRetentionDays: +valueOf($event) })" />
         </label>
       </div>
       <p class="hint">
@@ -182,12 +166,8 @@
         @if (saved() && !dirty()) {
           <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
         }
-        <button type="button" class="ghost" [disabled]="!dirty()" (click)="discard()">
-          Discard
-        </button>
-        <button type="button" class="primary" [disabled]="!dirty() || saving()" (click)="save()">
-          Save
-        </button>
+        <button type="button" class="ghost" [disabled]="!dirty()" (click)="discard()">Discard</button>
+        <button type="button" class="primary" [disabled]="!dirty() || saving()" (click)="save()">Save</button>
       </div>
     </div>
   </jv-hud-panel>
@@ -196,25 +176,15 @@
 <jv-hud-panel heading="Delete all memory" class="danger-zone">
   <p class="hint">
     <jv-icon name="warning" [size]="14" />
-    Deletes every saved conversation, fact, project and action from this computer. This cannot be
-    undone; export first if you may need it.
+    Deletes every saved conversation, fact, project and action from this computer. This cannot be undone; export first if you may
+    need it.
   </p>
   <div class="toolbar">
     <label class="field">
       <span class="field-label">Type {{ clearWord }} to confirm</span>
-      <input
-        aria-label="Confirmation"
-        autocomplete="off"
-        [value]="confirmation()"
-        (input)="confirmation.set(valueOf($event))"
-      />
+      <input aria-label="Confirmation" autocomplete="off" [value]="confirmation()" (input)="confirmation.set(valueOf($event))" />
     </label>
-    <button
-      type="button"
-      class="danger"
-      [disabled]="confirmation() !== clearWord || store.busy()"
-      (click)="clearAll()"
-    >
+    <button type="button" class="danger" [disabled]="confirmation() !== clearWord || store.busy()" (click)="clearAll()">
       <jv-icon name="trash" [size]="15" />
       Delete all memory
     </button>

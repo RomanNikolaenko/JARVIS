@@ -45,14 +45,7 @@ export const SETTINGS = {
     episodeRetentionDays: 90,
   },
   tools: {
-    enabled: [
-      'list_directory',
-      'read_file',
-      'search_files',
-      'system_info',
-      'list_processes',
-      'git',
-    ],
+    enabled: ['list_directory', 'read_file', 'search_files', 'system_info', 'list_processes', 'git'],
     workspaceFolders: [],
     allowedPrograms: [],
     allowNetwork: false,

@@ -51,8 +51,7 @@
           [disabled]="store.readOnly()"
           (click)="noteOpen.set(!noteOpen())"
           title="Pinned note for this conversation"
-          aria-label="Pinned note"
-        >
+          aria-label="Pinned note">
           <jv-icon name="pin" [size]="16" />
         </button>
       </div>
@@ -66,8 +65,7 @@
           placeholder="Notes JARVIS always keeps in mind in this conversation, e.g. the current goal."
           [attr.maxlength]="maxNoteLength"
           [value]="noteDraft()"
-          (input)="onNoteInput($event)"
-        ></textarea>
+          (input)="onNoteInput($event)"></textarea>
         <div class="note-actions">
           <span class="dim">Sent with every message of this conversation (working memory).</span>
           @if (noteSaved()) {
@@ -77,8 +75,7 @@
             type="button"
             class="primary small"
             [disabled]="store.busy() || noteDraft() === (store.conversation()?.pinnedNote ?? '')"
-            (click)="saveNote()"
-          >
+            (click)="saveNote()">
             Save note
           </button>
         </div>
@@ -90,10 +87,9 @@
         <jv-icon name="warning" [size]="16" />
         <span>
           No AI model is reachable. Start a model on the
-          <a routerLink="/runtime">Runtime</a> screen, start <strong>Ollama</strong> or
-          <strong>LM Studio</strong>, or configure a server on the
-          <a routerLink="/models">Models</a> screen. Until then the diagnostic echo provider answers
-          by repeating your message.
+          <a routerLink="/runtime">Runtime</a> screen, start <strong>Ollama</strong> or <strong>LM Studio</strong>, or configure a
+          server on the <a routerLink="/models">Models</a> screen. Until then the diagnostic echo provider answers by repeating
+          your message.
         </span>
       </div>
     }
@@ -114,17 +110,15 @@
         <jv-icon name="shield" [size]="16" />
         <span>
           Saving is turned off, so this saved conversation is read-only. Start a
-          <button type="button" class="link" (click)="newChat(true)">temporary chat</button> or turn
-          saving on under <a routerLink="/memory">Memory</a>.
+          <button type="button" class="link" (click)="newChat(true)">temporary chat</button> or turn saving on under
+          <a routerLink="/memory">Memory</a>.
         </span>
       </div>
     }
     @if (store.summary(); as summary) {
       <div class="summary">
         <jv-icon name="brain" [size]="14" />
-        <span>
-          {{ summary.coveredMessages }} earlier messages are condensed into a summary for the model.
-        </span>
+        <span> {{ summary.coveredMessages }} earlier messages are condensed into a summary for the model. </span>
         <button type="button" class="ghost small" (click)="summaryOpen.set(!summaryOpen())">
           {{ summaryOpen() ? 'Hide' : 'Show' }}
         </button>
@@ -136,11 +130,7 @@
 
     <div class="messages" #scroller (scroll)="onScroll(scroller)" aria-live="polite">
       @for (entry of store.entries(); track entry.id) {
-        <article
-          class="message"
-          [class.user]="entry.role === 'user'"
-          [class.assistant]="entry.role === 'assistant'"
-        >
+        <article class="message" [class.user]="entry.role === 'user'" [class.assistant]="entry.role === 'assistant'">
           <div class="meta">
             @if (entry.role === 'user') {
               You
@@ -210,8 +200,7 @@
                     type="button"
                     class="ghost small remember"
                     (click)="startRemember(entry)"
-                    title="Save as a fact in long-term memory"
-                  >
+                    title="Save as a fact in long-term memory">
                     <jv-icon name="brain" [size]="13" />
                     Remember
                   </button>
@@ -226,19 +215,15 @@
                 aria-label="Fact to remember"
                 [attr.maxlength]="maxFactLength"
                 [value]="rememberDraft()"
-                (input)="onRememberInput($event)"
-              ></textarea>
+                (input)="onRememberInput($event)"></textarea>
               <div class="note-actions">
                 <span class="dim">Edit it down to the fact worth keeping.</span>
-                <button type="button" class="ghost small" (click)="rememberId.set(null)">
-                  Cancel
-                </button>
+                <button type="button" class="ghost small" (click)="rememberId.set(null)">Cancel</button>
                 <button
                   type="button"
                   class="primary small"
                   [disabled]="!rememberDraft().trim() || memory.busy()"
-                  (click)="saveRemember(entry)"
-                >
+                  (click)="saveRemember(entry)">
                   Save fact
                 </button>
               </div>
@@ -276,8 +261,7 @@
         [value]="draft()"
         [attr.maxlength]="maxLength"
         (input)="onInput($event)"
-        (keydown)="onKeydown($event)"
-      ></textarea>
+        (keydown)="onKeydown($event)"></textarea>
       <div class="composer-actions">
         @if (nearLimit()) {
           <span class="counter">{{ draft().length }} / {{ maxLength }}</span>

@@ -1,20 +1,6 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  effect,
-  inject,
-  signal,
-  untracked,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import type {
-  AgentsSettings,
-  RiskLevel,
-  Settings,
-  ToolInfo,
-  ToolSettings,
-} from '@jarvis/shared-types';
+import type { AgentsSettings, RiskLevel, Settings, ToolInfo, ToolSettings } from '@jarvis/shared-types';
 
 import { AgentsStore } from '../../../core/state/agents.store';
 import { SettingsStore } from '../../../core/state/settings.store';
@@ -79,9 +65,7 @@ export class ToolsPanel {
   protected readonly saveError = this.settingsStore.error;
   protected readonly draft = signal<Draft | null>(null);
   protected readonly savedAt = signal<number | null>(null);
-  protected readonly allowCloudProviders = computed(
-    () => this.settingsStore.settings()?.privacy.allowCloudProviders ?? false,
-  );
+  protected readonly allowCloudProviders = computed(() => this.settingsStore.settings()?.privacy.allowCloudProviders ?? false);
   protected readonly dirty = computed(() => {
     const settings = this.settingsStore.settings();
     const draft = this.draft();
@@ -154,9 +138,7 @@ export class ToolsPanel {
       return;
     }
     const workspaceFolders = settings.tools.workspaceFolders.filter((f) => f !== path);
-    if (
-      await this.settingsStore.save({ ...settings, tools: { ...settings.tools, workspaceFolders } })
-    ) {
+    if (await this.settingsStore.save({ ...settings, tools: { ...settings.tools, workspaceFolders } })) {
       this.update((d) => (d.tools.workspaceFolders = workspaceFolders));
       await this.store.refreshStatus();
     }

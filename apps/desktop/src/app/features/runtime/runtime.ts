@@ -1,12 +1,4 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  DestroyRef,
-  computed,
-  effect,
-  inject,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import type {
   BinarySource,
@@ -39,9 +31,7 @@ export const BACKEND_LABELS: Record<RuntimeBackend, string> = {
 };
 
 export function describeSource(source: BinarySource): string {
-  return source.kind === 'release'
-    ? `Official llama.cpp ${source.tag} (${source.asset})`
-    : 'Selected by you';
+  return source.kind === 'release' ? `Official llama.cpp ${source.tag} (${source.asset})` : 'Selected by you';
 }
 
 export const ROLE_LABELS: Record<ServerRole, string> = {
@@ -89,9 +79,7 @@ interface ServerView {
 }
 
 export function downloadPercent(download: DownloadStatus): number {
-  return download.totalBytes
-    ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100))
-    : 0;
+  return download.totalBytes ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100)) : 0;
 }
 
 @Component({
@@ -134,11 +122,9 @@ export class RuntimePage {
     ];
   });
   protected readonly runtimeDownloads = computed(() =>
-    (this.store.status()?.downloads ?? []).filter((d) => d.kind === 'runtime'),
+    (this.store.status()?.downloads ?? []).filter((d) => d.kind === 'runtime')
   );
-  protected readonly modelDownloads = computed(() =>
-    (this.store.status()?.downloads ?? []).filter((d) => d.kind === 'model'),
-  );
+  protected readonly modelDownloads = computed(() => (this.store.status()?.downloads ?? []).filter((d) => d.kind === 'model'));
 
   protected readonly customDownload = new FormGroup({
     repo: new FormControl('', {
@@ -183,7 +169,7 @@ export class RuntimePage {
         return this.store.refresh();
       },
       POLL_MS,
-      destroyRef,
+      destroyRef
     );
     // Preselect the recommended backend once hardware is known.
     effect(() => this.backend.set(this.recommended()));
@@ -211,13 +197,8 @@ export class RuntimePage {
   }
 
   protected canStart(model: LocalModel): boolean {
-    const server =
-      roleOf(model) === 'embeddings' ? this.store.embeddingServer() : this.store.server();
-    return (
-      !!this.store.installed() &&
-      model.available &&
-      !(isActive(server) && server?.modelId === model.id)
-    );
+    const server = roleOf(model) === 'embeddings' ? this.store.embeddingServer() : this.store.server();
+    return !!this.store.installed() && model.available && !(isActive(server) && server?.modelId === model.id);
   }
 
   protected downloadCustom(): void {
@@ -226,13 +207,11 @@ export class RuntimePage {
       return;
     }
     const { repo, file, revision } = this.customDownload.getRawValue();
-    void this.store
-      .downloadModel({ repo: repo.trim(), file: file.trim(), revision: revision.trim() || null })
-      .then(() => {
-        if (!this.store.error()) {
-          this.customDownload.reset();
-        }
-      });
+    void this.store.downloadModel({ repo: repo.trim(), file: file.trim(), revision: revision.trim() || null }).then(() => {
+      if (!this.store.error()) {
+        this.customDownload.reset();
+      }
+    });
   }
 
   protected isCuratedPresent(id: string): boolean {

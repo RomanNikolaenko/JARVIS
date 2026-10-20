@@ -64,8 +64,7 @@ export class Chat {
   protected readonly rememberId = signal<string | null>(null);
   protected readonly rememberDraft = signal('');
   protected readonly rememberedId = signal<string | null>(null);
-  protected readonly keyOf = (option: ModelOption): string =>
-    optionKey(option.provider.id, option.model.id);
+  protected readonly keyOf = (option: ModelOption): string => optionKey(option.provider.id, option.model.id);
 
   protected readonly title = computed(() => {
     const conversation = this.store.conversation();
@@ -96,12 +95,7 @@ export class Chat {
   });
   protected readonly canSend = computed(() => {
     const text = this.draft().trim();
-    return (
-      text.length > 0 &&
-      text.length <= MAX_MESSAGE_LENGTH &&
-      !this.store.busy() &&
-      !this.store.readOnly()
-    );
+    return text.length > 0 && text.length <= MAX_MESSAGE_LENGTH && !this.store.busy() && !this.store.readOnly();
   });
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
   /** Saved conversations can feed facts; temporary ones do not link back. */
@@ -206,8 +200,7 @@ export class Chat {
   // ---- Composer ----
 
   protected onScroll(element: HTMLElement): void {
-    this.stickToBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight < STICKY_SCROLL_THRESHOLD;
+    this.stickToBottom = element.scrollHeight - element.scrollTop - element.clientHeight < STICKY_SCROLL_THRESHOLD;
   }
 
   protected onInput(event: Event): void {

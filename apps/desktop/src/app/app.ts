@@ -1,11 +1,4 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  DestroyRef,
-  computed,
-  inject,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
 import { AgentsStore } from './core/state/agents.store';
@@ -74,7 +67,7 @@ export class App {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
-    }),
+    })
   );
 
   constructor() {

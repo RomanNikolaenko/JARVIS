@@ -113,10 +113,7 @@ export class JarvisApi {
    * both sides. Events may arrive before the returned promise resolves; the
    * `started` event carries the request id as well.
    */
-  sendMessage(
-    request: ChatTurnRequest,
-    onEvent: (event: ChatStreamEvent) => void,
-  ): Promise<string> {
+  sendMessage(request: ChatTurnRequest, onEvent: (event: ChatStreamEvent) => void): Promise<string> {
     const channel = this.bridge.channel<ChatStreamEvent>(onEvent);
     return this.bridge.invoke('send_message', { request, onEvent: channel });
   }

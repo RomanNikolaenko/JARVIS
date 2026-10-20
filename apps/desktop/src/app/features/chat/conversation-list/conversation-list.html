@@ -9,8 +9,7 @@
     (click)="newChat(true)"
     [disabled]="store.busy()"
     title="Temporary chat: nothing is saved"
-    aria-label="New temporary chat"
-  >
+    aria-label="New temporary chat">
     <jv-icon name="ghost" [size]="16" />
   </button>
 </div>
@@ -21,8 +20,7 @@
     placeholder="Search conversations"
     aria-label="Search conversations"
     [value]="store.conversationQuery()"
-    (input)="onSearch($event)"
-  />
+    (input)="onSearch($event)" />
 </label>
 
 <ul class="conversation-list">
@@ -37,23 +35,15 @@
           (input)="onRenameInput($event)"
           (keydown.enter)="saveRename(conversation)"
           (keydown.escape)="renamingId.set(null)"
-          (blur)="saveRename(conversation)"
-        />
+          (blur)="saveRename(conversation)" />
       } @else if (confirmDeleteId() === conversation.id) {
         <div class="confirm">
           <span>Delete this conversation?</span>
           <button type="button" class="danger small" (click)="remove(conversation)">Delete</button>
-          <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">
-            Cancel
-          </button>
+          <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">Cancel</button>
         </div>
       } @else {
-        <button
-          type="button"
-          class="conversation"
-          [disabled]="store.busy()"
-          (click)="open(conversation)"
-        >
+        <button type="button" class="conversation" [disabled]="store.busy()" (click)="open(conversation)">
           <span class="conversation-title">
             @if (conversation.temporary) {
               <jv-icon name="ghost" [size]="13" />
@@ -66,13 +56,7 @@
           </span>
         </button>
         <span class="item-actions">
-          <button
-            type="button"
-            class="ghost small"
-            title="Rename"
-            aria-label="Rename"
-            (click)="startRename(conversation)"
-          >
+          <button type="button" class="ghost small" title="Rename" aria-label="Rename" (click)="startRename(conversation)">
             <jv-icon name="edit" [size]="13" />
           </button>
           <button
@@ -81,8 +65,7 @@
             title="Delete"
             aria-label="Delete"
             [disabled]="store.busy() && conversation.id === store.conversation()?.id"
-            (click)="confirmDeleteId.set(conversation.id)"
-          >
+            (click)="confirmDeleteId.set(conversation.id)">
             <jv-icon name="trash" [size]="13" />
           </button>
         </span>

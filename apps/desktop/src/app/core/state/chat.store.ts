@@ -77,17 +77,13 @@ export class ChatStore {
   readonly busy = computed(() => this.phase() !== 'idle');
   readonly savingEnabled = computed(() => this.settings.settings()?.memory.enabled ?? true);
   /** The open (or next) chat is not saved. */
-  readonly temporary = computed(
-    () => this.conversation()?.temporary ?? (this.temporaryDraft() || !this.savingEnabled()),
-  );
+  readonly temporary = computed(() => this.conversation()?.temporary ?? (this.temporaryDraft() || !this.savingEnabled()));
   /** A saved conversation cannot continue while saving is off. */
   readonly readOnly = computed(() => {
     const conversation = this.conversation();
     return !!conversation && !conversation.temporary && !this.savingEnabled();
   });
-  readonly projectId = computed(() =>
-    this.conversation() ? this.conversation()!.projectId : this.draftProjectId(),
-  );
+  readonly projectId = computed(() => (this.conversation() ? this.conversation()!.projectId : this.draftProjectId()));
 
   readonly modelOptions = this.models.chatOptions;
   readonly modelsError = this.models.error;
@@ -95,14 +91,10 @@ export class ChatStore {
   /** Explicitly selected model; `null` when automatic or no longer available. */
   readonly selected = computed<ModelOption | null>(() => {
     const key = this.selectedKey();
-    return key === null
-      ? null
-      : (this.modelOptions().find((o) => optionKey(o.provider.id, o.model.id) === key) ?? null);
+    return key === null ? null : (this.modelOptions().find((o) => optionKey(o.provider.id, o.model.id) === key) ?? null);
   });
   /** True when models are loaded and no real AI model is reachable. */
-  readonly diagnosticOnly = computed(
-    () => this.models.loaded() && !this.models.realModelAvailable(),
-  );
+  readonly diagnosticOnly = computed(() => this.models.loaded() && !this.models.realModelAvailable());
 
   loadModels(force = false): Promise<void> {
     return this.models.refresh(force);
@@ -169,10 +161,7 @@ export class ChatStore {
     try {
       let conversation = this.conversation();
       if (!conversation) {
-        conversation = await this.api.createConversation(
-          this.draftProjectId(),
-          this.temporaryDraft(),
-        );
+        conversation = await this.api.createConversation(this.draftProjectId(), this.temporaryDraft());
         this.conversation.set(conversation);
       }
       const requestId = await this.api.sendMessage(
@@ -184,7 +173,7 @@ export class ChatStore {
           temperature: null,
           maxOutputTokens: null,
         },
-        (event) => this.onEvent(assistantId, event),
+        (event) => this.onEvent(assistantId, event)
       );
       if (this.phase() !== 'idle' && this.activeRequestId() === null) {
         this.activeRequestId.set(requestId);
@@ -252,10 +241,7 @@ export class ChatStore {
     let conversation = this.conversation();
     if (!conversation) {
       try {
-        conversation = await this.api.createConversation(
-          this.draftProjectId(),
-          this.temporaryDraft(),
-        );
+        conversation = await this.api.createConversation(this.draftProjectId(), this.temporaryDraft());
         this.conversation.set(conversation);
       } catch (error) {
         this.error.set(IpcError.from(error));
@@ -344,8 +330,6 @@ export class ChatStore {
   }
 
   private appendContent(id: string, text: string): void {
-    this.entries.update((list) =>
-      list.map((e) => (e.id === id ? { ...e, content: e.content + text } : e)),
-    );
+    this.entries.update((list) => list.map((e) => (e.id === id ? { ...e, content: e.content + text } : e)));
   }
 }

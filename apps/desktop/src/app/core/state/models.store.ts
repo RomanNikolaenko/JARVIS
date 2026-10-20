@@ -54,27 +54,19 @@ export class ModelsStore {
   readonly error = signal<IpcError | null>(null);
 
   /** Configured providers (including disabled ones) from settings. */
-  readonly configured = computed<readonly ProviderConfig[]>(
-    () => this.settingsStore.settings()?.ai.providers ?? [],
-  );
-  readonly routing = computed<ModelRouting | null>(
-    () => this.settingsStore.settings()?.ai.routing ?? null,
-  );
+  readonly configured = computed<readonly ProviderConfig[]>(() => this.settingsStore.settings()?.ai.providers ?? []);
+  readonly routing = computed<ModelRouting | null>(() => this.settingsStore.settings()?.ai.routing ?? null);
 
   /** All available models, in provider order. */
   readonly options = computed<ModelOption[]>(() =>
     this.providers()
       .filter((p) => !p.error)
-      .flatMap((p) => p.models.map((model) => ({ provider: p.provider, model }))),
+      .flatMap((p) => p.models.map((model) => ({ provider: p.provider, model })))
   );
   readonly chatOptions = computed(() => this.options().filter((o) => o.model.capabilities.chat));
   /** True once loaded and at least one real (non-diagnostic) chat model is reachable. */
-  readonly realModelAvailable = computed(() =>
-    this.chatOptions().some((o) => o.provider.kind !== 'diagnostic'),
-  );
-  readonly generalRoute = computed(
-    () => this.routes().find((r) => r.category === 'general') ?? null,
-  );
+  readonly realModelAvailable = computed(() => this.chatOptions().some((o) => o.provider.kind !== 'diagnostic'));
+  readonly generalRoute = computed(() => this.routes().find((r) => r.category === 'general') ?? null);
 
   /** Loads providers and routes; concurrent calls share one request. */
   refresh(force = false): Promise<void> {
@@ -84,10 +76,7 @@ export class ModelsStore {
     this.loading.set(true);
     const run = (async () => {
       try {
-        const [providers, routes] = await Promise.all([
-          this.api.listAiModels(force),
-          this.api.getModelRoutes(),
-        ]);
+        const [providers, routes] = await Promise.all([this.api.listAiModels(force), this.api.getModelRoutes()]);
         this.providers.set(providers);
         this.routes.set(routes);
         this.error.set(null);

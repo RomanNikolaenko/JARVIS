@@ -39,8 +39,7 @@
       class="tab"
       [class.active]="tab() === item.id"
       [attr.aria-selected]="tab() === item.id"
-      (click)="tab.set(item.id)"
-    >
+      (click)="tab.set(item.id)">
       <jv-icon [name]="item.icon" [size]="15" />
       {{ item.label }}
     </button>

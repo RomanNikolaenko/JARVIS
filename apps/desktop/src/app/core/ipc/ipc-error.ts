@@ -4,7 +4,7 @@ import type { ErrorCode, ErrorPayload } from '@jarvis/shared-types';
 export class IpcError extends Error {
   constructor(
     readonly code: ErrorCode,
-    message: string,
+    message: string
   ) {
     super(message);
     this.name = 'IpcError';
@@ -48,9 +48,5 @@ export function isErrorPayload(value: unknown): value is ErrorPayload {
     return false;
   }
   const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate['code'] === 'string' &&
-    ERROR_CODES.has(candidate['code']) &&
-    typeof candidate['message'] === 'string'
-  );
+  return typeof candidate['code'] === 'string' && ERROR_CODES.has(candidate['code']) && typeof candidate['message'] === 'string';
 }

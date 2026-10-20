@@ -21,9 +21,7 @@ describe('ApprovalDialog', () => {
   }
 
   function button(element: HTMLElement, text: string): HTMLButtonElement {
-    const found = [...element.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes(text),
-    );
+    const found = [...element.querySelectorAll('button')].find((b) => b.textContent?.includes(text));
     if (!found) {
       throw new Error(`no button "${text}"`);
     }
