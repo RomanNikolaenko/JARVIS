@@ -7,22 +7,23 @@ use url::Url;
 
 use crate::download::Expected;
 use crate::error::{Result, RuntimeError};
-use crate::types::{CuratedModel, ModelDownloadRequest};
+use crate::types::{CuratedModel, ModelDownloadRequest, ServerRole};
 
 const HF: &str = "https://huggingface.co";
 
-/// Small instruction-tuned models that run on ordinary laptops. Revisions are
-/// commit hashes, so the files are immutable and the SHA-256 values hold.
+/// Small instruction-tuned models that run on ordinary laptops, and an
+/// embedding model for semantic memory search. Revisions are commit hashes,
+/// so the files are immutable and the SHA-256 values hold.
 pub fn curated_models() -> Vec<CuratedModel> {
-    let model = |id: &str,
-                 name: &str,
-                 description: &str,
-                 repo: &str,
-                 file: &str,
-                 revision: &str,
-                 sha256: &str,
-                 size_bytes: u64,
-                 license: &str| CuratedModel {
+    let chat = |id: &str,
+                name: &str,
+                description: &str,
+                repo: &str,
+                file: &str,
+                revision: &str,
+                sha256: &str,
+                size_bytes: u64,
+                license: &str| CuratedModel {
         id: id.to_owned(),
         display_name: name.to_owned(),
         description: description.to_owned(),
@@ -32,9 +33,10 @@ pub fn curated_models() -> Vec<CuratedModel> {
         sha256: sha256.to_owned(),
         size_bytes,
         license: license.to_owned(),
+        role: ServerRole::Chat,
     };
     vec![
-        model(
+        chat(
             "qwen2.5-0.5b-instruct-q4_k_m",
             "Qwen2.5 0.5B Instruct (Q4_K_M)",
             "Tiny and fast; good for testing and simple tasks. ~1 GB RAM.",
@@ -45,7 +47,7 @@ pub fn curated_models() -> Vec<CuratedModel> {
             491_400_032,
             "Apache-2.0",
         ),
-        model(
+        chat(
             "llama-3.2-1b-instruct-q4_k_m",
             "Llama 3.2 1B Instruct (Q4_K_M)",
             "Small multilingual assistant model. ~1.5 GB RAM.",
@@ -56,7 +58,7 @@ pub fn curated_models() -> Vec<CuratedModel> {
             807_694_464,
             "Llama 3.2 Community License",
         ),
-        model(
+        chat(
             "qwen2.5-1.5b-instruct-q4_k_m",
             "Qwen2.5 1.5B Instruct (Q4_K_M)",
             "Balanced quality and speed; good multilingual support. ~2 GB RAM.",
@@ -67,7 +69,7 @@ pub fn curated_models() -> Vec<CuratedModel> {
             1_117_320_736,
             "Apache-2.0",
         ),
-        model(
+        chat(
             "qwen2.5-3b-instruct-q4_k_m",
             "Qwen2.5 3B Instruct (Q4_K_M)",
             "Noticeably better answers; needs a stronger machine. ~3.5 GB RAM.",
@@ -78,6 +80,22 @@ pub fn curated_models() -> Vec<CuratedModel> {
             2_104_932_768,
             "Qwen Research License",
         ),
+        // Published by the llama.cpp project; BAAI/bge-m3 converted to GGUF
+        // (architecture `bert`, CLS pooling, 8 192-token training context).
+        CuratedModel {
+            role: ServerRole::Embeddings,
+            ..chat(
+                "bge-m3-q8_0",
+                "BGE-M3 embeddings (Q8_0)",
+                "Multilingual embedding model (100+ languages, incl. Ukrainian) for semantic memory search; runs next to a chat model. ~1.3 GB RAM.",
+                "ggml-org/bge-m3-Q8_0-GGUF",
+                "bge-m3-q8_0.gguf",
+                "9eba04c5d75ba5a1595e45de734d36bef4e5cb98",
+                "aa473d51f451a22f0fcf39ba3330c14bed38a385712b1113440f69df4047a173",
+                634_553_760,
+                "MIT",
+            )
+        },
     ]
 }
 
@@ -291,6 +309,13 @@ mod tests {
             check_source(&resolved.url).expect("allowed source");
             assert!(resolved.url.as_str().contains(&model.revision));
         }
+        let embedding: Vec<_> = curated_models()
+            .into_iter()
+            .filter(|m| m.role == ServerRole::Embeddings)
+            .collect();
+        assert_eq!(embedding.len(), 1, "one embedding model is offered");
+        // The library derives ids from file names; the UI matches them.
+        assert_eq!(embedding[0].id, "bge-m3-q8_0");
     }
 
     #[test]

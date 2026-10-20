@@ -8,7 +8,11 @@ export type BinarySource = { "kind": "release", tag: string, asset: string, url:
 /**
  * A model from the curated catalog: pinned repository revision and checksum.
  */
-export type CuratedModel = { id: string, displayName: string, description: string, repo: string, file: string, revision: string, sha256: string, sizeBytes: number, license: string, };
+export type CuratedModel = { id: string, displayName: string, description: string, repo: string, file: string, revision: string, sha256: string, sizeBytes: number, license: string, 
+/**
+ * The server the model is meant for.
+ */
+role: ServerRole, };
 
 export type DownloadKind = "model" | "runtime";
 
@@ -36,7 +40,11 @@ quantization: string | null,
 /**
  * Maximum context the model was trained for.
  */
-contextLength: number | null, blockCount: number | null, embeddingLength: number | null, headCount: number | null, headCountKv: number | null, };
+contextLength: number | null, blockCount: number | null, embeddingLength: number | null, headCount: number | null, headCountKv: number | null, 
+/**
+ * Declared by embedding models (sentence-transformers conversions).
+ */
+pooling: PoolingType | null, };
 
 /**
  * How many model layers are offloaded to the GPU.
@@ -78,6 +86,12 @@ file: string,
 revision: string | null, };
 
 export type ModelSource = { "kind": "imported" } | { "kind": "downloaded", repo: string, file: string, revision: string, };
+
+/**
+ * How an embedding model turns token vectors into one vector per input
+ * (`<arch>.pooling_type` in GGUF, `--pooling` of llama.cpp).
+ */
+export type PoolingType = "none" | "mean" | "cls" | "last" | "rank";
 
 /**
  * Compute backend of a llama.cpp build.
@@ -129,9 +143,13 @@ threads: number | null, gpuOffload: GpuOffload,
  */
 gpuLayers: number, 
 /**
- * Model started automatically with JARVIS; `None` = never.
+ * Chat model started automatically with JARVIS; `None` = never.
  */
 autostartModel: string | null, 
+/**
+ * Embedding model started automatically with JARVIS; `None` = never.
+ */
+autostartEmbeddingModel: string | null, 
 /**
  * Maximum time to load a model.
  */
@@ -140,13 +158,31 @@ startupTimeoutSecs: number, };
 /**
  * Everything the Runtime screen shows.
  */
-export type RuntimeStatus = { binary: RuntimeBinary | null, server: ServerState, models: Array<LocalModel>, downloads: Array<DownloadStatus>, modelsDir: string, 
+export type RuntimeStatus = { binary: RuntimeBinary | null, 
 /**
- * Last lines printed by the server (diagnostics).
+ * The chat model server.
  */
-logTail: Array<string>, };
+server: ServerState, 
+/**
+ * The embedding model server.
+ */
+embeddingServer: ServerState, models: Array<LocalModel>, downloads: Array<DownloadStatus>, modelsDir: string, 
+/**
+ * Last lines printed by the chat server (diagnostics).
+ */
+logTail: Array<string>, 
+/**
+ * Last lines printed by the embedding server.
+ */
+embeddingLogTail: Array<string>, };
 
 export type ServerPhase = "stopped" | "starting" | "running" | "stopping" | "failed";
+
+/**
+ * What a managed server instance is for. Each role runs its own
+ * `llama-server` process with its own port, API key and AI provider.
+ */
+export type ServerRole = "chat" | "embeddings";
 
 /**
  * State of the managed llama.cpp server.

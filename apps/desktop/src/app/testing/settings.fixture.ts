@@ -32,6 +32,7 @@ export const SETTINGS = {
     gpuOffload: 'auto',
     gpuLayers: 0,
     autostartModel: null,
+    autostartEmbeddingModel: null,
     startupTimeoutSecs: 180,
   },
   memory: {

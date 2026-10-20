@@ -9,7 +9,7 @@ use std::io::{self, BufReader, Read};
 use std::path::Path;
 
 use crate::error::{Result, RuntimeError};
-use crate::types::{GgufInfo, MemoryEstimate};
+use crate::types::{GgufInfo, MemoryEstimate, PoolingType};
 
 const MAGIC: &[u8; 4] = b"GGUF";
 const MAX_KV_COUNT: u64 = 100_000;
@@ -103,6 +103,7 @@ pub(crate) fn parse<R: Read>(mut reader: R) -> Result<GgufInfo> {
         embedding_length: arch_int("embedding_length"),
         head_count: arch_int("attention.head_count"),
         head_count_kv: arch_int("attention.head_count_kv"),
+        pooling: arch_int("pooling_type").and_then(PoolingType::from_gguf),
         architecture,
     })
 }
@@ -117,6 +118,7 @@ fn wanted(key: &str) -> bool {
         ".embedding_length",
         ".attention.head_count",
         ".attention.head_count_kv",
+        ".pooling_type",
     ]
     .iter()
     .any(|suffix| key.ends_with(suffix))
@@ -382,6 +384,18 @@ pub(crate) mod tests {
         assert_eq!(info.context_length, Some(32_768));
         assert_eq!(info.block_count, Some(24));
         assert_eq!(info.head_count_kv, Some(2));
+        assert_eq!(info.pooling, None, "chat models declare no pooling");
+
+        // Embedding models (e.g. bge-m3: `bert.pooling_type = 2`).
+        let pooled = |value: u32| {
+            let bytes =
+                sample_gguf(&[("qwen2.pooling_type", ty::U32, value.to_le_bytes().to_vec())]);
+            parse(bytes.as_slice()).expect("valid gguf").pooling
+        };
+        assert_eq!(pooled(2), Some(PoolingType::Cls));
+        assert_eq!(pooled(1), Some(PoolingType::Mean));
+        assert_eq!(pooled(4), Some(PoolingType::Rank));
+        assert_eq!(pooled(77), None);
     }
 
     #[test]

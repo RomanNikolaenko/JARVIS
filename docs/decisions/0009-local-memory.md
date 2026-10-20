@@ -39,7 +39,12 @@ desirable.
   filter) with vector similarity, fused by reciprocal rank fusion.
   Embeddings come from an AI provider whose model reports the capability
   (or that the user picks); vectors are normalized `f32` blobs per
-  embedding model and searched brute force in memory. Without an embedding
+  embedding model and searched brute force in memory. The embedded runtime
+  can serve an embedding model in its own llama.cpp server (ADR 0008), so
+  semantic search works without Ollama; it comes first among the providers,
+  so it is chosen automatically while it runs. The indexer runs as soon as
+  the set of providers changes. Switching to another embedding model drops
+  the vectors of the previous one and re-indexes. Without an embedding
   model, search and recall are text-only, and the UI says so.
 - **Context Manager** assembles each request inside the model's window:
   the system prompt and the new message always; then project instructions
@@ -93,7 +98,10 @@ desirable.
 
 - Memory works offline and survives restarts; deleting is real (overwritten
   pages, `VACUUM`).
-- Semantic search needs an embedding model; the embedded runtime does not
-  serve one yet (planned: a second llama.cpp instance with `--embedding`).
+- Semantic search needs an embedding model: the embedded runtime's
+  embedding server (curated: BGE-M3, multilingual incl. Ukrainian) or a
+  provider such as Ollama. Texts are embedded as they are (at most 2 000
+  characters each, no query/passage prefixes), which suits BGE-M3; models
+  that expect prefixes (e.g. multilingual-e5) work less well.
 - Token counts are estimates, so the budget keeps a safety margin.
 - Later domains (tasks, audit log) add migrations to the same database.

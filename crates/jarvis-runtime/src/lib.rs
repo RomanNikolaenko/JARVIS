@@ -10,7 +10,9 @@
 //! - [`process`] and [`RuntimeManager`]: launching on `127.0.0.1` with a random
 //!   API key, readiness checks, crash detection and safe termination.
 //!
-//! While a model is served, [`RuntimeManager::provider`] exposes it as an
+//! Two servers can run side by side, one per [`ServerRole`]: a chat model and
+//! an embedding model (`--embedding`) for semantic memory search. While a
+//! model is served, [`RuntimeManager::provider`] exposes it as an
 //! OpenAI-compatible [`jarvis_ai::AiProvider`].
 
 pub mod catalog;
@@ -26,9 +28,13 @@ pub mod testing;
 mod types;
 
 pub use error::{Result, RuntimeError};
-pub use manager::{RUNTIME_PROVIDER_ID, RuntimeManager, RuntimeOptions, gpu_layers};
+pub use manager::{
+    EMBEDDING_CONTEXT, RUNTIME_EMBEDDINGS_PROVIDER_ID, RUNTIME_PROVIDER_ID, RuntimeManager,
+    RuntimeOptions, gpu_layers,
+};
 pub use types::{
     BinarySource, CuratedModel, DownloadKind, DownloadPhase, DownloadStatus, FileDigest, GgufInfo,
-    GpuOffload, LocalModel, MemoryEstimate, ModelDownloadRequest, ModelSource, RuntimeBackend,
-    RuntimeBinary, RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase, ServerState,
+    GpuOffload, LocalModel, MemoryEstimate, ModelDownloadRequest, ModelSource, PoolingType,
+    RuntimeBackend, RuntimeBinary, RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase,
+    ServerRole, ServerState,
 };

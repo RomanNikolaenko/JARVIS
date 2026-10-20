@@ -10,7 +10,7 @@ use std::sync::{PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jarvis_ai::{EchoProvider, ProviderConfig};
-use jarvis_runtime::{RUNTIME_PROVIDER_ID, RuntimeSettings};
+use jarvis_runtime::{RUNTIME_EMBEDDINGS_PROVIDER_ID, RUNTIME_PROVIDER_ID, RuntimeSettings};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
@@ -435,7 +435,7 @@ impl Settings {
 
 /// Ids used by built-in providers (diagnostic echo, embedded runtime).
 pub fn is_reserved_provider_id(id: &str) -> bool {
-    id == EchoProvider::ID || id == RUNTIME_PROVIDER_ID
+    id == EchoProvider::ID || id == RUNTIME_PROVIDER_ID || id == RUNTIME_EMBEDDINGS_PROVIDER_ID
 }
 
 fn validate_providers(providers: &[ProviderConfig], problems: &mut Vec<String>) {

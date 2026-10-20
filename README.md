@@ -35,7 +35,8 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 - Embedded runtime (Runtime screen): install an official llama.cpp build
   (CPU/Vulkan) after explicit approval, import GGUF files or download
   verified models, start/stop a model with memory checks, GPU offload and
-  hardware detection.
+  hardware detection; a second server serves an embedding model (BGE-M3)
+  for semantic memory search without Ollama.
 - Rust core (`jarvis-core`) independent of the UI shell:
   - health check of all core components with timeouts;
   - settings in `config.toml` with validation, atomic writes and safe recovery;

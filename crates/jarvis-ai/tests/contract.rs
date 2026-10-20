@@ -496,3 +496,31 @@ async fn openai_compatible_sends_the_api_key_when_configured() {
         None
     );
 }
+
+#[tokio::test]
+async fn openai_compatible_reports_fixed_capabilities_when_configured() {
+    use jarvis_ai::{
+        DataLocality, HttpClient, ModelCapabilities, OpenAiCompatibleProvider, ProviderDescriptor,
+        ProviderKind,
+    };
+
+    let server = MockServer::start(openai_handler(Scenario::default())).await;
+    let base = url::Url::parse(&server.url("/v1")).expect("url");
+    let descriptor = ProviderDescriptor {
+        id: ProviderId::new("runtime-embeddings"),
+        display_name: "Runtime embeddings".into(),
+        kind: ProviderKind::Embedded,
+        locality: DataLocality::OnDevice,
+    };
+    let embeddings_only = ModelCapabilities {
+        embeddings: true,
+        ..ModelCapabilities::default()
+    };
+    let provider = OpenAiCompatibleProvider::new(descriptor, base, Arc::new(HttpClient::new()))
+        .with_capabilities(embeddings_only);
+
+    let models = provider.list_models().await.expect("models");
+    assert!(!models.is_empty());
+    // The id guess would call the chat model a chat model; the fixed value wins.
+    assert!(models.iter().all(|m| m.capabilities == embeddings_only));
+}

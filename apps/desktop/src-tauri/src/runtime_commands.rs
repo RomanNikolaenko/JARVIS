@@ -8,7 +8,7 @@ use jarvis_core::{CoreError, ErrorPayload};
 use jarvis_platform::HardwareInfo;
 use jarvis_runtime::{
     CuratedModel, LocalModel, ModelDownloadRequest, RuntimeBackend, RuntimeBinary, RuntimeManager,
-    RuntimeRelease, RuntimeStatus,
+    RuntimeRelease, RuntimeStatus, ServerRole,
 };
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
@@ -163,18 +163,23 @@ pub async fn remove_model(
         .map_err(payload)
 }
 
-/// Starts serving a model; readiness is reported through the status.
+/// Starts serving a model in the chat or the embedding server; readiness is
+/// reported through the status.
 #[tauri::command]
-pub async fn start_local_model(state: State<'_, AppState>, model_id: String) -> CommandResult<()> {
+pub async fn start_local_model(
+    state: State<'_, AppState>,
+    model_id: String,
+    role: ServerRole,
+) -> CommandResult<()> {
     state
         .core()
-        .start_local_model(&model_id)
+        .start_local_model(role, &model_id)
         .await
         .map_err(ErrorPayload::from)
 }
 
 #[tauri::command]
-pub async fn stop_local_model(state: State<'_, AppState>) -> CommandResult<()> {
-    state.core().runtime().stop().await;
+pub async fn stop_local_model(state: State<'_, AppState>, role: ServerRole) -> CommandResult<()> {
+    state.core().runtime().stop(role).await;
     Ok(())
 }

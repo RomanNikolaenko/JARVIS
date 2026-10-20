@@ -15,6 +15,9 @@ import type {
   LocalModel,
   RuntimeBackend,
   RuntimeSettings,
+  ServerPhase,
+  ServerRole,
+  ServerState,
 } from '@jarvis/shared-types';
 
 import { pollWhileVisible } from '../../core/state/poll';
@@ -41,6 +44,50 @@ export function describeSource(source: BinarySource): string {
     : 'Selected by you';
 }
 
+export const ROLE_LABELS: Record<ServerRole, string> = {
+  chat: 'Chat model',
+  embeddings: 'Embedding model',
+};
+
+/**
+ * Embedding models declare how they pool token vectors (sentence-transformers
+ * conversions); chat models and rerankers do not produce search vectors.
+ */
+export function isEmbeddingModel(model: LocalModel): boolean {
+  const pooling = model.gguf.pooling;
+  return pooling === 'mean' || pooling === 'cls' || pooling === 'last';
+}
+
+/** The server a library model is started in. */
+export function roleOf(model: LocalModel): ServerRole {
+  return isEmbeddingModel(model) ? 'embeddings' : 'chat';
+}
+
+/** Health-style status of a server phase (for the status badge). */
+export function phaseBadge(phase: ServerPhase): 'healthy' | 'unhealthy' | 'unknown' | 'degraded' {
+  switch (phase) {
+    case 'running':
+      return 'healthy';
+    case 'failed':
+      return 'unhealthy';
+    case 'stopped':
+      return 'unknown';
+    default:
+      return 'degraded';
+  }
+}
+
+export function isActive(server: ServerState | null | undefined): boolean {
+  return server?.phase === 'starting' || server?.phase === 'running';
+}
+
+/** One server as shown on the screen. */
+interface ServerView {
+  role: ServerRole;
+  state: ServerState;
+  logTail: readonly string[];
+}
+
 export function downloadPercent(download: DownloadStatus): number {
   return download.totalBytes
     ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100))
@@ -62,6 +109,11 @@ export class RuntimePage {
   protected readonly describeSource = describeSource;
   protected readonly downloadPercent = downloadPercent;
   protected readonly allLayers = ALL_LAYERS;
+  protected readonly roleLabels = ROLE_LABELS;
+  protected readonly roleOf = roleOf;
+  protected readonly isEmbeddingModel = isEmbeddingModel;
+  protected readonly phaseBadge = phaseBadge;
+  protected readonly isActive = isActive;
 
   protected readonly backend = signal<RuntimeBackend>('cpu');
   protected readonly confirmingRemoval = signal<string | null>(null);
@@ -69,20 +121,24 @@ export class RuntimePage {
 
   protected readonly recommended = computed(() => recommendedBackend(this.store.hardware()));
   protected readonly models = computed(() => this.store.status()?.models ?? []);
+  protected readonly chatModels = computed(() => this.models().filter((m) => !isEmbeddingModel(m)));
+  protected readonly embeddingModels = computed(() => this.models().filter(isEmbeddingModel));
+  protected readonly servers = computed<ServerView[]>(() => {
+    const status = this.store.status();
+    if (!status) {
+      return [];
+    }
+    return [
+      { role: 'chat', state: status.server, logTail: status.logTail },
+      { role: 'embeddings', state: status.embeddingServer, logTail: status.embeddingLogTail },
+    ];
+  });
   protected readonly runtimeDownloads = computed(() =>
     (this.store.status()?.downloads ?? []).filter((d) => d.kind === 'runtime'),
   );
   protected readonly modelDownloads = computed(() =>
     (this.store.status()?.downloads ?? []).filter((d) => d.kind === 'model'),
   );
-  protected readonly serverActive = computed(() => {
-    const phase = this.store.server()?.phase;
-    return phase === 'starting' || phase === 'running';
-  });
-  protected readonly uptime = computed(() => {
-    const started = this.store.server()?.startedAtMs;
-    return started ? formatUptime(Math.max(0, (this.now() - started) / 1000)) : '—';
-  });
 
   protected readonly customDownload = new FormGroup({
     repo: new FormControl('', {
@@ -110,6 +166,7 @@ export class RuntimePage {
       validators: [Validators.min(0), Validators.max(1000)],
     }),
     autostartModel: new FormControl('', { nonNullable: true }),
+    autostartEmbeddingModel: new FormControl('', { nonNullable: true }),
     startupTimeoutSecs: new FormControl(180, {
       nonNullable: true,
       validators: [Validators.required, Validators.min(10), Validators.max(1800)],
@@ -137,6 +194,7 @@ export class RuntimePage {
         this.settingsForm.reset({
           ...settings,
           autostartModel: settings.autostartModel ?? '',
+          autostartEmbeddingModel: settings.autostartEmbeddingModel ?? '',
         });
       }
     });
@@ -147,11 +205,18 @@ export class RuntimePage {
     this.store.release.set(null);
   }
 
+  protected uptime(server: ServerState): string {
+    const started = server.startedAtMs;
+    return started ? formatUptime(Math.max(0, (this.now() - started) / 1000)) : '—';
+  }
+
   protected canStart(model: LocalModel): boolean {
+    const server =
+      roleOf(model) === 'embeddings' ? this.store.embeddingServer() : this.store.server();
     return (
       !!this.store.installed() &&
       model.available &&
-      !(this.serverActive() && this.store.server()?.modelId === model.id)
+      !(isActive(server) && server?.modelId === model.id)
     );
   }
 
@@ -191,6 +256,7 @@ export class RuntimePage {
       gpuOffload: value.gpuOffload,
       gpuLayers: value.gpuLayers,
       autostartModel: value.autostartModel || null,
+      autostartEmbeddingModel: value.autostartEmbeddingModel || null,
       startupTimeoutSecs: value.startupTimeoutSecs,
     };
     if (await this.store.saveSettings(runtime)) {

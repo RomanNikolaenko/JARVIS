@@ -67,8 +67,28 @@ and a stuck or crashed engine must never take the UI down.
   verified against the LFS SHA-256 Hugging Face publishes; a small curated
   catalog pins commit and checksum in source code. Downloads resume with HTTP
   ranges, check free disk space and can be cancelled.
+- **A second server for embeddings** (added 2026-10-20). Semantic memory
+  search needs an embedding model, and a chat server cannot serve one at the
+  same time, so the `RuntimeManager` supervises one server per
+  `ServerRole` (`chat`, `embeddings`). Each role is a `Slot` with its own
+  state, provider, log tail, supervisor and pid file (`server.pid`,
+  `embedding-server.pid`); both get the same hardening (verified binary and
+  libraries, `127.0.0.1`, per-launch key in `LLAMA_API_KEY`, readiness,
+  crash detection, orphan cleanup) because the code is shared, not copied.
+  The embedding server runs with `--embedding`, `--pooling` from the model's
+  GGUF header (`<arch>.pooling_type`; rerankers are refused, models without
+  the key get `mean` with a warning) and context = batch = micro-batch =
+  min(2 048, training context): llama-server rejects an input that does not
+  fit into one micro-batch, and JARVIS embeds at most 2 000 characters per
+  text. Its provider (`jarvis-runtime-embeddings`, `onDevice`) reports
+  `embeddings` only, the chat provider `chat` + `streaming` only, so routing
+  never mixes them up. Both servers may run side by side; a crash of one
+  leaves the other running. The curated catalog offers BGE-M3 (Q8_0, from
+  `ggml-org/bge-m3-Q8_0-GGUF`, pinned to a commit and the LFS SHA-256).
 - **No autostart by default.** A model starts automatically only if the user
-  selects one in the runtime settings.
+  selects one in the runtime settings (one setting per role; the embedding
+  model starts first because it loads in seconds and the chat model's
+  memory check then accounts for it).
 
 ## Alternatives considered
 
@@ -86,6 +106,11 @@ and a stuck or crashed engine must never take the UI down.
 - The first use requires one explicit download (≈20–35 MB for CPU/Vulkan).
 - Tests use a fake `llama-server` (the test binary re-executes itself), so
   the supervisor is tested with real processes but without llama.cpp; the
-  real engine is verified manually.
+  real engine is verified manually. The fake also serves `/v1/embeddings`
+  with deterministic vectors (words of one meaning share a dimension), so
+  the core can test that search becomes semantic while the embedding server
+  runs.
+- Running both servers costs memory for two models (BGE-M3 Q8_0: ~0.6 GB
+  of weights; JARVIS requires ~1.2 GB free before it starts it).
 - On forced termination of JARVIS (e.g. killed by the OS) the server may
   outlive it until the next start, which cleans it up.

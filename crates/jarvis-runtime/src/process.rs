@@ -13,6 +13,7 @@ use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Result, RuntimeError};
+use crate::types::PoolingType;
 
 const LOG_LINES: usize = 300;
 const HEALTH_POLL: Duration = Duration::from_millis(300);
@@ -32,6 +33,14 @@ pub struct LaunchPlan {
     /// Required bearer token; protects the server from other local programs
     /// and from web pages in the user's browser.
     pub api_key: String,
+    /// Set for an embedding server.
+    pub embeddings: Option<EmbeddingOptions>,
+}
+
+/// Options of an embedding server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddingOptions {
+    pub pooling: PoolingType,
 }
 
 /// Command-line arguments for `llama-server`. Only long-standing options are
@@ -51,6 +60,14 @@ pub fn server_args(plan: &LaunchPlan) -> Vec<OsString> {
     push("--n-gpu-layers", plan.gpu_layers.to_string().into());
     push("--alias", plan.model_alias.clone().into());
     push("--parallel", "1".into());
+    if let Some(embeddings) = plan.embeddings {
+        push("--pooling", embeddings.pooling.as_arg().into());
+        // Each input must fit into one micro-batch: llama-server rejects
+        // longer inputs instead of splitting them.
+        push("--batch-size", plan.context_size.to_string().into());
+        push("--ubatch-size", plan.context_size.to_string().into());
+        args.push("--embedding".into());
+    }
     args
 }
 
@@ -249,27 +266,54 @@ mod tests {
             threads: 4,
             gpu_layers: 99,
             api_key: "k".into(),
+            embeddings: None,
         }
+    }
+
+    fn args(plan: &LaunchPlan) -> Vec<String> {
+        server_args(plan)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn value(args: &[String], flag: &str) -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
     }
 
     #[test]
     fn server_listens_on_loopback_with_a_key() {
-        let args: Vec<String> = server_args(&plan())
-            .into_iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        let value = |flag: &str| {
-            args.iter()
-                .position(|a| a == flag)
-                .and_then(|i| args.get(i + 1))
-                .cloned()
-        };
+        let args = args(&plan());
+        let value = |flag: &str| value(&args, flag);
         assert_eq!(value("--host").as_deref(), Some("127.0.0.1"));
         assert_eq!(value("--port").as_deref(), Some("4321"));
         assert_eq!(value("--ctx-size").as_deref(), Some("4096"));
         assert_eq!(value("--n-gpu-layers").as_deref(), Some("99"));
         assert_eq!(value("--alias").as_deref(), Some("q"));
         assert!(!args.iter().any(|a| a.contains("api-key") || a == "k"));
+        assert!(!args.iter().any(|a| a == "--embedding" || a == "--pooling"));
+    }
+
+    #[test]
+    fn embedding_servers_fit_each_input_into_one_batch() {
+        let args = args(&LaunchPlan {
+            context_size: 2048,
+            embeddings: Some(EmbeddingOptions {
+                pooling: PoolingType::Cls,
+            }),
+            ..plan()
+        });
+        let value = |flag: &str| value(&args, flag);
+        assert!(args.iter().any(|a| a == "--embedding"));
+        assert_eq!(value("--pooling").as_deref(), Some("cls"));
+        assert_eq!(value("--ctx-size").as_deref(), Some("2048"));
+        assert_eq!(value("--batch-size").as_deref(), Some("2048"));
+        assert_eq!(value("--ubatch-size").as_deref(), Some("2048"));
+        assert_eq!(value("--host").as_deref(), Some("127.0.0.1"));
+        assert!(!args.iter().any(|a| a == "k"));
     }
 
     #[test]

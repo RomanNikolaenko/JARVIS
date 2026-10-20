@@ -140,10 +140,14 @@ Conversations, facts, projects and the action history live in
 `memory/jarvis.db` (SQLite) in the local data folder; the **Memory** screen
 shows the path, size and contents.
 
-- **Semantic search** needs an embedding model. With Ollama:
-  `ollama pull nomic-embed-text` (or another embedding model); JARVIS picks
-  a local model that reports embeddings automatically, or choose one under
-  *Memory → Data & settings*. Without one, search and recall are text-only.
+- **Semantic search** needs an embedding model. Without Ollama: download
+  *BGE-M3 embeddings* on the **Runtime** screen and press *Start embeddings*
+  (it runs in its own llama.cpp server next to the chat model; *Embedding
+  model at start-up* starts it with JARVIS). With Ollama:
+  `ollama pull nomic-embed-text` (or another embedding model). JARVIS picks
+  a local model that reports embeddings automatically (the runtime's first),
+  or choose one under *Memory → Data & settings*. Without one, search and
+  recall are text-only.
 - **Context size:** for the embedded runtime JARVIS plans with the context
   size it started llama.cpp with; for Ollama with at most 4 096 tokens
   (Ollama's default). *Context limit* lowers it further.

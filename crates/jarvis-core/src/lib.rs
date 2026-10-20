@@ -27,7 +27,7 @@ use jarvis_events::{EventBus, EventCategory};
 use jarvis_memory::MemoryEngine;
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
 use jarvis_runtime::process::CommandFactory;
-use jarvis_runtime::{RuntimeManager, RuntimeOptions};
+use jarvis_runtime::{RuntimeManager, RuntimeOptions, ServerRole};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -245,7 +245,7 @@ impl JarvisCore {
         let registry = Arc::new(ProviderRegistry::new());
         registry.replace_all(build_providers(
             &static_providers,
-            runtime.provider(),
+            runtime.providers(),
             provider_factory.as_deref(),
             &config.current().ai.providers,
             &events,
@@ -322,40 +322,62 @@ impl JarvisCore {
         Ok(core)
     }
 
-    /// Re-registers providers whenever the embedded runtime starts or stops
-    /// serving a model.
+    /// Re-registers providers whenever a server of the embedded runtime
+    /// starts or stops serving a model.
     fn watch_runtime_provider(core: &Arc<Self>) {
-        let mut receiver = core.runtime.subscribe_provider();
-        let weak = Arc::downgrade(core);
-        tokio::spawn(async move {
-            while receiver.changed().await.is_ok() {
-                let Some(core) = weak.upgrade() else { break };
-                if let Err(err) = core.reload_providers().await {
-                    tracing::warn!("cannot reload AI providers: {err}");
+        for role in ServerRole::ALL {
+            let mut receiver = core.runtime.subscribe_provider(role);
+            let weak = Arc::downgrade(core);
+            tokio::spawn(async move {
+                while receiver.changed().await.is_ok() {
+                    let Some(core) = weak.upgrade() else { break };
+                    if let Err(err) = core.reload_providers().await {
+                        tracing::warn!("cannot reload AI providers: {err}");
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
-    /// Starts the configured model, if the user enabled autostart.
+    /// Starts the configured models, if the user enabled autostart. The
+    /// embedding model goes first: it is small and loads in seconds, and the
+    /// memory check of the chat model then sees what it uses.
     fn autostart_runtime(core: &Arc<Self>) {
-        let Some(model) = core.settings().runtime.autostart_model else {
+        let settings = core.settings().runtime;
+        let models: Vec<(ServerRole, String)> = [
+            (ServerRole::Embeddings, settings.autostart_embedding_model),
+            (ServerRole::Chat, settings.autostart_model),
+        ]
+        .into_iter()
+        .filter_map(|(role, model)| Some((role, model?)))
+        .collect();
+        if models.is_empty() {
             return;
-        };
+        }
         if core.runtime.binary().is_none() {
-            core.events.warning(
-                EventCategory::Runtime,
-                format!("Autostart of {model} skipped: the llama.cpp runtime is not installed"),
-            );
+            for (_, model) in &models {
+                core.events.warning(
+                    EventCategory::Runtime,
+                    format!("Autostart of {model} skipped: the llama.cpp runtime is not installed"),
+                );
+            }
             return;
         }
         let core = Arc::clone(core);
         tokio::spawn(async move {
-            if let Err(err) = core.start_local_model(&model).await {
-                core.events.error(
-                    EventCategory::Runtime,
-                    format!("Autostart of {model} failed: {err}"),
-                );
+            let timeout = std::time::Duration::from_secs(u64::from(settings.startup_timeout_secs));
+            for (role, model) in models {
+                match core.start_local_model(role, &model).await {
+                    Ok(()) => {
+                        core.runtime.wait_settled(role, timeout).await;
+                    }
+                    Err(err) => {
+                        core.events.error(
+                            EventCategory::Runtime,
+                            format!("Autostart of {model} failed: {err}"),
+                        );
+                    }
+                }
             }
         });
     }
@@ -366,7 +388,7 @@ impl JarvisCore {
         let current = self.config.current();
         self.providers.replace_all(build_providers(
             &self.static_providers,
-            self.runtime.provider(),
+            self.runtime.providers(),
             self.provider_factory.as_deref(),
             &current.ai.providers,
             &self.events,
@@ -376,6 +398,8 @@ impl JarvisCore {
             EventCategory::Ai,
             format!("AI providers: {}", provider_names(&self.providers)),
         );
+        // A new or vanished embedding model changes what can be indexed.
+        self.notify_indexer();
         Ok(())
     }
 
@@ -384,10 +408,15 @@ impl JarvisCore {
         &self.runtime
     }
 
-    /// Starts serving a library model with the runtime settings.
-    pub async fn start_local_model(&self, model_id: &str) -> Result<(), CoreError> {
+    /// Starts serving a library model in the role's server with the runtime
+    /// settings.
+    pub async fn start_local_model(
+        &self,
+        role: ServerRole,
+        model_id: &str,
+    ) -> Result<(), CoreError> {
         let settings = self.config.current().runtime;
-        Ok(self.runtime.start(model_id, &settings).await?)
+        Ok(self.runtime.start(role, model_id, &settings).await?)
     }
 
     pub fn info(&self) -> AppInfo {
@@ -521,7 +550,8 @@ impl JarvisCore {
         let display_server = self.platform.display_server;
 
         let runtime_installed = self.runtime.binary().is_some();
-        let runtime_state = self.runtime.server_state();
+        let runtime_state = self.runtime.server_state(ServerRole::Chat);
+        let embedding_state = self.runtime.server_state(ServerRole::Embeddings);
         let saving = self.config.current().memory.enabled;
         let (config, storage, events, platform, ai, runtime, memory) = tokio::join!(
             health::run_probe("config", "Configuration", health::PROBE_TIMEOUT, async {
@@ -552,7 +582,7 @@ impl JarvisCore {
                 health::ai_health(self.providers.providers())
             ),
             health::run_probe("runtime", "Local runtime", health::PROBE_TIMEOUT, async {
-                health::runtime_health(runtime_installed, &runtime_state)
+                health::runtime_health(runtime_installed, &runtime_state, &embedding_state)
             }),
             health::run_probe(
                 "memory",
@@ -602,18 +632,20 @@ impl JarvisCore {
     }
 }
 
-/// Static providers, the embedded runtime (while serving) and the enabled
-/// configured providers, in configuration order. Invalid configurations are skipped with a warning.
+/// Static providers, the embedded runtime's servers (while serving) and the
+/// enabled configured providers, in configuration order. Invalid
+/// configurations are skipped with a warning.
 fn build_providers(
     static_providers: &[Arc<dyn AiProvider>],
-    runtime: Option<Arc<dyn AiProvider>>,
+    runtime: Vec<Arc<dyn AiProvider>>,
     factory: Option<&dyn ProviderFactory>,
     configs: &[ProviderConfig],
     events: &EventBus,
 ) -> Vec<Arc<dyn AiProvider>> {
     let mut providers = static_providers.to_vec();
     // The embedded runtime comes before configured servers, so automatic
-    // routing prefers a model the user started inside JARVIS.
+    // routing (and the choice of embedding model) prefers a model the user
+    // started inside JARVIS.
     providers.extend(runtime);
     if let Some(factory) = factory {
         for config in configs.iter().filter(|c| c.enabled) {

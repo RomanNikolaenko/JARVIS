@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import type { MemoryKind, SearchHit } from '@jarvis/shared-types';
 
 import { MemoryStore, snippetParts } from '../../../core/state/memory.store';
@@ -16,7 +16,7 @@ const KINDS: readonly { id: MemoryKind; label: string }[] = [
 /** Full-text and semantic search across memory. */
 @Component({
   selector: 'jv-search-panel',
-  imports: [HudPanel, Icon],
+  imports: [HudPanel, Icon, RouterLink],
   templateUrl: './search-panel.html',
   styleUrls: ['../memory-shared.scss', './search-panel.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

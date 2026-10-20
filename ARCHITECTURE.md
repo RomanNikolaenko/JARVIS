@@ -204,18 +204,21 @@ See [ADR 0008](docs/decisions/0008-embedded-llama-runtime.md).
 | Module | Responsibility |
 | --- | --- |
 | `installer` | find official llama.cpp builds (GitHub, tags `bNNNNN`), re-verify an approved release, extract `.zip`/`.tar.gz` safely, locate and probe `llama-server` |
-| `gguf` | bounded GGUF metadata reader; memory estimate (weights + KV cache + overhead) |
+| `gguf` | bounded GGUF metadata reader (incl. the pooling type of embedding models); memory estimate (weights + KV cache + overhead) |
 | `library` | model index (`models/library.json`); import in place; deletes only files inside the models folder (canonical paths) |
 | `catalog`, `download` | curated pinned models; Hugging Face resolution to commit + LFS SHA-256; resumable, verified downloads with progress and cancellation |
-| `process` | command line, spawn without console, log ring buffer, `/health` readiness, API-key check |
-| `RuntimeManager` | state machine `stopped → starting → running → stopping/failed`, supervision task, provider publication via `watch`, orphan cleanup, shutdown |
+| `process` | command line (chat or `--embedding` with pooling and batch = context), spawn without console, log ring buffer, `/health` readiness, API-key check |
+| `RuntimeManager` | one `Slot` per `ServerRole` (`chat`, `embeddings`): state machine `stopped → starting → running → stopping/failed`, supervision task, provider publication via `watch`, pid file and orphan cleanup; shutdown stops both |
 
-The core owns the `RuntimeManager`, adds its provider to the registry while a
-model is served (before configured servers, so automatic routing prefers it)
-and rebuilds the registry when the runtime starts or stops. Health reports a
-`runtime` component; autostart happens only if `runtime.autostartModel` is
-set. Data lives in the local data directory: `runtime/` (engine, install
-record, pid file) and `models/`.
+The core owns the `RuntimeManager`, adds the providers of the running servers
+to the registry (`jarvis-runtime` for chat, `jarvis-runtime-embeddings` for
+embeddings; before configured servers, so automatic routing and the choice of
+embedding model prefer them) and rebuilds the registry, then wakes the memory
+indexer, whenever a server starts or stops. Health reports one `runtime`
+component covering both servers; autostart happens only for
+`runtime.autostartEmbeddingModel` / `runtime.autostartModel` (embedding model
+first). Data lives in the local data directory: `runtime/` (engine, install
+record, pid files) and `models/`.
 
 ### 4.3 Chat orchestration (`jarvis-core::chat`)
 
@@ -472,8 +475,11 @@ must be granted by a capability; anything not granted is denied. See
 - Tested against protocol mocks; compatibility with every server version is
   not guaranteed.
 - Token counts are estimated, not tokenized; the budget keeps a margin.
-- Semantic search needs an embedding model from a provider (e.g. Ollama with
-  an embedding model); the embedded runtime does not serve embeddings yet.
+- Semantic search needs an embedding model: the runtime's embedding server
+  (BGE-M3 in the catalog) or a provider such as Ollama. The embedding server
+  takes at most 2 048 tokens per text (less for models trained with a
+  shorter context, e.g. 512 for multilingual-e5; longer texts then fail to
+  index). No query/passage prefixes are added.
 - Vector search is brute force in memory (fine for tens of thousands of
   items).
 - The memory database is not encrypted at rest.

@@ -6,18 +6,7 @@
     </p>
   </div>
   @if (store.server(); as server) {
-    <jv-status-badge
-      [status]="
-        server.phase === 'running'
-          ? 'healthy'
-          : server.phase === 'failed'
-            ? 'unhealthy'
-            : server.phase === 'stopped'
-              ? 'unknown'
-              : 'degraded'
-      "
-      [label]="server.phase"
-    />
+    <jv-status-badge [status]="phaseBadge(server.phase)" [label]="'chat ' + server.phase" />
   }
 </header>
 
@@ -227,68 +216,79 @@
     }
   </jv-hud-panel>
 
-  <!-- Server -->
-  <jv-hud-panel class="server" heading="Server">
-    @if (store.server(); as server) {
-      @if (server.phase === 'stopped') {
-        <p class="dim">No model is running. Start one from the library below.</p>
-      } @else {
-        <dl class="facts grid">
-          <div>
-            <dt>Model</dt>
-            <dd class="mono">{{ server.modelId }}</dd>
-          </div>
-          <div>
-            <dt>State</dt>
-            <dd>{{ server.phase }}</dd>
-          </div>
-          <div>
-            <dt>Address</dt>
-            <dd class="mono">127.0.0.1:{{ server.port }}</dd>
-          </div>
-          <div>
-            <dt>PID</dt>
-            <dd class="mono">{{ server.pid ?? '—' }}</dd>
-          </div>
-          <div>
-            <dt>Context</dt>
-            <dd>{{ server.contextSize }} tokens</dd>
-          </div>
-          <div>
-            <dt>GPU layers</dt>
-            <dd>{{ (server.gpuLayers ?? 0) >= allLayers ? 'all' : server.gpuLayers }}</dd>
-          </div>
-          <div>
-            <dt>Threads</dt>
-            <dd>{{ server.threads }}</dd>
-          </div>
-          <div>
-            <dt>Memory</dt>
-            <dd>{{ formatBytes(server.memoryBytes) }}</dd>
-          </div>
-          <div>
-            <dt>Uptime</dt>
-            <dd>{{ uptime() }}</dd>
-          </div>
-        </dl>
-        @if (server.error) {
-          <pre class="error-block">{{ server.error }}</pre>
-        }
-      }
-      @if (serverActive()) {
-        <div class="row-actions">
-          <button type="button" class="danger" (click)="store.stop()">
-            <jv-icon name="stop" [size]="15" />
-            Stop
-          </button>
+  <!-- Servers -->
+  <jv-hud-panel class="server" heading="Servers">
+    @for (entry of servers(); track entry.role) {
+      <section class="server-block" [attr.aria-label]="roleLabels[entry.role]">
+        <div class="server-head">
+          <h3 class="server-title">{{ roleLabels[entry.role] }}</h3>
+          <jv-status-badge [status]="phaseBadge(entry.state.phase)" [label]="entry.state.phase" />
         </div>
-      }
-      @if (store.status()?.logTail?.length) {
-        <details class="logs">
-          <summary>Server log</summary>
-          <pre>{{ store.status()?.logTail?.join('\n') }}</pre>
-        </details>
-      }
+        @if (entry.state.phase === 'stopped') {
+          <p class="dim">
+            @if (entry.role === 'chat') {
+              No chat model is running. Start one from the library below.
+            } @else {
+              No embedding model is running, so memory search is text-only. Start an embedding model
+              from the library below (it runs next to the chat model).
+            }
+          </p>
+        } @else {
+          <dl class="facts grid">
+            <div>
+              <dt>Model</dt>
+              <dd class="mono">{{ entry.state.modelId }}</dd>
+            </div>
+            <div>
+              <dt>Address</dt>
+              <dd class="mono">127.0.0.1:{{ entry.state.port }}</dd>
+            </div>
+            <div>
+              <dt>PID</dt>
+              <dd class="mono">{{ entry.state.pid ?? '—' }}</dd>
+            </div>
+            <div>
+              <dt>Context</dt>
+              <dd>{{ entry.state.contextSize }} tokens</dd>
+            </div>
+            <div>
+              <dt>GPU layers</dt>
+              <dd>
+                {{ (entry.state.gpuLayers ?? 0) >= allLayers ? 'all' : entry.state.gpuLayers }}
+              </dd>
+            </div>
+            <div>
+              <dt>Threads</dt>
+              <dd>{{ entry.state.threads }}</dd>
+            </div>
+            <div>
+              <dt>Memory</dt>
+              <dd>{{ formatBytes(entry.state.memoryBytes) }}</dd>
+            </div>
+            <div>
+              <dt>Uptime</dt>
+              <dd>{{ uptime(entry.state) }}</dd>
+            </div>
+          </dl>
+          @if (entry.state.error) {
+            <pre class="error-block">{{ entry.state.error }}</pre>
+          }
+        }
+        @if (isActive(entry.state)) {
+          <div class="row-actions">
+            <button type="button" class="danger" (click)="store.stop(entry.role)">
+              <jv-icon name="stop" [size]="15" />
+              Stop
+            </button>
+          </div>
+        }
+        @if (entry.logTail.length) {
+          <details class="logs">
+            <summary>Server log</summary>
+            <pre>{{ entry.logTail.join('\n') }}</pre>
+          </details>
+        }
+      </section>
     }
   </jv-hud-panel>
 
@@ -329,6 +329,9 @@
                   · {{ model.gguf.contextLength }} ctx
                 }
                 · {{ model.source.kind === 'downloaded' ? 'verified download' : 'imported' }}
+                @if (isEmbeddingModel(model)) {
+                  <span class="chip">embeddings</span>
+                }
               </td>
               <td class="num mono">{{ formatBytes(model.sizeBytes) }}</td>
               <td class="actions-cell">
@@ -348,11 +351,17 @@
                   <button
                     type="button"
                     class="primary small"
-                    (click)="store.start(model.id)"
+                    (click)="store.start(model.id, roleOf(model))"
                     [disabled]="!canStart(model)"
-                    [title]="store.installed() ? '' : 'Install the engine first'"
+                    [title]="
+                      !store.installed()
+                        ? 'Install the engine first'
+                        : roleOf(model) === 'embeddings'
+                          ? 'Serve it for semantic memory search, next to the chat model'
+                          : ''
+                    "
                   >
-                    Start
+                    {{ roleOf(model) === 'embeddings' ? 'Start embeddings' : 'Start' }}
                   </button>
                   <button
                     type="button"
@@ -409,7 +418,12 @@
       @for (model of store.curated(); track model.id) {
         <li>
           <div>
-            <div class="curated-name">{{ model.displayName }}</div>
+            <div class="curated-name">
+              {{ model.displayName }}
+              @if (model.role === 'embeddings') {
+                <span class="chip">embeddings</span>
+              }
+            </div>
             <div class="dim small-text">
               {{ model.description }} {{ formatBytes(model.sizeBytes) }} · {{ model.license }}
             </div>
@@ -490,10 +504,19 @@
           </label>
         }
         <label class="field">
-          <span class="field-label">Start with JARVIS</span>
+          <span class="field-label">Chat model at start-up</span>
           <select formControlName="autostartModel">
-            <option value="">Never</option>
-            @for (model of models(); track model.id) {
+            <option value="">None</option>
+            @for (model of chatModels(); track model.id) {
+              <option [value]="model.id">{{ model.displayName }}</option>
+            }
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Embedding model at start-up</span>
+          <select formControlName="autostartEmbeddingModel">
+            <option value="">None</option>
+            @for (model of embeddingModels(); track model.id) {
               <option [value]="model.id">{{ model.displayName }}</option>
             }
           </select>
@@ -504,8 +527,9 @@
         </label>
       </div>
       <p class="hint">
-        Larger contexts need more memory. Changes apply the next time a model starts. JARVIS refuses
-        to start a model that does not fit into free memory.
+        Larger contexts need more memory. The context size applies to chat models; the embedding
+        model uses up to 2048 tokens per text. Changes apply the next time a model starts. JARVIS
+        refuses to start a model that does not fit into free memory.
       </p>
       <div class="row-actions">
         @if (settingsSaved() && settingsForm.pristine) {

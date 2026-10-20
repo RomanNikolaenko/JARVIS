@@ -31,6 +31,7 @@ import type {
   RuntimeBinary,
   RuntimeRelease,
   RuntimeStatus,
+  ServerRole,
   ChatStreamEvent,
   HealthReport,
   PlatformInfo,
@@ -174,12 +175,13 @@ export class JarvisApi {
     return this.bridge.invoke('remove_model', { id, deleteFile });
   }
 
-  startLocalModel(modelId: string): Promise<void> {
-    return this.bridge.invoke('start_local_model', { modelId });
+  /** Starts a model in the chat or the embedding server. */
+  startLocalModel(modelId: string, role: ServerRole): Promise<void> {
+    return this.bridge.invoke('start_local_model', { modelId, role });
   }
 
-  stopLocalModel(): Promise<void> {
-    return this.bridge.invoke('stop_local_model');
+  stopLocalModel(role: ServerRole): Promise<void> {
+    return this.bridge.invoke('stop_local_model', { role });
   }
 
   // ---- Memory ----

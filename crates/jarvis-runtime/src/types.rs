@@ -83,6 +83,45 @@ pub struct RuntimeRelease {
     pub sha256: String,
 }
 
+/// How an embedding model turns token vectors into one vector per input
+/// (`<arch>.pooling_type` in GGUF, `--pooling` of llama.cpp).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "runtime.ts")]
+pub enum PoolingType {
+    None,
+    Mean,
+    Cls,
+    Last,
+    /// Reranking models: they score pairs and produce no embeddings.
+    Rank,
+}
+
+impl PoolingType {
+    /// Value of the GGUF key (llama.cpp's `llama_pooling_type`).
+    pub fn from_gguf(value: u32) -> Option<Self> {
+        Some(match value {
+            0 => Self::None,
+            1 => Self::Mean,
+            2 => Self::Cls,
+            3 => Self::Last,
+            4 => Self::Rank,
+            _ => return None,
+        })
+    }
+
+    /// Value of llama.cpp's `--pooling` option.
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Mean => "mean",
+            Self::Cls => "cls",
+            Self::Last => "last",
+            Self::Rank => "rank",
+        }
+    }
+}
+
 /// Metadata read from a GGUF header.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +139,9 @@ pub struct GgufInfo {
     pub embedding_length: Option<u32>,
     pub head_count: Option<u32>,
     pub head_count_kv: Option<u32>,
+    /// Declared by embedding models (sentence-transformers conversions).
+    #[serde(default)]
+    pub pooling: Option<PoolingType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -155,6 +197,8 @@ pub struct CuratedModel {
     pub sha256: String,
     pub size_bytes: u64,
     pub license: String,
+    /// The server the model is meant for.
+    pub role: ServerRole,
 }
 
 /// A user-specified Hugging Face file to download.
@@ -211,6 +255,30 @@ pub struct DownloadStatus {
     pub started_at_ms: u64,
 }
 
+/// What a managed server instance is for. Each role runs its own
+/// `llama-server` process with its own port, API key and AI provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "runtime.ts")]
+pub enum ServerRole {
+    /// Chat completions.
+    Chat,
+    /// Embedding vectors for semantic memory search (`--embedding`).
+    Embeddings,
+}
+
+impl ServerRole {
+    pub const ALL: [Self; 2] = [Self::Chat, Self::Embeddings];
+
+    /// Id of the role's provider in the AI registry.
+    pub fn provider_id(self) -> &'static str {
+        match self {
+            Self::Chat => crate::RUNTIME_PROVIDER_ID,
+            Self::Embeddings => crate::RUNTIME_EMBEDDINGS_PROVIDER_ID,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "runtime.ts")]
@@ -263,12 +331,17 @@ impl ServerState {
 #[ts(export_to = "runtime.ts")]
 pub struct RuntimeStatus {
     pub binary: Option<RuntimeBinary>,
+    /// The chat model server.
     pub server: ServerState,
+    /// The embedding model server.
+    pub embedding_server: ServerState,
     pub models: Vec<LocalModel>,
     pub downloads: Vec<DownloadStatus>,
     pub models_dir: String,
-    /// Last lines printed by the server (diagnostics).
+    /// Last lines printed by the chat server (diagnostics).
     pub log_tail: Vec<String>,
+    /// Last lines printed by the embedding server.
+    pub embedding_log_tail: Vec<String>,
 }
 
 /// How many model layers are offloaded to the GPU.
@@ -299,8 +372,10 @@ pub struct RuntimeSettings {
     pub gpu_offload: GpuOffload,
     /// Used when `gpuOffload` is `custom`.
     pub gpu_layers: u32,
-    /// Model started automatically with JARVIS; `None` = never.
+    /// Chat model started automatically with JARVIS; `None` = never.
     pub autostart_model: Option<String>,
+    /// Embedding model started automatically with JARVIS; `None` = never.
+    pub autostart_embedding_model: Option<String>,
     /// Maximum time to load a model.
     pub startup_timeout_secs: u32,
 }
@@ -313,6 +388,7 @@ impl Default for RuntimeSettings {
             gpu_offload: GpuOffload::Auto,
             gpu_layers: 0,
             autostart_model: None,
+            autostart_embedding_model: None,
             startup_timeout_secs: 180,
         }
     }
@@ -340,6 +416,11 @@ impl RuntimeSettings {
             && !crate::library::is_valid_model_id(model)
         {
             problems.push("runtime.autostartModel has an invalid format".to_owned());
+        }
+        if let Some(model) = &self.autostart_embedding_model
+            && !crate::library::is_valid_model_id(model)
+        {
+            problems.push("runtime.autostartEmbeddingModel has an invalid format".to_owned());
         }
         problems
     }

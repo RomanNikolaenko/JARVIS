@@ -1,13 +1,14 @@
 //! Orchestrates the local runtime: installation, model library, downloads
-//! and the supervised `llama-server` process.
+//! and the supervised `llama-server` processes — one for chat and one for
+//! embeddings, each in its own [`Slot`].
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use jarvis_ai::{
-    AiProvider, DataLocality, HttpClient, OpenAiCompatibleProvider, ProviderDescriptor, ProviderId,
-    ProviderKind,
+    AiProvider, DataLocality, HttpClient, ModelCapabilities, OpenAiCompatibleProvider,
+    ProviderDescriptor, ProviderId, ProviderKind,
 };
 use jarvis_events::{EventBus, EventCategory};
 use jarvis_platform::{HardwareInfo, PlatformAdapter, current_adapter};
@@ -23,17 +24,24 @@ use crate::error::{Result, RuntimeError};
 use crate::gguf;
 use crate::installer;
 use crate::library::{self, ModelLibrary, now_ms};
-use crate::process::{self, CommandFactory, LaunchPlan, LogTail};
+use crate::process::{self, CommandFactory, EmbeddingOptions, LaunchPlan, LogTail};
 use crate::types::{
-    BinarySource, CuratedModel, DownloadKind, DownloadPhase, FileDigest, GpuOffload, LocalModel,
-    ModelDownloadRequest, ModelSource, RuntimeBackend, RuntimeBinary, RuntimeRelease,
-    RuntimeSettings, RuntimeStatus, ServerPhase, ServerState,
+    BinarySource, CuratedModel, DownloadKind, DownloadPhase, FileDigest, GgufInfo, GpuOffload,
+    LocalModel, ModelDownloadRequest, ModelSource, PoolingType, RuntimeBackend, RuntimeBinary,
+    RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase, ServerRole, ServerState,
 };
 
-/// Provider id of the embedded runtime in the AI registry.
+/// Provider id of the embedded chat server in the AI registry.
 pub const RUNTIME_PROVIDER_ID: &str = "jarvis-runtime";
+/// Provider id of the embedded embedding server in the AI registry.
+pub const RUNTIME_EMBEDDINGS_PROVIDER_ID: &str = "jarvis-runtime-embeddings";
+/// Context of the embedding server (at most the model's training context).
+/// It is also the batch and micro-batch size, because llama-server rejects
+/// an input that does not fit into one micro-batch. JARVIS embeds at most
+/// 2 000 characters per text, which stays below this for SentencePiece and
+/// WordPiece tokenizers (at most one token per character).
+pub const EMBEDDING_CONTEXT: u32 = 2048;
 const INSTALL_FILE: &str = "install.json";
-const PID_FILE: &str = "server.pid";
 const GRACEFUL_STOP: Duration = Duration::from_secs(5);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const ALL_LAYERS: u32 = 999;
@@ -61,6 +69,94 @@ struct Supervisor {
     task: JoinHandle<()>,
 }
 
+/// State of one supervised server. Every role gets the same treatment:
+/// verified binary, loopback-only port, per-launch API key, pid file,
+/// readiness and crash detection.
+struct Slot {
+    role: ServerRole,
+    state: watch::Sender<ServerState>,
+    provider: watch::Sender<Option<Arc<dyn AiProvider>>>,
+    logs: LogTail,
+    supervisor: tokio::sync::Mutex<Option<Supervisor>>,
+}
+
+impl Slot {
+    fn new(role: ServerRole) -> Self {
+        Self {
+            role,
+            state: watch::Sender::new(ServerState::stopped()),
+            provider: watch::Sender::new(None),
+            logs: LogTail::default(),
+            supervisor: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    fn state(&self) -> ServerState {
+        self.state.borrow().clone()
+    }
+
+    fn is_active(&self) -> bool {
+        matches!(
+            self.state.borrow().phase,
+            ServerPhase::Starting | ServerPhase::Running
+        )
+    }
+
+    /// Records the server's pid for orphan cleanup by the next session.
+    fn pid_file(&self) -> &'static str {
+        match self.role {
+            ServerRole::Chat => "server.pid",
+            ServerRole::Embeddings => "embedding-server.pid",
+        }
+    }
+
+    /// Suffix of event messages ("Loading X for embeddings").
+    fn purpose(&self) -> &'static str {
+        match self.role {
+            ServerRole::Chat => "",
+            ServerRole::Embeddings => " for embeddings",
+        }
+    }
+
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: ProviderId::new(self.role.provider_id()),
+            display_name: match self.role {
+                ServerRole::Chat => "JARVIS runtime",
+                ServerRole::Embeddings => "JARVIS runtime (embeddings)",
+            }
+            .to_owned(),
+            kind: ProviderKind::Embedded,
+            locality: DataLocality::OnDevice,
+        }
+    }
+
+    /// What the served model can do: a server started with `--embedding`
+    /// only embeds, a chat server cannot embed.
+    fn capabilities(&self) -> ModelCapabilities {
+        match self.role {
+            ServerRole::Chat => ModelCapabilities {
+                chat: true,
+                streaming: true,
+                ..ModelCapabilities::default()
+            },
+            ServerRole::Embeddings => ModelCapabilities {
+                embeddings: true,
+                ..ModelCapabilities::default()
+            },
+        }
+    }
+
+    /// Marks the slot failed after a start or a run went wrong.
+    fn fail(&self, error: String) {
+        self.state.send_modify(|s| {
+            s.phase = ServerPhase::Failed;
+            s.error = Some(error);
+            s.pid = None;
+        });
+    }
+}
+
 pub struct RuntimeManager {
     runtime_dir: PathBuf,
     library: ModelLibrary,
@@ -71,23 +167,22 @@ pub struct RuntimeManager {
     ai_http: Arc<HttpClient>,
     command_factory: CommandFactory,
     binary: RwLock<Option<RuntimeBinary>>,
-    state: watch::Sender<ServerState>,
-    provider: watch::Sender<Option<Arc<dyn AiProvider>>>,
-    logs: LogTail,
-    supervisor: tokio::sync::Mutex<Option<Supervisor>>,
+    chat: Slot,
+    embeddings: Slot,
 }
 
 impl std::fmt::Debug for RuntimeManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeManager")
             .field("runtime_dir", &self.runtime_dir)
-            .field("state", &*self.state.borrow())
+            .field("chat", &*self.chat.state.borrow())
+            .field("embeddings", &*self.embeddings.state.borrow())
             .finish_non_exhaustive()
     }
 }
 
 impl RuntimeManager {
-    /// Loads the installation record and model library and removes a server
+    /// Loads the installation record and model library and removes servers
     /// left running by a previous session. Does not start anything.
     pub async fn new(options: RuntimeOptions) -> Result<Arc<Self>> {
         let runtime_dir = options.data_dir.join("runtime");
@@ -114,32 +209,54 @@ impl RuntimeManager {
             command_factory: options
                 .command_factory
                 .unwrap_or_else(process::default_command_factory),
-            state: watch::Sender::new(ServerState::stopped()),
-            provider: watch::Sender::new(None),
-            logs: LogTail::default(),
-            supervisor: tokio::sync::Mutex::new(None),
+            chat: Slot::new(ServerRole::Chat),
+            embeddings: Slot::new(ServerRole::Embeddings),
         });
-        manager.cleanup_orphan().await;
+        for role in ServerRole::ALL {
+            manager.cleanup_orphan(manager.slot(role)).await;
+        }
         Ok(manager)
+    }
+
+    fn slot(&self, role: ServerRole) -> &Slot {
+        match role {
+            ServerRole::Chat => &self.chat,
+            ServerRole::Embeddings => &self.embeddings,
+        }
+    }
+
+    fn slots(&self) -> [&Slot; 2] {
+        [&self.chat, &self.embeddings]
     }
 
     // ---- Observation --------------------------------------------------
 
-    pub fn subscribe_provider(&self) -> watch::Receiver<Option<Arc<dyn AiProvider>>> {
-        self.provider.subscribe()
+    pub fn subscribe_provider(
+        &self,
+        role: ServerRole,
+    ) -> watch::Receiver<Option<Arc<dyn AiProvider>>> {
+        self.slot(role).provider.subscribe()
     }
 
-    /// The embedded provider while a model is being served.
-    pub fn provider(&self) -> Option<Arc<dyn AiProvider>> {
-        self.provider.borrow().clone()
+    /// The provider of a role while its model is being served.
+    pub fn provider(&self, role: ServerRole) -> Option<Arc<dyn AiProvider>> {
+        self.slot(role).provider.borrow().clone()
     }
 
-    pub fn subscribe_state(&self) -> watch::Receiver<ServerState> {
-        self.state.subscribe()
+    /// Providers of every role that currently serves a model (chat first).
+    pub fn providers(&self) -> Vec<Arc<dyn AiProvider>> {
+        self.slots()
+            .iter()
+            .filter_map(|slot| slot.provider.borrow().clone())
+            .collect()
     }
 
-    pub fn server_state(&self) -> ServerState {
-        self.state.borrow().clone()
+    pub fn subscribe_state(&self, role: ServerRole) -> watch::Receiver<ServerState> {
+        self.slot(role).state.subscribe()
+    }
+
+    pub fn server_state(&self, role: ServerRole) -> ServerState {
+        self.slot(role).state()
     }
 
     pub fn binary(&self) -> Option<RuntimeBinary> {
@@ -150,23 +267,17 @@ impl RuntimeManager {
     }
 
     pub async fn status(&self) -> RuntimeStatus {
-        let mut server = self.server_state();
-        if let Some(pid) = server.pid
-            && matches!(server.phase, ServerPhase::Starting | ServerPhase::Running)
-        {
-            server.memory_bytes =
-                tokio::task::spawn_blocking(move || jarvis_platform::process_memory(pid))
-                    .await
-                    .ok()
-                    .flatten();
-        }
+        let (server, embedding_server) =
+            tokio::join!(sampled_state(&self.chat), sampled_state(&self.embeddings));
         RuntimeStatus {
             binary: self.binary(),
             server,
+            embedding_server,
             models: self.library.list(),
             downloads: self.downloads.snapshot(),
             models_dir: self.library.dir().display().to_string(),
-            log_tail: self.logs.last(LOG_TAIL_IN_STATUS),
+            log_tail: self.chat.logs.last(LOG_TAIL_IN_STATUS),
+            embedding_log_tail: self.embeddings.logs.last(LOG_TAIL_IN_STATUS),
         }
     }
 
@@ -180,16 +291,17 @@ impl RuntimeManager {
         catalog::curated_models()
     }
 
-    /// Waits until the server is no longer starting or stopping.
-    pub async fn wait_settled(&self, timeout: Duration) -> ServerState {
-        let mut receiver = self.state.subscribe();
+    /// Waits until the role's server is no longer starting or stopping.
+    pub async fn wait_settled(&self, role: ServerRole, timeout: Duration) -> ServerState {
+        let slot = self.slot(role);
+        let mut receiver = slot.state.subscribe();
         let _ = tokio::time::timeout(
             timeout,
             receiver
                 .wait_for(|s| !matches!(s.phase, ServerPhase::Starting | ServerPhase::Stopping)),
         )
         .await;
-        self.server_state()
+        slot.state()
     }
 
     // ---- Installation --------------------------------------------------
@@ -260,10 +372,10 @@ impl RuntimeManager {
         let staging = install_root.join(format!("{}-{backend_name}.partial", release.tag));
         if let Some(current) = self.binary()
             && Path::new(&current.path).starts_with(&final_dir)
-            && self.provider().is_some()
+            && self.slots().iter().any(|slot| slot.is_active())
         {
             return Err(RuntimeError::InvalidInput(
-                "this build is in use; stop the local model first".into(),
+                "this build is in use; stop the local models first".into(),
             ));
         }
         let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -457,10 +569,11 @@ impl RuntimeManager {
     }
 
     pub async fn remove_model(&self, id: &str, delete_file: bool) -> Result<()> {
-        let state = self.server_state();
-        if state.model_id.as_deref() == Some(id)
-            && matches!(state.phase, ServerPhase::Starting | ServerPhase::Running)
-        {
+        let in_use = self
+            .slots()
+            .iter()
+            .any(|slot| slot.is_active() && slot.state().model_id.as_deref() == Some(id));
+        if in_use {
             return Err(RuntimeError::InvalidInput(
                 "stop the model before removing it".into(),
             ));
@@ -473,30 +586,22 @@ impl RuntimeManager {
 
     // ---- Server lifecycle -------------------------------------------------
 
-    /// Starts serving `model_id` (restarting if another model runs). Returns
-    /// once the process is spawned; readiness is reported via the state.
-    pub async fn start(self: &Arc<Self>, model_id: &str, settings: &RuntimeSettings) -> Result<()> {
-        let mut supervisor = self.supervisor.lock().await;
+    /// Starts serving `model_id` in the role's server (restarting it if
+    /// another model runs there). Returns once the process is spawned;
+    /// readiness is reported via the state.
+    pub async fn start(
+        self: &Arc<Self>,
+        role: ServerRole,
+        model_id: &str,
+        settings: &RuntimeSettings,
+    ) -> Result<()> {
+        let slot = self.slot(role);
+        let mut supervisor = slot.supervisor.lock().await;
         if let Some(previous) = supervisor.take() {
-            self.stop_supervisor(previous).await;
+            stop_supervisor(slot, previous).await;
         }
 
-        let binary = self.binary().ok_or(RuntimeError::NotInstalled)?;
-        let binary_path = PathBuf::from(&binary.path);
-        let actual = download::sha256_file(&binary_path)
-            .await
-            .map_err(|_| RuntimeError::BinaryChanged(binary_path.clone()))?;
-        if actual != binary.sha256 {
-            return Err(RuntimeError::BinaryChanged(binary_path));
-        }
-        let libraries = installer::library_digests(&binary_path)
-            .await
-            .map_err(|_| RuntimeError::BinaryChanged(binary_path.clone()))?;
-        if let Some(name) = changed_library(&binary.libraries, &libraries) {
-            return Err(RuntimeError::BinaryChanged(
-                binary_path.with_file_name(name),
-            ));
-        }
+        let binary = self.verified_binary().await?;
         let model = self.library.get(model_id).ok_or_else(|| {
             RuntimeError::NotFound(format!("model \"{model_id}\" is not in the library"))
         })?;
@@ -506,10 +611,19 @@ impl RuntimeManager {
                 model.display_name, model.path
             )));
         }
+        let (context_size, embeddings) = match role {
+            ServerRole::Chat => (settings.context_size, None),
+            ServerRole::Embeddings => (
+                embedding_context(&model.gguf),
+                Some(EmbeddingOptions {
+                    pooling: self.embedding_pooling(&model).await?,
+                }),
+            ),
+        };
 
         let hardware = Self::hardware().await;
         let gpu_layers = gpu_layers(settings, binary.backend, &hardware, &model);
-        let estimate = gguf::estimate_memory(model.size_bytes, &model.gguf, settings.context_size);
+        let estimate = gguf::estimate_memory(model.size_bytes, &model.gguf, context_size);
         let gpu_credit = if gpu_layers > 0 {
             hardware
                 .gpus
@@ -535,28 +649,32 @@ impl RuntimeManager {
             .max(1);
 
         let plan = LaunchPlan {
-            binary: binary_path.clone(),
+            binary: PathBuf::from(&binary.path),
             model_path: PathBuf::from(&model.path),
             model_alias: model.id.clone(),
             port: process::free_port()?,
-            context_size: settings.context_size,
+            context_size,
             threads,
             gpu_layers,
             api_key: process::random_key(),
+            embeddings,
         };
-        self.logs.clear();
+        slot.logs.clear();
         let command = (self.command_factory)(&plan);
-        let child = process::spawn(command, self.adapter.as_ref(), &self.logs)?;
+        let child = process::spawn(command, self.adapter.as_ref(), &slot.logs)?;
         let pid = child.id();
         if let Some(pid) = pid {
-            self.write_pid(PidRecord {
-                pid,
-                exe: binary.path.clone(),
-                port: plan.port,
-            })
+            self.write_pid(
+                slot,
+                PidRecord {
+                    pid,
+                    exe: binary.path.clone(),
+                    port: plan.port,
+                },
+            )
             .await;
         }
-        self.state.send_replace(ServerState {
+        slot.state.send_replace(ServerState {
             phase: ServerPhase::Starting,
             model_id: Some(model.id.clone()),
             port: Some(plan.port),
@@ -571,8 +689,9 @@ impl RuntimeManager {
         self.events.info(
             EventCategory::Runtime,
             format!(
-                "Loading {} (context {}, {} GPU layers, {} threads, ~{} MiB)",
+                "Loading {}{} (context {}, {} GPU layers, {} threads, ~{} MiB)",
                 model.display_name,
+                slot.purpose(),
                 plan.context_size,
                 if gpu_layers >= ALL_LAYERS {
                     "all".to_owned()
@@ -587,6 +706,7 @@ impl RuntimeManager {
         let stop = CancellationToken::new();
         let timeout = Duration::from_secs(u64::from(settings.startup_timeout_secs));
         let task = tokio::spawn(Arc::clone(self).supervise(
+            role,
             child,
             plan,
             model.display_name,
@@ -597,41 +717,85 @@ impl RuntimeManager {
         Ok(())
     }
 
-    /// Stops the server if it runs. Safe to call at any time.
-    pub async fn stop(&self) {
-        let mut supervisor = self.supervisor.lock().await;
-        if let Some(current) = supervisor.take() {
-            self.stop_supervisor(current).await;
-        }
-    }
-
-    async fn stop_supervisor(&self, supervisor: Supervisor) {
-        if !supervisor.task.is_finished() {
-            self.state.send_modify(|s| s.phase = ServerPhase::Stopping);
-        }
-        supervisor.stop.cancel();
-        if tokio::time::timeout(STOP_TIMEOUT, supervisor.task)
+    /// The installed binary, after checking that neither the executable nor
+    /// a library next to it changed since installation.
+    async fn verified_binary(&self) -> Result<RuntimeBinary> {
+        let binary = self.binary().ok_or(RuntimeError::NotInstalled)?;
+        let binary_path = PathBuf::from(&binary.path);
+        let actual = download::sha256_file(&binary_path)
             .await
-            .is_err()
-        {
-            tracing::error!("llama-server supervisor did not stop in time");
+            .map_err(|_| RuntimeError::BinaryChanged(binary_path.clone()))?;
+        if actual != binary.sha256 {
+            return Err(RuntimeError::BinaryChanged(binary_path));
+        }
+        let libraries = installer::library_digests(&binary_path)
+            .await
+            .map_err(|_| RuntimeError::BinaryChanged(binary_path.clone()))?;
+        if let Some(name) = changed_library(&binary.libraries, &libraries) {
+            return Err(RuntimeError::BinaryChanged(
+                binary_path.with_file_name(name),
+            ));
+        }
+        Ok(binary)
+    }
+
+    /// Pooling for an embedding server, from the model file itself (library
+    /// entries made before pooling was recorded do not have it).
+    async fn embedding_pooling(&self, model: &LocalModel) -> Result<PoolingType> {
+        let path = PathBuf::from(&model.path);
+        let info = tokio::task::spawn_blocking(move || gguf::read_gguf_info(&path))
+            .await
+            .map_err(|err| RuntimeError::Internal(err.to_string()))??;
+        match info.pooling {
+            Some(PoolingType::Rank) => Err(RuntimeError::InvalidInput(format!(
+                "{} is a reranking model and produces no embeddings",
+                model.display_name
+            ))),
+            Some(pooling @ (PoolingType::Mean | PoolingType::Cls | PoolingType::Last)) => {
+                Ok(pooling)
+            }
+            // The OpenAI-compatible endpoint needs pooled vectors.
+            Some(PoolingType::None) | None => {
+                self.events.warning(
+                    EventCategory::Runtime,
+                    format!(
+                        "{} declares no pooling type, so mean pooling is used; models that are not embedding models give poor search results",
+                        model.display_name
+                    ),
+                );
+                Ok(PoolingType::Mean)
+            }
         }
     }
 
-    /// Stops the server and cancels downloads (application exit).
+    /// Stops the role's server if it runs. Safe to call at any time.
+    pub async fn stop(&self, role: ServerRole) {
+        let slot = self.slot(role);
+        let mut supervisor = slot.supervisor.lock().await;
+        if let Some(current) = supervisor.take() {
+            stop_supervisor(slot, current).await;
+        }
+    }
+
+    /// Stops all servers and cancels downloads (application exit).
     pub async fn shutdown(&self) {
         self.downloads.cancel_all();
-        self.stop().await;
+        tokio::join!(
+            self.stop(ServerRole::Chat),
+            self.stop(ServerRole::Embeddings)
+        );
     }
 
     async fn supervise(
         self: Arc<Self>,
+        role: ServerRole,
         mut child: Child,
         plan: LaunchPlan,
         name: String,
         stop: CancellationToken,
         timeout: Duration,
     ) {
+        let slot = self.slot(role);
         let started = Instant::now();
         if let Err(err) = process::wait_ready(
             &self.client,
@@ -639,26 +803,24 @@ impl RuntimeManager {
             &mut child,
             timeout,
             &stop,
-            &self.logs,
+            &slot.logs,
         )
         .await
         {
             terminate(&mut child).await;
-            self.remove_pid().await;
+            self.remove_pid(slot).await;
             if matches!(err, RuntimeError::Cancelled) {
-                self.state.send_replace(ServerState::stopped());
-                self.events
-                    .info(EventCategory::Runtime, format!("Loading {name} cancelled"));
+                slot.state.send_replace(ServerState::stopped());
+                self.events.info(
+                    EventCategory::Runtime,
+                    format!("Loading {name}{} cancelled", slot.purpose()),
+                );
             } else {
                 self.events.error(
                     EventCategory::Runtime,
-                    format!("{name} failed to start: {err}"),
+                    format!("{name} failed to start{}: {err}", slot.purpose()),
                 );
-                self.state.send_modify(|s| {
-                    s.phase = ServerPhase::Failed;
-                    s.error = Some(err.to_string());
-                    s.pid = None;
-                });
+                slot.fail(err.to_string());
             }
             return;
         }
@@ -669,89 +831,88 @@ impl RuntimeManager {
                 "The llama.cpp server accepted a request without its API key; other local programs could use it",
             );
         }
-        let provider = match self.runtime_provider(&plan) {
+        let provider = match self.runtime_provider(slot, &plan) {
             Ok(provider) => provider,
             Err(err) => {
                 terminate(&mut child).await;
-                self.remove_pid().await;
-                self.state.send_modify(|s| {
-                    s.phase = ServerPhase::Failed;
-                    s.error = Some(err.to_string());
-                    s.pid = None;
-                });
+                self.remove_pid(slot).await;
+                slot.fail(err.to_string());
                 return;
             }
         };
-        self.provider.send_replace(Some(provider));
-        self.state.send_modify(|s| {
+        slot.provider.send_replace(Some(provider));
+        slot.state.send_modify(|s| {
             s.phase = ServerPhase::Running;
             s.started_at_ms = Some(now_ms());
         });
         self.events.info(
             EventCategory::Runtime,
-            format!("{name} is ready ({:.1} s)", started.elapsed().as_secs_f64()),
+            format!(
+                "{name} is ready{} ({:.1} s)",
+                slot.purpose(),
+                started.elapsed().as_secs_f64()
+            ),
         );
 
         let exit = tokio::select! {
             status = child.wait() => Some(status),
             () = stop.cancelled() => None,
         };
-        self.provider.send_replace(None);
+        slot.provider.send_replace(None);
+        // The pid file goes before the state changes, so observers of the
+        // state never see a stale record.
         match exit {
             None => {
                 terminate(&mut child).await;
-                self.state.send_replace(ServerState::stopped());
-                self.events
-                    .info(EventCategory::Runtime, format!("{name} stopped"));
+                self.remove_pid(slot).await;
+                slot.state.send_replace(ServerState::stopped());
+                self.events.info(
+                    EventCategory::Runtime,
+                    format!("{name} stopped{}", slot.purpose()),
+                );
             }
             Some(status) => {
+                self.remove_pid(slot).await;
                 let status = status.map_or_else(|err| err.to_string(), |s| s.to_string());
                 let error = format!("llama-server exited unexpectedly ({status})");
-                self.events
-                    .error(EventCategory::Runtime, format!("{name}: {error}"));
-                self.state.send_modify(|s| {
-                    s.phase = ServerPhase::Failed;
-                    s.error = Some(error);
-                    s.pid = None;
-                });
+                self.events.error(
+                    EventCategory::Runtime,
+                    format!("{name}{}: {error}", slot.purpose()),
+                );
+                slot.fail(error);
             }
         }
-        self.remove_pid().await;
     }
 
-    fn runtime_provider(&self, plan: &LaunchPlan) -> Result<Arc<dyn AiProvider>> {
-        let descriptor = ProviderDescriptor {
-            id: ProviderId::new(RUNTIME_PROVIDER_ID),
-            display_name: "JARVIS runtime".to_owned(),
-            kind: ProviderKind::Embedded,
-            locality: DataLocality::OnDevice,
-        };
+    fn runtime_provider(&self, slot: &Slot, plan: &LaunchPlan) -> Result<Arc<dyn AiProvider>> {
         let base = url::Url::parse(&format!("http://127.0.0.1:{}/v1", plan.port))
             .map_err(|err| RuntimeError::Internal(format!("runtime URL: {err}")))?;
         Ok(Arc::new(
-            OpenAiCompatibleProvider::new(descriptor, base, Arc::clone(&self.ai_http))
-                .with_api_key(plan.api_key.clone()),
+            OpenAiCompatibleProvider::new(slot.descriptor(), base, Arc::clone(&self.ai_http))
+                .with_api_key(plan.api_key.clone())
+                .with_capabilities(slot.capabilities()),
         ))
     }
 
     // ---- Orphan handling -------------------------------------------------------
 
-    async fn write_pid(&self, record: PidRecord) {
+    async fn write_pid(&self, slot: &Slot, record: PidRecord) {
+        let path = self.runtime_dir.join(slot.pid_file());
         if let Ok(json) = serde_json::to_vec(&record)
-            && let Err(err) = library::write_atomic(&self.runtime_dir.join(PID_FILE), &json).await
+            && let Err(err) = library::write_atomic(&path, &json).await
         {
             tracing::warn!("cannot record the server pid: {err}");
         }
     }
 
-    async fn remove_pid(&self) {
-        let _ = tokio::fs::remove_file(self.runtime_dir.join(PID_FILE)).await;
+    async fn remove_pid(&self, slot: &Slot) {
+        let _ = tokio::fs::remove_file(self.runtime_dir.join(slot.pid_file())).await;
     }
 
     /// Kills a server left behind by a crashed session, but only if the pid
     /// still belongs to the recorded executable.
-    async fn cleanup_orphan(&self) {
-        let path = self.runtime_dir.join(PID_FILE);
+    async fn cleanup_orphan(&self, slot: &Slot) {
+        let path = self.runtime_dir.join(slot.pid_file());
         let Ok(text) = tokio::fs::read_to_string(&path).await else {
             return;
         };
@@ -764,11 +925,51 @@ impl RuntimeManager {
             if killed {
                 self.events.warning(
                     EventCategory::Runtime,
-                    "Stopped a llama.cpp server left running by a previous session",
+                    format!(
+                        "Stopped a llama.cpp server{} left running by a previous session",
+                        slot.purpose()
+                    ),
                 );
             }
         }
         let _ = tokio::fs::remove_file(&path).await;
+    }
+}
+
+/// The slot's state with the server's current memory use.
+async fn sampled_state(slot: &Slot) -> ServerState {
+    let mut state = slot.state();
+    if let Some(pid) = state.pid
+        && matches!(state.phase, ServerPhase::Starting | ServerPhase::Running)
+    {
+        state.memory_bytes =
+            tokio::task::spawn_blocking(move || jarvis_platform::process_memory(pid))
+                .await
+                .ok()
+                .flatten();
+    }
+    state
+}
+
+async fn stop_supervisor(slot: &Slot, supervisor: Supervisor) {
+    if !supervisor.task.is_finished() {
+        slot.state.send_modify(|s| s.phase = ServerPhase::Stopping);
+    }
+    supervisor.stop.cancel();
+    if tokio::time::timeout(STOP_TIMEOUT, supervisor.task)
+        .await
+        .is_err()
+    {
+        tracing::error!("llama-server supervisor did not stop in time");
+    }
+}
+
+/// Context of the embedding server: [`EMBEDDING_CONTEXT`], or less if the
+/// model was trained for less (BERT-like models have no positions beyond).
+fn embedding_context(info: &GgufInfo) -> u32 {
+    match info.context_length {
+        Some(trained) if trained > 0 => trained.min(EMBEDDING_CONTEXT),
+        _ => EMBEDDING_CONTEXT,
     }
 }
 
@@ -933,6 +1134,35 @@ mod tests {
             changed_library(&recorded, &removed).as_deref(),
             Some("b.dll")
         );
+    }
+
+    #[test]
+    fn embedding_context_stays_within_the_training_context() {
+        let trained = |context_length| GgufInfo {
+            context_length,
+            ..GgufInfo::default()
+        };
+        // bge-m3 is trained for 8192 tokens; one batch of 2048 covers every text.
+        assert_eq!(embedding_context(&trained(Some(8192))), EMBEDDING_CONTEXT);
+        // multilingual-e5 has 512 positions; more would read past them.
+        assert_eq!(embedding_context(&trained(Some(512))), 512);
+        assert_eq!(embedding_context(&trained(None)), EMBEDDING_CONTEXT);
+        assert_eq!(embedding_context(&trained(Some(0))), EMBEDDING_CONTEXT);
+    }
+
+    #[test]
+    fn slots_describe_their_providers() {
+        let chat = Slot::new(ServerRole::Chat);
+        let embeddings = Slot::new(ServerRole::Embeddings);
+        assert_eq!(chat.descriptor().id.as_str(), RUNTIME_PROVIDER_ID);
+        assert_eq!(
+            embeddings.descriptor().id.as_str(),
+            RUNTIME_EMBEDDINGS_PROVIDER_ID
+        );
+        assert_eq!(embeddings.descriptor().locality, DataLocality::OnDevice);
+        assert!(chat.capabilities().chat && !chat.capabilities().embeddings);
+        assert!(embeddings.capabilities().embeddings && !embeddings.capabilities().chat);
+        assert_ne!(chat.pid_file(), embeddings.pid_file());
     }
 
     #[test]

@@ -525,8 +525,13 @@ async fn a_model_served_by_the_runtime_is_routed_and_unregistered_on_stop() {
         .await
         .expect("import");
 
-    core.start_local_model(&model.id).await.expect("start");
-    let state = core.runtime().wait_settled(Duration::from_secs(30)).await;
+    core.start_local_model(jarvis_runtime::ServerRole::Chat, &model.id)
+        .await
+        .expect("start");
+    let state = core
+        .runtime()
+        .wait_settled(jarvis_runtime::ServerRole::Chat, Duration::from_secs(30))
+        .await;
     assert_eq!(
         state.phase,
         jarvis_runtime::ServerPhase::Running,
@@ -587,7 +592,7 @@ async fn a_model_served_by_the_runtime_is_routed_and_unregistered_on_stop() {
     assert_eq!(text, "pong");
 
     core.shutdown().await;
-    assert!(core.runtime().provider().is_none());
+    assert!(core.runtime().providers().is_empty());
     let mut removed = false;
     for _ in 0..50 {
         if !core

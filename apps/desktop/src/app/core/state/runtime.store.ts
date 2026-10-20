@@ -8,6 +8,8 @@ import type {
   RuntimeSettings,
   RuntimeStatus,
   ServerPhase,
+  ServerRole,
+  ServerState,
 } from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
@@ -29,13 +31,18 @@ export function recommendedBackend(hardware: HardwareInfo | null): RuntimeBacken
   return hardware?.vulkanAvailable && capable ? 'vulkan' : 'cpu';
 }
 
+function settling(server: ServerState): boolean {
+  return server.phase === 'starting' || server.phase === 'stopping';
+}
+
 /** State of the embedded llama.cpp runtime (Runtime screen). */
 @Injectable({ providedIn: 'root' })
 export class RuntimeStore {
   private readonly api = inject(JarvisApi);
   private readonly models = inject(ModelsStore);
   private readonly settingsStore = inject(SettingsStore);
-  private lastPhase: ServerPhase | null = null;
+  /** Last seen phase of the chat and the embedding server. */
+  private lastPhases: [ServerPhase, ServerPhase] | null = null;
   private refreshing = false;
 
   readonly status = signal<RuntimeStatus | null>(null);
@@ -46,7 +53,10 @@ export class RuntimeStore {
   /** Last failed action, shown on the screen. */
   readonly error = signal<IpcError | null>(null);
 
+  /** The chat model server. */
   readonly server = computed(() => this.status()?.server ?? null);
+  /** The embedding model server (semantic memory search). */
+  readonly embeddingServer = computed(() => this.status()?.embeddingServer ?? null);
   readonly installed = computed(() => this.status()?.binary ?? null);
   readonly busy = computed(() => {
     const status = this.status();
@@ -54,8 +64,8 @@ export class RuntimeStore {
       return false;
     }
     return (
-      status.server.phase === 'starting' ||
-      status.server.phase === 'stopping' ||
+      settling(status.server) ||
+      settling(status.embeddingServer) ||
       status.downloads.some((d) => !['completed', 'failed', 'cancelled'].includes(d.phase))
     );
   });
@@ -71,16 +81,20 @@ export class RuntimeStore {
     try {
       const status = await this.api.getRuntimeStatus();
       this.status.set(status);
-      const phase = status.server.phase;
+      const phases: [ServerPhase, ServerPhase] = [
+        status.server.phase,
+        status.embeddingServer.phase,
+      ];
       // The set of AI models changes when a local model starts or stops.
-      if (
-        this.lastPhase !== null &&
-        phase !== this.lastPhase &&
-        (phase === 'running' || this.lastPhase === 'running')
-      ) {
+      const last = this.lastPhases;
+      const changed = phases.some(
+        (phase, i) =>
+          last !== null && phase !== last[i] && (phase === 'running' || last[i] === 'running'),
+      );
+      if (changed) {
         void this.models.refresh(true);
       }
-      this.lastPhase = phase;
+      this.lastPhases = phases;
     } catch (error) {
       this.error.set(IpcError.from(error));
     } finally {
@@ -137,12 +151,12 @@ export class RuntimeStore {
     return this.run(() => this.api.removeModel(id, deleteFile));
   }
 
-  start(modelId: string): Promise<void> {
-    return this.run(() => this.api.startLocalModel(modelId));
+  start(modelId: string, role: ServerRole): Promise<void> {
+    return this.run(() => this.api.startLocalModel(modelId, role));
   }
 
-  stop(): Promise<void> {
-    return this.run(() => this.api.stopLocalModel());
+  stop(role: ServerRole): Promise<void> {
+    return this.run(() => this.api.stopLocalModel(role));
   }
 
   async saveSettings(runtime: RuntimeSettings): Promise<boolean> {

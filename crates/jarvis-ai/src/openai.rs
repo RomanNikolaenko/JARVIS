@@ -4,7 +4,8 @@
 //! Endpoints relative to the base URL (which usually ends in `/v1`):
 //! `GET models`, `POST chat/completions` (SSE streaming), `POST embeddings`.
 //! The API does not report model capabilities, so they are inferred
-//! conservatively from the model id.
+//! conservatively from the model id, unless the creator of the provider knows
+//! them ([`OpenAiCompatibleProvider::with_capabilities`]).
 
 use std::sync::Arc;
 
@@ -27,6 +28,9 @@ pub struct OpenAiCompatibleProvider {
     /// Bearer token sent with every request (e.g. the per-launch key of the
     /// embedded llama.cpp server). Never logged.
     api_key: Option<String>,
+    /// Capabilities reported for every model instead of the guess from the
+    /// model id (servers that are known to serve one kind of model).
+    capabilities: Option<ModelCapabilities>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -36,12 +40,19 @@ impl OpenAiCompatibleProvider {
             base: http::normalize_base(base),
             http,
             api_key: None,
+            capabilities: None,
         }
     }
 
     /// Sends `Authorization: Bearer <key>` with every request.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Reports `capabilities` for every listed model.
+    pub fn with_capabilities(mut self, capabilities: ModelCapabilities) -> Self {
+        self.capabilities = Some(capabilities);
         self
     }
 
@@ -80,7 +91,9 @@ impl AiProvider for OpenAiCompatibleProvider {
             .data
             .into_iter()
             .map(|model| ModelInfo {
-                capabilities: infer_capabilities(&model.id),
+                capabilities: self
+                    .capabilities
+                    .unwrap_or_else(|| infer_capabilities(&model.id)),
                 display_name: model.id.clone(),
                 id: model.id,
                 provider_id: self.descriptor.id.clone(),

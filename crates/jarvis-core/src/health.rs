@@ -116,8 +116,6 @@ pub(crate) async fn storage_health(dir: &std::path::Path) -> (HealthStatus, Stri
     }
 }
 
-/// Local runtime health. The runtime is optional, so "not installed" is
-/// healthy; a failed server is degraded.
 /// The memory database: open, and how much it holds.
 pub(crate) async fn memory_health(
     memory: &jarvis_memory::MemoryEngine,
@@ -143,29 +141,58 @@ pub(crate) async fn memory_health(
     }
 }
 
+/// Local runtime health. The runtime is optional, so "not installed" is
+/// healthy; a failed server (chat or embeddings) is degraded.
 pub(crate) fn runtime_health(
     installed: bool,
-    state: &jarvis_runtime::ServerState,
+    chat: &jarvis_runtime::ServerState,
+    embeddings: &jarvis_runtime::ServerState,
 ) -> (HealthStatus, String) {
     use jarvis_runtime::ServerPhase;
-    let model = state.model_id.as_deref().unwrap_or("model");
-    match state.phase {
-        ServerPhase::Running => (HealthStatus::Healthy, format!("Serving {model}")),
-        ServerPhase::Starting => (HealthStatus::Healthy, format!("Loading {model}")),
-        ServerPhase::Stopping => (HealthStatus::Healthy, "Stopping".to_owned()),
-        ServerPhase::Failed => (
-            HealthStatus::Degraded,
-            format!(
-                "Failed: {}",
-                state.error.as_deref().unwrap_or("unknown error")
-            ),
-        ),
-        ServerPhase::Stopped if installed => (
-            HealthStatus::Healthy,
-            "Installed; no model running".to_owned(),
-        ),
-        ServerPhase::Stopped => (HealthStatus::Healthy, "Not installed (optional)".to_owned()),
+    let describe = |state: &jarvis_runtime::ServerState, what: &str| {
+        let model = state.model_id.as_deref().unwrap_or("model");
+        match state.phase {
+            ServerPhase::Running => Some((HealthStatus::Healthy, format!("Serving {model}{what}"))),
+            ServerPhase::Starting => {
+                Some((HealthStatus::Healthy, format!("Loading {model}{what}")))
+            }
+            ServerPhase::Stopping => Some((HealthStatus::Healthy, format!("Stopping{what}"))),
+            ServerPhase::Failed => Some((
+                HealthStatus::Degraded,
+                format!(
+                    "Failed{what}: {}",
+                    state.error.as_deref().unwrap_or("unknown error")
+                ),
+            )),
+            ServerPhase::Stopped => None,
+        }
+    };
+    let parts: Vec<(HealthStatus, String)> =
+        [describe(chat, ""), describe(embeddings, " for embeddings")]
+            .into_iter()
+            .flatten()
+            .collect();
+    if parts.is_empty() {
+        return if installed {
+            (
+                HealthStatus::Healthy,
+                "Installed; no model running".to_owned(),
+            )
+        } else {
+            (HealthStatus::Healthy, "Not installed (optional)".to_owned())
+        };
     }
+    let status = if parts.iter().any(|(s, _)| *s == HealthStatus::Degraded) {
+        HealthStatus::Degraded
+    } else {
+        HealthStatus::Healthy
+    };
+    let message = parts
+        .into_iter()
+        .map(|(_, m)| m)
+        .collect::<Vec<_>>()
+        .join("; ");
+    (status, message)
 }
 
 /// AI health: healthy if at least one real (non-diagnostic) provider answers
@@ -295,5 +322,39 @@ mod tests {
         .await;
         assert_eq!(health.status, HealthStatus::Unhealthy);
         assert!(health.message.contains("timed out"));
+    }
+
+    #[test]
+    fn runtime_health_covers_both_servers() {
+        use jarvis_runtime::{ServerPhase, ServerState};
+        let state = |phase, model: &str| ServerState {
+            phase,
+            model_id: Some(model.into()),
+            error: (phase == ServerPhase::Failed).then(|| "boom".to_owned()),
+            ..ServerState::stopped()
+        };
+        let stopped = ServerState::stopped();
+        assert_eq!(
+            runtime_health(false, &stopped, &stopped),
+            (HealthStatus::Healthy, "Not installed (optional)".to_owned())
+        );
+        assert_eq!(
+            runtime_health(true, &state(ServerPhase::Running, "qwen"), &stopped),
+            (HealthStatus::Healthy, "Serving qwen".to_owned())
+        );
+        assert_eq!(
+            runtime_health(
+                true,
+                &state(ServerPhase::Running, "qwen"),
+                &state(ServerPhase::Running, "bge")
+            ),
+            (
+                HealthStatus::Healthy,
+                "Serving qwen; Serving bge for embeddings".to_owned()
+            )
+        );
+        let (status, message) = runtime_health(true, &stopped, &state(ServerPhase::Failed, "bge"));
+        assert_eq!(status, HealthStatus::Degraded);
+        assert_eq!(message, "Failed for embeddings: boom");
     }
 }

@@ -1,29 +1,35 @@
 import { TestBed } from '@angular/core/testing';
-import type { HardwareInfo, RuntimeStatus, ServerPhase } from '@jarvis/shared-types';
+import type { HardwareInfo, RuntimeStatus, ServerPhase, ServerState } from '@jarvis/shared-types';
 
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ModelsStore } from './models.store';
 import { RuntimeStore, recommendedBackend } from './runtime.store';
 
-function status(phase: ServerPhase): RuntimeStatus {
+function server(phase: ServerPhase, model: string): ServerState {
+  return {
+    phase,
+    modelId: phase === 'stopped' ? null : model,
+    port: null,
+    pid: null,
+    startedAtMs: null,
+    contextSize: null,
+    gpuLayers: null,
+    threads: null,
+    memoryBytes: null,
+    error: null,
+  };
+}
+
+function status(phase: ServerPhase, embeddingPhase: ServerPhase = 'stopped'): RuntimeStatus {
   return {
     binary: null,
-    server: {
-      phase,
-      modelId: phase === 'stopped' ? null : 'qwen',
-      port: null,
-      pid: null,
-      startedAtMs: null,
-      contextSize: null,
-      gpuLayers: null,
-      threads: null,
-      memoryBytes: null,
-      error: null,
-    },
+    server: server(phase, 'qwen'),
+    embeddingServer: server(embeddingPhase, 'bge-m3-q8_0'),
     models: [],
     downloads: [],
     modelsDir: '/data/models',
     logTail: [],
+    embeddingLogTail: [],
   };
 }
 
@@ -92,6 +98,16 @@ describe('RuntimeStore', () => {
     api['getRuntimeStatus']!.mockResolvedValueOnce(status('stopped'));
     await store.refresh();
     expect(refreshModels).toHaveBeenCalledTimes(2);
+
+    // The embedding server adds and removes an AI provider as well.
+    api['getRuntimeStatus']!.mockResolvedValueOnce(status('stopped', 'running'));
+    await store.refresh();
+    expect(refreshModels).toHaveBeenCalledTimes(3);
+    expect(store.embeddingServer()?.modelId).toBe('bge-m3-q8_0');
+
+    api['getRuntimeStatus']!.mockResolvedValueOnce(status('stopped', 'failed'));
+    await store.refresh();
+    expect(refreshModels).toHaveBeenCalledTimes(4);
   });
 
   it('records action errors and still refreshes the status', async () => {
@@ -99,15 +115,28 @@ describe('RuntimeStore', () => {
     expect(store.error()?.code).toBe('permissionDenied');
     expect(api['getRuntimeStatus']).toHaveBeenCalled();
 
-    await store.start('m');
+    await store.start('m', 'chat');
     expect(store.error()).toBeNull();
-    expect(api['startLocalModel']).toHaveBeenCalledWith('m');
+    expect(api['startLocalModel']).toHaveBeenCalledWith('m', 'chat');
+
+    await store.start('bge', 'embeddings');
+    expect(api['startLocalModel']).toHaveBeenCalledWith('bge', 'embeddings');
+    await store.stop('embeddings');
+    expect(api['stopLocalModel']).toHaveBeenCalledWith('embeddings');
   });
 
   it('reports busy while starting or downloading', async () => {
     api['getRuntimeStatus']!.mockResolvedValueOnce(status('starting'));
     await store.refresh();
     expect(store.busy()).toBe(true);
+
+    api['getRuntimeStatus']!.mockResolvedValueOnce(status('running', 'starting'));
+    await store.refresh();
+    expect(store.busy()).toBe(true);
+
+    api['getRuntimeStatus']!.mockResolvedValueOnce(status('running', 'running'));
+    await store.refresh();
+    expect(store.busy()).toBe(false);
 
     api['getRuntimeStatus']!.mockResolvedValueOnce({
       ...status('stopped'),

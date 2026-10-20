@@ -46,7 +46,9 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Verified with the real llama.cpp engine on Windows (b11739, Qwen2.5 3B)
 - ⬜ Verification with the real engine on Linux
 - ⬜ CUDA build installation (needs the separate CUDA runtime archive)
-- ⬜ Embedding model serving (second server instance with `--embedding`)
+- ✅ Embedding model serving: second supervised server (`--embedding`,
+  pooling from GGUF), separate start/stop and autostart, BGE-M3 in the
+  catalog (live check with the real engine: pending)
 
 ## Phase 4 — Memory 🟡
 
@@ -62,8 +64,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Conversation history UI, temporary chats, Memory screen, export/import,
   delete selected items or everything, "don't remember" mode, cloud sharing
   opt-in
-- ⬜ Embedding model served by the embedded runtime (second llama.cpp
-  instance); until then semantic search needs Ollama or another provider
+- ✅ Embedding model served by the embedded runtime: semantic search works
+  without Ollama (indexing starts when the embedding model comes up)
 - ⬜ Encryption at rest (key in the OS keychain)
 - ⬜ Automatic fact extraction (opt-in)
 

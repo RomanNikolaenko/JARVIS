@@ -448,6 +448,8 @@ fn runtime_status_reports_an_empty_installation() {
     let status = invoke(&h.main, "get_runtime_status", json!({})).expect("status");
     assert_eq!(status["binary"], Value::Null);
     assert_eq!(status["server"]["phase"], "stopped");
+    assert_eq!(status["embeddingServer"]["phase"], "stopped");
+    assert_eq!(status["embeddingLogTail"], json!([]));
     assert_eq!(status["models"], json!([]));
     assert!(
         status["modelsDir"]
@@ -457,6 +459,12 @@ fn runtime_status_reports_an_empty_installation() {
 
     let curated = invoke(&h.main, "list_curated_models", json!({})).expect("catalog");
     assert!(curated.as_array().is_some_and(|c| !c.is_empty()));
+    assert!(
+        curated
+            .as_array()
+            .is_some_and(|c| c.iter().any(|m| m["role"] == "embeddings")),
+        "the catalog offers an embedding model"
+    );
     let hardware = invoke(&h.main, "get_hardware_info", json!({})).expect("hardware");
     assert!(hardware["logicalCpus"].as_u64().is_some_and(|n| n >= 1));
 }
@@ -464,13 +472,21 @@ fn runtime_status_reports_an_empty_installation() {
 #[test]
 fn runtime_commands_report_errors_without_touching_the_network() {
     let h = harness();
-    let error = invoke(
+    for role in ["chat", "embeddings"] {
+        let error = invoke(
+            &h.main,
+            "start_local_model",
+            json!({ "modelId": "missing", "role": role }),
+        )
+        .expect_err("not installed");
+        assert_eq!(error["code"], "notFound", "{role}");
+    }
+    invoke(
         &h.main,
         "start_local_model",
-        json!({ "modelId": "missing" }),
+        json!({ "modelId": "missing", "role": "reranking" }),
     )
-    .expect_err("not installed");
-    assert_eq!(error["code"], "notFound");
+    .expect_err("unknown roles are rejected");
 
     let error = invoke(
         &h.main,
@@ -496,7 +512,10 @@ fn runtime_commands_report_errors_without_touching_the_network() {
         invoke(&h.main, "cancel_download", json!({ "id": "nope" })).expect("cancel"),
         json!(false)
     );
-    invoke(&h.main, "stop_local_model", json!({})).expect("stopping a stopped runtime is fine");
+    for role in ["chat", "embeddings"] {
+        invoke(&h.main, "stop_local_model", json!({ "role": role }))
+            .expect("stopping a stopped server is fine");
+    }
 }
 
 #[test]

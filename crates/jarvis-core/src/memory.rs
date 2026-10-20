@@ -29,7 +29,7 @@ use jarvis_memory::{
     MemoryStatus, MessageRole, MessageStatus, NewMessage, Project, ProjectInput, Retrieval,
     SearchHit, SearchQuery, TransferReport, text,
 };
-use jarvis_runtime::RUNTIME_PROVIDER_ID;
+use jarvis_runtime::{RUNTIME_PROVIDER_ID, ServerPhase, ServerRole};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -422,7 +422,7 @@ impl JarvisCore {
         if model.descriptor.id.as_str() == RUNTIME_PROVIDER_ID {
             return self
                 .runtime
-                .server_state()
+                .server_state(ServerRole::Chat)
                 .context_size
                 .or(model.context_window);
         }
@@ -476,6 +476,11 @@ impl JarvisCore {
             provider,
             model,
         }))
+    }
+
+    /// Runs the indexer soon (e.g. after the embedding model changed).
+    pub(crate) fn notify_indexer(&self) {
+        self.memory_state.index_notify.notify_one();
     }
 
     /// Embeds facts and messages that have no vector for the current model.
@@ -759,7 +764,7 @@ impl JarvisCore {
                 runtime
                     .model_key
                     .is_none()
-                    .then(|| "No embedding model is available; search is text-only".to_owned())
+                    .then(|| self.no_embedder_detail())
             }),
         };
         MemoryStatus {
@@ -776,6 +781,20 @@ impl JarvisCore {
             schema_version: database.map_or(0, |db| db.report().schema_version),
             counts,
             embedding,
+        }
+    }
+
+    /// Why search is text-only, pointing at the embedding server of the
+    /// runtime when it is the reason.
+    fn no_embedder_detail(&self) -> String {
+        let server = self.runtime.server_state(ServerRole::Embeddings);
+        match server.phase {
+            ServerPhase::Starting => "The embedding model is loading; search is text-only until it is ready".to_owned(),
+            ServerPhase::Failed => format!(
+                "The embedding model failed ({}); search is text-only",
+                server.error.as_deref().unwrap_or("unknown error")
+            ),
+            _ => "No embedding model is available, so search is text-only. Start the embedding model on the Runtime screen or use a provider with an embedding model".to_owned(),
         }
     }
 
