@@ -98,10 +98,28 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Tools from MCP servers and plugins (Phase 7)
 - ⬜ Agents started from chat (today: the Agents screen)
 
-## Phase 6 — Voice and vision ⬜
+## Phase 6 — Voice and vision 🟡
 
-STT (whisper.cpp), TTS, VAD, wake word «Джарвіс», device selection, barge-in;
-screen/window capture per platform (portal on Wayland), camera, vision models.
+- ✅ `jarvis-voice`: audio capture and playback (cpal), VAD (earshot),
+  speech recognition with a managed whisper.cpp server, speech synthesis
+  with a long-running Piper process (uk + en voices), wake word «Джарвіс» /
+  "Jarvis", push-to-talk, streamed replies read sentence by sentence,
+  barge-in, device selection
+- ✅ Pinned and checksummed engine/model/voice packages, installed only
+  after confirmation; program integrity checked before every start
+- ✅ Microphone indicator on every screen and in the event log; wake word
+  mode is opt-in
+- ✅ `jarvis-vision`: screen and window capture on Windows and X11,
+  portal dialog on Wayland, capability reporting; image files and camera
+  photos (WebView camera)
+- ✅ Images for vision models (OpenAI-compatible, Ollama, llama.cpp with
+  `--mmproj`; curated Qwen3-VL 2B and Gemma 3 4B), vision routing,
+  separate permission for sending captures to cloud models
+- ✅ UI: microphone button with level meter, voice status, Settings →
+  Voice, attachments with previews in the chat
+- ⬜ Live verification with real engines and devices on Windows and Linux
+- ⬜ Cloud speech (optional), echo cancellation, a dedicated wake-word model
+- ⬜ Camera on Linux (WebKitGTK media capture is off in Tauri)
 
 ## Phase 7 — Sync and extensions ⬜
 
@@ -115,6 +133,7 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Live verification of Phase 5 on Linux, then Phase 6 (voice and vision).
+Live verification of Phase 6 with the real engines (whisper.cpp, Piper, a
+vision model) on Windows, then Linux; then Phase 7.
 Open Phase 2 items:
 keychain-backed API keys and cloud providers.

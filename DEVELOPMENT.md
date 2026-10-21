@@ -21,11 +21,11 @@
 ```bash
 sudo apt-get update
 sudo apt-get install -y build-essential curl wget file libwebkit2gtk-4.1-dev \
-  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libasound2-dev
 ```
 
 Fedora: `sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file
-libappindicator-gtk3-devel librsvg2-devel libxdo-devel` and the
+libappindicator-gtk3-devel librsvg2-devel libxdo-devel alsa-lib-devel` and the
 "C Development Tools and Libraries" group.
 
 Both X11 and Wayland sessions work for the current features. Wayland-specific
@@ -184,6 +184,31 @@ returns an `ActionRequest` with honest capabilities and risk, without side
 effects; `run` does the work, respects `ctx.cancel` and the limits — and
 register it in `ToolRegistry::builtin`. The policy, approvals, audit log and
 UI pick it up automatically.
+
+### Voice and vision
+
+- `jarvis-voice` runs two external engines as child processes:
+  `whisper-server` (whisper.cpp) for recognition and Piper for speech.
+  Settings → Voice installs them, a Whisper model and voices into
+  `<data>/voice/<package id>/`; every file is pinned with its SHA-256 in
+  `crates/jarvis-voice/src/catalog.rs`. Before each start the program's
+  and its libraries' SHA-256 are checked against the install record
+  (`jarvis-package.json`).
+- Tests never need audio hardware or engines: `jarvis_voice::testing`
+  (feature `test-support`) fakes the microphone, speakers and engines, and
+  `tests/engines.rs` re-runs the test binary as a fake `whisper-server`
+  and a fake Piper.
+- Linux needs `libasound2-dev` to build (cpal → ALSA). Under WSLg, audio
+  goes through PulseAudio; ALSA programs reach it with the
+  `libasound2-plugins` package (`pulse` device).
+- `jarvis-vision` captures with xcap on Windows, x11rb on X11 and the
+  xdg-desktop-portal Screenshot dialog on Wayland. Without a portal (for
+  example WSLg) capture reports itself as unavailable. Image decoding and
+  resizing are optimized even in dev builds (`[profile.dev.package]` in
+  the root `Cargo.toml`), otherwise a 4K screenshot takes seconds.
+- Local vision models need a projector (`mmproj`) next to the model:
+  catalog vision models download it automatically; for other models use
+  "Add vision" on the Runtime screen.
 
 ## Where JARVIS stores data
 

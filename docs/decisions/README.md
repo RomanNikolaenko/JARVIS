@@ -16,5 +16,6 @@ earlier one instead of editing it.
 | [0008](0008-embedded-llama-runtime.md) | Embedded runtime: supervised llama.cpp server | Accepted |
 | [0009](0009-local-memory.md) | Local memory: SQLite storage, Memory Engine and Context Manager | Accepted |
 | [0010](0010-tools-and-agents.md) | Tools and agents behind a Security Policy Engine | Accepted |
+| [0011](0011-voice-and-vision.md) | Voice and vision on the user's computer | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.
