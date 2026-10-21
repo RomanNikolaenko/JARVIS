@@ -2,6 +2,7 @@ use jarvis_agent::AgentError;
 use jarvis_ai::AiError;
 use jarvis_memory::{MemoryError, StorageError};
 use jarvis_runtime::RuntimeError;
+use jarvis_vision::VisionError;
 use jarvis_voice::VoiceError;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -97,6 +98,9 @@ pub enum CoreError {
     #[error(transparent)]
     Voice(#[from] VoiceError),
 
+    #[error(transparent)]
+    Vision(#[from] VisionError),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -181,6 +185,14 @@ impl CoreError {
                 VoiceError::Cancelled => ErrorCode::Cancelled,
                 VoiceError::Timeout => ErrorCode::Timeout,
                 VoiceError::Io { .. } => ErrorCode::Io,
+            },
+            Self::Vision(err) => match err {
+                VisionError::Unsupported(_) => ErrorCode::Unsupported,
+                VisionError::Cancelled => ErrorCode::Cancelled,
+                VisionError::NotFound(_) => ErrorCode::NotFound,
+                VisionError::InvalidImage(_) => ErrorCode::Validation,
+                VisionError::Capture(_) => ErrorCode::Unavailable,
+                VisionError::Io { .. } => ErrorCode::Io,
             },
         }
     }

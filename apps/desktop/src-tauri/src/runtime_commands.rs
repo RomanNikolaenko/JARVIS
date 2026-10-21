@@ -118,6 +118,35 @@ pub async fn import_model<R: Runtime>(
         .map_err(payload)
 }
 
+/// Lets the user pick a vision projector (mmproj GGUF) for a model.
+/// `None` if cancelled.
+#[tauri::command]
+pub async fn attach_projector<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> CommandResult<Option<LocalModel>> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Add a vision projector (mmproj)")
+        .add_filter("GGUF projector", &["gguf"])
+        .blocking_pick_file();
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|err| payload(CoreError::Validation(format!("unsupported file: {err}"))))?;
+    state
+        .core()
+        .runtime()
+        .attach_projector(&model_id, &path)
+        .await
+        .map(Some)
+        .map_err(payload)
+}
+
 #[tauri::command]
 pub async fn download_curated_model(
     state: State<'_, AppState>,

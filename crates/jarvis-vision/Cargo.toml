@@ -1,0 +1,31 @@
+[package]
+name = "jarvis-vision"
+description = "JARVIS vision: screen and window capture with the user's consent, and image preparation for vision models."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+image.workspace = true
+jarvis-platform.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "rt", "sync"] }
+tracing.workspace = true
+ts-rs.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+xcap.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd.workspace = true
+x11rb.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -359,6 +359,10 @@ pub struct PrivacySettings {
     /// program output to the model; this also needs `allowCloudProviders`.
     /// Off by default.
     pub allow_cloud_agents: bool,
+    /// Whether attached images (screen captures, photos) may be sent to
+    /// cloud models. A capture can show anything on the screen, so this is
+    /// separate from `allowCloudProviders`. Off by default.
+    pub share_captures_with_cloud: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -20,8 +20,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::FutureExt;
 use jarvis_ai::{
-    AiProvider, ChatRequest, DataLocality, EmbeddingRequest, FinishReason, GenerationOptions,
-    ProviderBackend, ProviderId, ProviderKind,
+    AiProvider, ChatRequest, ChatRole, DataLocality, EmbeddingRequest, FinishReason,
+    GenerationOptions, ProviderBackend, ProviderId, ProviderKind,
 };
 use jarvis_events::{EventCategory, EventLevel, RecvError, SystemEvent};
 use jarvis_memory::{
@@ -74,6 +74,10 @@ pub struct ChatTurnRequest {
     /// when speech synthesis is installed and `voice.speakReplies` is on.
     #[serde(default)]
     pub speak: bool,
+    /// Ids of captured images to show the model (see `capture_screen`).
+    /// The model must support vision.
+    #[serde(default)]
+    pub attachments: Vec<String>,
 }
 
 /// State of the memory background work.
@@ -345,14 +349,27 @@ impl JarvisCore {
         };
         slot.finishing.store(false, Ordering::Release);
 
-        let model = self
-            .chat
-            .resolve_model(
-                request.provider_id.as_ref(),
-                request.model.as_deref(),
-                &settings,
-            )
-            .await?;
+        let attachments = self.attachments(&request.attachments)?;
+        let model = if attachments.images.is_empty() {
+            self.chat
+                .resolve_model(
+                    request.provider_id.as_ref(),
+                    request.model.as_deref(),
+                    &settings,
+                )
+                .await?
+        } else {
+            let model = self
+                .chat
+                .resolve_vision_model(
+                    request.provider_id.as_ref(),
+                    request.model.as_deref(),
+                    &settings,
+                )
+                .await?;
+            self.check_vision_model(&model, &settings)?;
+            model
+        };
         let window = ContextWindow::new(
             self.model_window(&model, &settings),
             settings.memory.context_limit_tokens,
@@ -381,12 +398,27 @@ impl JarvisCore {
                 retrieval,
             })
             .await?;
+        if !attachments.images.is_empty()
+            && let Some(current) = assembled
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|m| m.role == ChatRole::User)
+        {
+            current.images = attachments.images;
+        }
         if !share_memory {
             assembled.report.memory_skipped = Some(
                 "Saved memory is not shared with cloud models (Settings → Privacy)".to_owned(),
             );
         }
 
+        // Images are not saved; the conversation keeps a note instead.
+        let saved_content = if attachments.notes.is_empty() {
+            content
+        } else {
+            format!("{content}\n\n{}", attachments.notes.join("\n"))
+        };
         let reservation = self.chat.reserve()?;
         self.memory
             .append_message(
@@ -394,7 +426,7 @@ impl JarvisCore {
                 NewMessage {
                     id: Uuid::new_v4(),
                     role: MessageRole::User,
-                    content,
+                    content: saved_content,
                     status: MessageStatus::Complete,
                     provider_id: None,
                     model: None,
@@ -434,6 +466,10 @@ impl JarvisCore {
             },
             sink,
         );
+
+        for id in &attachments.ids {
+            self.captures.remove(id);
+        }
 
         let memory = Arc::clone(&self.memory);
         let state = Arc::clone(&self.memory_state);

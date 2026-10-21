@@ -598,3 +598,52 @@ async fn servers_left_by_a_previous_session_are_stopped() {
     assert!(recent.iter().any(|e| e.message
         == "Stopped a llama.cpp server for embeddings left running by a previous session"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_with_a_projector_sees_images() {
+    let h = harness("slow").await;
+    // Only mmproj files are accepted as projectors.
+    let not_projector = h.data_dir.join("other.gguf");
+    std::fs::write(&not_projector, testing::fake_gguf_bytes()).unwrap();
+    let err = h
+        .manager
+        .attach_projector(&h.model_id, &not_projector)
+        .await
+        .expect_err("not a projector");
+    assert!(matches!(err, RuntimeError::InvalidModel(_)), "{err}");
+
+    let projector = h.data_dir.join("vision.mmproj.gguf");
+    std::fs::write(&projector, testing::fake_projector_gguf_bytes()).unwrap();
+    let model = h
+        .manager
+        .attach_projector(&h.model_id, &projector)
+        .await
+        .expect("projector");
+    assert!(model.projector.is_some());
+
+    h.manager
+        .start(CHAT, &h.model_id, &settings(30))
+        .await
+        .expect("start");
+    let state = h.manager.wait_settled(CHAT, Duration::from_secs(30)).await;
+    assert_eq!(state.phase, ServerPhase::Running, "{state:?}");
+    assert!(state.vision);
+    let models = h
+        .manager
+        .provider(CHAT)
+        .expect("provider")
+        .list_models()
+        .await
+        .expect("models");
+    assert!(models[0].capabilities.vision);
+    h.manager.stop(CHAT).await;
+
+    // A missing projector is reported before starting.
+    std::fs::remove_file(&projector).unwrap();
+    let err = h
+        .manager
+        .start(CHAT, &h.model_id, &settings(30))
+        .await
+        .expect_err("missing projector");
+    assert!(err.to_string().contains("vision projector"), "{err}");
+}

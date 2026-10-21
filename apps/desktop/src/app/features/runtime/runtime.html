@@ -308,6 +308,9 @@
                 @if (isEmbeddingModel(model)) {
                   <span class="chip">embeddings</span>
                 }
+                @if (model.projector) {
+                  <span class="chip" title="{{ model.projector.path }}">vision</span>
+                }
               </td>
               <td class="num mono">{{ formatBytes(model.sizeBytes) }}</td>
               <td class="actions-cell">
@@ -332,6 +335,15 @@
                     ">
                     {{ roleOf(model) === 'embeddings' ? 'Start embeddings' : 'Start' }}
                   </button>
+                  @if (!model.projector && !isEmbeddingModel(model)) {
+                    <button
+                      type="button"
+                      class="ghost small"
+                      (click)="store.attachProjector(model.id)"
+                      title="Add the model's vision projector (mmproj GGUF) so it can see images">
+                      Add vision
+                    </button>
+                  }
                   <button type="button" class="ghost small" (click)="confirmingRemoval.set(model.id)">Remove</button>
                 }
               </td>
@@ -384,8 +396,13 @@
               @if (model.role === 'embeddings') {
                 <span class="chip">embeddings</span>
               }
+              @if (model.projector) {
+                <span class="chip">vision</span>
+              }
             </div>
-            <div class="dim small-text">{{ model.description }} {{ formatBytes(model.sizeBytes) }} · {{ model.license }}</div>
+            <div class="dim small-text">
+              {{ model.description }} {{ formatBytes(model.sizeBytes + (model.projector?.sizeBytes ?? 0)) }} · {{ model.license }}
+            </div>
           </div>
           <button type="button" class="small" (click)="store.downloadCurated(model.id)" [disabled]="isCuratedPresent(model.id)">
             {{ isCuratedPresent(model.id) ? 'Downloaded' : 'Download' }}

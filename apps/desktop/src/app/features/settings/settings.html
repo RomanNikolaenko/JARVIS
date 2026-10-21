@@ -81,6 +81,14 @@
         Agents send file contents and program output to the model. Tools and folders are set on the
         <a routerLink="/agents">Agents</a> screen.
       </p>
+      <label class="check">
+        <input type="checkbox" formControlName="shareCapturesWithCloud" />
+        <span>Send screenshots and photos to cloud AI providers</span>
+      </label>
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        A screenshot can show anything that was on the screen. When off, images go only to local vision models.
+      </p>
     </jv-hud-panel>
 
     <jv-hud-panel heading="Diagnostics">

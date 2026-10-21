@@ -35,6 +35,6 @@ pub use provider::{AiProvider, ChatStream};
 pub use registry::ProviderRegistry;
 pub use types::{
     ChatChunk, ChatMessage, ChatRequest, ChatResponse, ChatRole, DataLocality, EmbeddingRequest,
-    EmbeddingResponse, FinishReason, GenerationOptions, ModelCapabilities, ModelInfo,
+    EmbeddingResponse, FinishReason, GenerationOptions, ImageData, ModelCapabilities, ModelInfo,
     ProviderDescriptor, ProviderId, ProviderKind, TokenUsage,
 };

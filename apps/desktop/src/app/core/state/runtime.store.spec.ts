@@ -17,6 +17,7 @@ function server(phase: ServerPhase, model: string): ServerState {
     threads: null,
     memoryBytes: null,
     error: null,
+    vision: false,
   };
 }
 

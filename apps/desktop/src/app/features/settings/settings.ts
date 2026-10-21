@@ -38,6 +38,7 @@ export class SettingsPage {
     allowCloudProviders: new FormControl(false, { nonNullable: true }),
     shareMemoryWithCloud: new FormControl(false, { nonNullable: true }),
     allowCloudAgents: new FormControl(false, { nonNullable: true }),
+    shareCapturesWithCloud: new FormControl(false, { nonNullable: true }),
     logLevel: new FormControl<LogLevel>('info', { nonNullable: true }),
   });
 
@@ -74,6 +75,7 @@ export class SettingsPage {
         allowCloudProviders: value.allowCloudProviders,
         shareMemoryWithCloud: value.shareMemoryWithCloud,
         allowCloudAgents: value.allowCloudAgents,
+        shareCapturesWithCloud: value.shareCapturesWithCloud,
       },
       logging: { ...current.logging, level: value.logLevel },
     };
@@ -102,6 +104,7 @@ function toFormValue(settings: Settings) {
     allowCloudProviders: settings.privacy.allowCloudProviders,
     shareMemoryWithCloud: settings.privacy.shareMemoryWithCloud,
     allowCloudAgents: settings.privacy.allowCloudAgents,
+    shareCapturesWithCloud: settings.privacy.shareCapturesWithCloud,
     logLevel: settings.logging.level,
   };
 }

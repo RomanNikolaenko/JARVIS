@@ -126,6 +126,11 @@ export class RuntimeStore {
     return this.run(() => this.api.importModel());
   }
 
+  /** Lets the user pick a vision projector (mmproj) for a model. */
+  attachProjector(modelId: string): Promise<void> {
+    return this.run(() => this.api.attachProjector(modelId));
+  }
+
   downloadCurated(id: string): Promise<void> {
     return this.run(() => this.api.downloadCuratedModel(id));
   }

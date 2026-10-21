@@ -10,6 +10,7 @@ mod logging;
 mod memory_commands;
 mod runtime_commands;
 mod state;
+mod vision_commands;
 mod voice_commands;
 
 #[cfg(test)]
@@ -114,6 +115,15 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         voice_commands::stop_listening,
         voice_commands::stop_speaking,
         voice_commands::speak_text,
+        vision_commands::get_vision_status,
+        vision_commands::list_windows,
+        vision_commands::capture_screen,
+        vision_commands::capture_window,
+        vision_commands::capture_selection,
+        vision_commands::attach_image_file,
+        vision_commands::attach_photo,
+        vision_commands::discard_capture,
+        runtime_commands::attach_projector,
     ])
 }
 

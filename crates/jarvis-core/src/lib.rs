@@ -14,6 +14,7 @@ pub mod health;
 mod memory;
 pub mod routing;
 mod ui_errors;
+mod vision;
 mod voice;
 
 use std::path::PathBuf;
@@ -29,6 +30,7 @@ use jarvis_memory::MemoryEngine;
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
 use jarvis_runtime::process::CommandFactory;
 use jarvis_runtime::{RuntimeManager, RuntimeOptions, ServerRole};
+use jarvis_vision::ScreenCapture;
 use jarvis_voice::backend::VoiceBackend;
 use jarvis_voice::{VoiceEngine, VoiceEngineOptions};
 use serde::{Deserialize, Serialize};
@@ -46,7 +48,8 @@ pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
-pub use {jarvis_agent, jarvis_security, jarvis_tools, jarvis_voice};
+pub use vision::{MAX_ATTACHMENTS, VisionStatus};
+pub use {jarvis_agent, jarvis_security, jarvis_tools, jarvis_vision, jarvis_voice};
 
 /// Filesystem locations used by JARVIS. Resolved by the host application
 /// (e.g. via Tauri's path resolver) and passed in, so the core never guesses.
@@ -112,6 +115,8 @@ pub struct CoreOptions {
     pub runtime_command_factory: Option<CommandFactory>,
     /// Replaces audio devices and voice engines (tests).
     pub voice_backend: Option<Arc<dyn VoiceBackend>>,
+    /// Replaces screen capture (tests).
+    pub screen_capture: Option<Arc<dyn ScreenCapture>>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -134,7 +139,14 @@ impl CoreOptions {
             provider_factory: Some(Arc::new(HttpProviderFactory::new())),
             runtime_command_factory: None,
             voice_backend: None,
+            screen_capture: None,
         }
+    }
+
+    /// Replaces screen capture (tests).
+    pub fn with_screen_capture(mut self, capture: Arc<dyn ScreenCapture>) -> Self {
+        self.screen_capture = Some(capture);
+        self
     }
 
     /// Replaces audio devices and voice engines (tests).
@@ -184,6 +196,8 @@ pub struct JarvisCore {
     memory_state: Arc<memory::MemoryState>,
     agents: agents::AgentSystem,
     voice: VoiceEngine,
+    capture: Arc<dyn ScreenCapture>,
+    captures: vision::CaptureStore,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
@@ -199,6 +213,7 @@ impl JarvisCore {
             provider_factory,
             runtime_command_factory,
             voice_backend,
+            screen_capture,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -338,6 +353,8 @@ impl JarvisCore {
             memory_state: Arc::default(),
             agents,
             voice,
+            capture: screen_capture.unwrap_or_else(jarvis_vision::system_capture),
+            captures: vision::CaptureStore::default(),
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,

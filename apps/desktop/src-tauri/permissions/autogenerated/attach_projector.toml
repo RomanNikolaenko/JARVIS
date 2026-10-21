@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-attach-projector"
+description = "Enables the attach_projector command without any pre-configured scope."
+commands.allow = ["attach_projector"]
+
+[[permission]]
+identifier = "deny-attach-projector"
+description = "Denies the attach_projector command without any pre-configured scope."
+commands.deny = ["attach_projector"]

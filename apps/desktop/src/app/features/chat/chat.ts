@@ -15,12 +15,14 @@ import type { ContextReport } from '@jarvis/shared-types';
 
 import { type ChatEntry, ChatStore, MAX_MESSAGE_LENGTH } from '../../core/state/chat.store';
 import { MAX_FACT_LENGTH, MemoryStore } from '../../core/state/memory.store';
+import { VisionStore } from '../../core/state/vision.store';
 import { VoiceStore } from '../../core/state/voice.store';
 import { type ModelOption, optionKey } from '../../core/state/models.store';
 import { formatTokens } from '../../shared/format';
 import { Icon } from '../../shared/icon/icon';
 import { MarkdownPipe } from '../../shared/markdown/markdown';
 import { levelPercent } from '../voice/voice';
+import { AttachMenu } from './attach-menu/attach-menu';
 import { ConversationList } from './conversation-list/conversation-list';
 
 /** Distance from the bottom (px) within which new content keeps the view pinned. */
@@ -40,7 +42,7 @@ function withoutReasoning(text: string): string {
 
 @Component({
   selector: 'jv-chat',
-  imports: [ConversationList, Icon, MarkdownPipe, RouterLink],
+  imports: [AttachMenu, ConversationList, Icon, MarkdownPipe, RouterLink],
   templateUrl: './chat.html',
   styleUrl: './chat.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -49,6 +51,7 @@ export class Chat {
   protected readonly store = inject(ChatStore);
   protected readonly memory = inject(MemoryStore);
   protected readonly voice = inject(VoiceStore);
+  protected readonly vision = inject(VisionStore);
   protected readonly levelPercent = levelPercent;
   private readonly router = inject(Router);
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
@@ -99,7 +102,9 @@ export class Chat {
   });
   protected readonly canSend = computed(() => {
     const text = this.draft().trim();
-    return text.length > 0 && text.length <= MAX_MESSAGE_LENGTH && !this.store.busy() && !this.store.readOnly();
+    // An image alone can be sent too.
+    const hasContent = text.length > 0 || this.vision.attachments().length > 0;
+    return hasContent && text.length <= MAX_MESSAGE_LENGTH && !this.store.busy() && !this.store.readOnly();
   });
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
   /** Saved conversations can feed facts; temporary ones do not link back. */
@@ -222,11 +227,13 @@ export class Chat {
     if (!this.canSend()) {
       return;
     }
-    const text = this.draft();
+    const attachments = this.vision.take();
+    // An image alone is a question about the image.
+    const text = this.draft().trim() || (attachments.length ? 'What is in this image?' : '');
     this.draft.set('');
     this.stickToBottom = true;
     const isNew = !this.store.conversation();
-    void this.store.send(text).then(() => {
+    void this.store.send(text, false, attachments).then(() => {
       const id = this.store.conversation()?.id;
       if (isNew && id) {
         void this.router.navigate([], { queryParams: { c: id }, replaceUrl: true });

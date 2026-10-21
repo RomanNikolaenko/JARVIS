@@ -6,13 +6,22 @@
 export type BinarySource = { "kind": "release", tag: string, asset: string, url: string, } | { "kind": "userSelected" };
 
 /**
+ * An additional file of a curated model (same repository and revision).
+ */
+export type CuratedFile = { file: string, sha256: string, sizeBytes: number, };
+
+/**
  * A model from the curated catalog: pinned repository revision and checksum.
  */
 export type CuratedModel = { id: string, displayName: string, description: string, repo: string, file: string, revision: string, sha256: string, sizeBytes: number, license: string, 
 /**
  * The server the model is meant for.
  */
-role: ServerRole, };
+role: ServerRole, 
+/**
+ * Vision projector downloaded with the model.
+ */
+projector: CuratedFile | null, };
 
 export type DownloadKind = "model" | "runtime" | "voice";
 
@@ -66,7 +75,11 @@ managed: boolean,
 /**
  * The file exists and has the recorded size (computed when listing).
  */
-available: boolean, };
+available: boolean, 
+/**
+ * Vision projector (`mmproj`): with it the model can see images.
+ */
+projector: ProjectorFile | null, };
 
 /**
  * A user-specified Hugging Face file to download.
@@ -92,6 +105,15 @@ export type ModelSource = { "kind": "imported" } | { "kind": "downloaded", repo:
  * (`<arch>.pooling_type` in GGUF, `--pooling` of llama.cpp).
  */
 export type PoolingType = "none" | "mean" | "cls" | "last" | "rank";
+
+/**
+ * A vision projector (`mmproj` GGUF) for a chat model.
+ */
+export type ProjectorFile = { path: string, sizeBytes: number, 
+/**
+ * Verified SHA-256 (downloaded projectors only).
+ */
+sha256: string | null, };
 
 /**
  * Compute backend of a llama.cpp build.
@@ -191,4 +213,8 @@ export type ServerState = { phase: ServerPhase, modelId: string | null, port: nu
 /**
  * Resident memory of the server process (sampled when status is read).
  */
-memoryBytes: number | null, error: string | null, };
+memoryBytes: number | null, error: string | null, 
+/**
+ * Started with a vision projector: the model can see images.
+ */
+vision: boolean, };

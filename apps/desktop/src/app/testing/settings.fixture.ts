@@ -68,6 +68,11 @@ export const SETTINGS = {
     speechRate: 1,
     endSilenceMs: 800,
   },
-  privacy: { allowCloudProviders: false, shareMemoryWithCloud: false, allowCloudAgents: false },
+  privacy: {
+    allowCloudProviders: false,
+    shareMemoryWithCloud: false,
+    allowCloudAgents: false,
+    shareCapturesWithCloud: false,
+  },
   logging: { level: 'info' },
 } satisfies Settings;

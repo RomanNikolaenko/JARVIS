@@ -108,7 +108,12 @@ providerId: ProviderId | null, model: string | null, temperature: number | null,
  * Read the reply aloud (requests made by voice). Takes effect only
  * when speech synthesis is installed and `voice.speakReplies` is on.
  */
-speak: boolean, };
+speak: boolean, 
+/**
+ * Ids of captured images to show the model (see `capture_screen`).
+ * The model must support vision.
+ */
+attachments: Array<string>, };
 
 export type ComponentHealth = { 
 /**
@@ -217,7 +222,13 @@ shareMemoryWithCloud: boolean,
  * program output to the model; this also needs `allowCloudProviders`.
  * Off by default.
  */
-allowCloudAgents: boolean, };
+allowCloudAgents: boolean, 
+/**
+ * Whether attached images (screen captures, photos) may be sent to
+ * cloud models. A capture can show anything on the screen, so this is
+ * separate from `allowCloudProviders`. Off by default.
+ */
+shareCapturesWithCloud: boolean, };
 
 /**
  * Models offered by one provider, or the reason they could not be listed.

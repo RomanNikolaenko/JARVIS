@@ -73,6 +73,15 @@ const COMMANDS: &[&str] = &[
     "stop_listening",
     "stop_speaking",
     "speak_text",
+    "get_vision_status",
+    "list_windows",
+    "capture_screen",
+    "capture_window",
+    "capture_selection",
+    "attach_image_file",
+    "attach_photo",
+    "discard_capture",
+    "attach_projector",
 ];
 
 fn main() {

@@ -43,6 +43,9 @@ import type {
   SystemEvent,
   SystemMetrics,
   UiErrorReport,
+  CaptureInfo,
+  VisionStatus,
+  WindowInfo,
   VoiceState,
   VoiceStatus,
   VoiceTranscript,
@@ -341,6 +344,49 @@ export class JarvisApi {
 
   onSystemEvent(handler: (event: SystemEvent) => void): Promise<UnlistenFn> {
     return this.bridge.listen<SystemEvent>(SYSTEM_EVENT, handler);
+  }
+
+  // ---- Vision ----
+
+  getVisionStatus(): Promise<VisionStatus> {
+    return this.bridge.invoke('get_vision_status');
+  }
+
+  listWindows(): Promise<WindowInfo[]> {
+    return this.bridge.invoke('list_windows');
+  }
+
+  /** Captures a display (`null`: the primary one); `hideJarvis` steps the window aside. */
+  captureScreen(display: string | null, hideJarvis: boolean): Promise<CaptureInfo> {
+    return this.bridge.invoke('capture_screen', { display, hideJarvis });
+  }
+
+  captureWindow(id: string): Promise<CaptureInfo> {
+    return this.bridge.invoke('capture_window', { id });
+  }
+
+  /** A window or area picked in the system dialog (Wayland). */
+  captureSelection(): Promise<CaptureInfo> {
+    return this.bridge.invoke('capture_selection');
+  }
+
+  /** Opens a file dialog in the core; `null` when the user cancelled. */
+  attachImageFile(): Promise<CaptureInfo | null> {
+    return this.bridge.invoke('attach_image_file');
+  }
+
+  /** A camera photo as a `data:` URL. */
+  attachPhoto(data: string): Promise<CaptureInfo> {
+    return this.bridge.invoke('attach_photo', { data });
+  }
+
+  discardCapture(id: string): Promise<boolean> {
+    return this.bridge.invoke('discard_capture', { id });
+  }
+
+  /** Opens a file dialog in the core to add a vision projector to a model. */
+  attachProjector(modelId: string): Promise<LocalModel | null> {
+    return this.bridge.invoke('attach_projector', { modelId });
   }
 
   // ---- Voice ----

@@ -5,6 +5,7 @@ import type { VoicePackage, VoiceState, VoiceStatus, VoiceTranscript } from '@ja
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ChatStore } from './chat.store';
+import { VisionStore } from './vision.store';
 
 const IDLE: VoiceState = {
   phase: 'idle',
@@ -34,6 +35,7 @@ function isActive(phase: string): boolean {
 export class VoiceStore {
   private readonly api = inject(JarvisApi);
   private readonly chat = inject(ChatStore);
+  private readonly vision = inject(VisionStore);
   private readonly router = inject(Router);
   private started = false;
   /** The next push-to-talk result is a microphone test, not a request. */
@@ -156,7 +158,7 @@ export class VoiceStore {
     if (!this.router.url.startsWith('/chat')) {
       await this.router.navigateByUrl('/chat');
     }
-    await this.chat.send(transcript.text, true);
+    await this.chat.send(transcript.text, true, this.vision.take());
   }
 
   private showNotice(message: string): void {

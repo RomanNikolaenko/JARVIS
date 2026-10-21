@@ -147,8 +147,11 @@ export class ChatStore {
     this.error.set(null);
   }
 
-  /** Sends a message; `speak` reads the reply aloud (spoken requests). */
-  async send(text: string, speak = false): Promise<void> {
+  /**
+   * Sends a message; `speak` reads the reply aloud (spoken requests) and
+   * `attachments` are capture ids shown to a vision model.
+   */
+  async send(text: string, speak = false, attachments: readonly string[] = []): Promise<void> {
     const content = text.trim();
     if (!content || this.busy() || content.length > MAX_MESSAGE_LENGTH || this.readOnly()) {
       return;
@@ -174,6 +177,7 @@ export class ChatStore {
           temperature: null,
           maxOutputTokens: null,
           speak,
+          attachments: [...attachments],
         },
         (event) => this.onEvent(assistantId, event)
       );

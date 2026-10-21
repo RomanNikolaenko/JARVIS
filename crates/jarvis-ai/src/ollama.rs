@@ -14,8 +14,8 @@ use url::Url;
 
 use crate::http::{self, ChunkDecoder, HttpClient, LineBuffer};
 use crate::{
-    AiError, AiProvider, ChatChunk, ChatRequest, ChatStream, EmbeddingRequest, EmbeddingResponse,
-    FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
+    AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatStream, EmbeddingRequest,
+    EmbeddingResponse, FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
 };
 
 /// Upper bound of models whose details are fetched in one listing.
@@ -145,9 +145,10 @@ impl AiProvider for OllamaProvider {
         if let Some(max_tokens) = request.options.max_output_tokens {
             options.insert("num_predict".into(), json!(max_tokens));
         }
+        let messages: Vec<Value> = request.messages.iter().map(message_json).collect();
         let body = json!({
             "model": request.model,
-            "messages": request.messages,
+            "messages": messages,
             "stream": true,
             "options": options,
         });
@@ -334,6 +335,16 @@ impl ChunkDecoder for NdjsonChatDecoder {
             None => Ok(Vec::new()),
         }
     }
+}
+
+/// A message in Ollama's chat format; images go in `images` as base64.
+fn message_json(message: &ChatMessage) -> Value {
+    let mut value = json!({ "role": message.role, "content": message.content });
+    if !message.images.is_empty() {
+        let images: Vec<&str> = message.images.iter().map(|i| i.base64.as_str()).collect();
+        value["images"] = json!(images);
+    }
+    value
 }
 
 #[cfg(test)]

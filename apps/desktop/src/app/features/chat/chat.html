@@ -282,6 +282,20 @@
         }
       </div>
     }
+    @if (vision.attachments().length || vision.error()) {
+      <div class="attachments">
+        @for (a of vision.attachments(); track a.id) {
+          <figure class="attachment">
+            <img [src]="a.preview" [alt]="a.label" />
+            <figcaption>{{ a.label }} · {{ a.width }}×{{ a.height }}</figcaption>
+            <button type="button" class="remove" (click)="vision.remove(a.id)" [attr.aria-label]="'Remove ' + a.label">×</button>
+          </figure>
+        }
+        @if (vision.error(); as error) {
+          <span class="voice-notice" role="alert">{{ error.message }}</span>
+        }
+      </div>
+    }
     <footer class="composer">
       <textarea
         rows="3"
@@ -296,6 +310,7 @@
         @if (nearLimit()) {
           <span class="counter">{{ draft().length }} / {{ maxLength }}</span>
         }
+        <jv-attach-menu />
         @if (voice.available()) {
           <button
             type="button"

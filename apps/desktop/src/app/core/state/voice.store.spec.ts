@@ -5,6 +5,7 @@ import type { VoiceState, VoiceTranscript } from '@jarvis/shared-types';
 import { IDLE_VOICE, voiceStatus } from '../../testing/voice.fixture';
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ChatStore } from './chat.store';
+import { VisionStore } from './vision.store';
 import { VoiceStore } from './voice.store';
 
 describe('VoiceStore', () => {
@@ -40,7 +41,12 @@ describe('VoiceStore', () => {
       send: vi.fn(async () => undefined),
     };
     TestBed.configureTestingModule({
-      providers: [provideRouter([]), { provide: JarvisApi, useValue: api }, { provide: ChatStore, useValue: chat }],
+      providers: [
+        provideRouter([]),
+        { provide: JarvisApi, useValue: api },
+        { provide: ChatStore, useValue: chat },
+        { provide: VisionStore, useValue: { take: () => ['capture-1'] } },
+      ],
     });
     store = TestBed.inject(VoiceStore);
     await store.start();
@@ -68,7 +74,7 @@ describe('VoiceStore', () => {
   it('sends spoken requests to the chat and asks for a spoken reply', async () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     onTranscript(transcript('Яка погода?', 'wakeWord'));
-    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledWith('Яка погода?', true));
+    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledWith('Яка погода?', true, ['capture-1']));
     expect(navigate).toHaveBeenCalledWith('/chat');
   });
 

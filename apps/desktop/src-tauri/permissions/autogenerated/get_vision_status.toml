@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-vision-status"
+description = "Enables the get_vision_status command without any pre-configured scope."
+commands.allow = ["get_vision_status"]
+
+[[permission]]
+identifier = "deny-get-vision-status"
+description = "Denies the get_vision_status command without any pre-configured scope."
+commands.deny = ["get_vision_status"]

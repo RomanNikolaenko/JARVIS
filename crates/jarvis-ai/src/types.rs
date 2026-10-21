@@ -106,12 +106,43 @@ pub enum ChatRole {
     Assistant,
 }
 
+/// An image for vision models. Images are attached by the core (screen
+/// captures, photos, files) and never cross the IPC boundary.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImageData {
+    /// `image/jpeg` or `image/png`.
+    pub media_type: String,
+    /// Base64 without a `data:` prefix.
+    pub base64: String,
+}
+
+impl ImageData {
+    /// The image as a `data:` URL.
+    pub fn data_url(&self) -> String {
+        format!("data:{};base64,{}", self.media_type, self.base64)
+    }
+}
+
+impl std::fmt::Debug for ImageData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The data would flood logs.
+        f.debug_struct("ImageData")
+            .field("media_type", &self.media_type)
+            .field("base64_len", &self.base64.len())
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "ai.ts")]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
+    /// Images for vision models (user messages only).
+    #[serde(skip)]
+    #[ts(skip)]
+    pub images: Vec<ImageData>,
 }
 
 impl ChatMessage {
@@ -119,11 +150,17 @@ impl ChatMessage {
         Self {
             role,
             content: content.into(),
+            images: Vec::new(),
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self::new(ChatRole::User, content)
+    }
+
+    pub fn with_images(mut self, images: Vec<ImageData>) -> Self {
+        self.images = images;
+        self
     }
 }
 

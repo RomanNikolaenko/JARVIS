@@ -60,6 +60,7 @@ async fn turn(test: &TestCore, conversation: Uuid, text: &str, speak: bool) {
                 temperature: None,
                 max_output_tokens: None,
                 speak,
+                attachments: Vec::new(),
             },
             move |event| tx.send(event).map_err(|_| SinkClosed),
         )

@@ -18,6 +18,7 @@ jarvis-runtime.workspace = true
 jarvis-security.workspace = true
 jarvis-storage.workspace = true
 jarvis-tools.workspace = true
+jarvis-vision.workspace = true
 jarvis-voice.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -31,6 +32,7 @@ ts-rs.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 jarvis-runtime = { workspace = true, features = ["test-support"] }
 jarvis-voice = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true

@@ -25,6 +25,7 @@ function model(pooling: PoolingType | null): LocalModel {
     addedAtMs: 0,
     managed: true,
     available: true,
+    projector: null,
   };
 }
 

@@ -95,6 +95,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "get_audit_log",
     "verify_audit_log",
     "get_voice_status",
+    "get_vision_status",
 ];
 
 #[test]
@@ -153,6 +154,14 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "stop_listening",
         "stop_speaking",
         "speak_text",
+        "list_windows",
+        "capture_screen",
+        "capture_window",
+        "capture_selection",
+        "attach_image_file",
+        "attach_photo",
+        "discard_capture",
+        "attach_projector",
     ]);
     for cmd in all {
         let result = invoke(&h.other, cmd, json!({}));
@@ -640,4 +649,29 @@ fn voice_commands_validate_input_without_downloading() {
     invoke(&h.main, "stop_speaking", json!({})).expect("stop");
     let status = invoke(&h.main, "get_voice_status", json!({})).expect("status");
     assert_eq!(status["state"]["micOpen"], false);
+}
+
+#[test]
+fn vision_commands_validate_input_without_capturing() {
+    let h = harness();
+    let status = invoke(&h.main, "get_vision_status", json!({})).expect("status");
+    assert!(status["capabilities"]["notes"].is_array());
+    let error =
+        invoke(&h.main, "attach_photo", json!({ "data": "not an image" })).expect_err("garbage");
+    assert_eq!(error["code"], "validation");
+    assert_eq!(
+        invoke(&h.main, "discard_capture", json!({ "id": "nothing" })).expect("discard"),
+        json!(false)
+    );
+    // A message cannot point at a capture that does not exist.
+    let conversation = invoke(
+        &h.main,
+        "create_conversation",
+        json!({ "projectId": null, "temporary": false }),
+    )
+    .expect("conversation");
+    let mut request = turn(&conversation["id"], "What is this?");
+    request["request"]["attachments"] = json!(["missing"]);
+    let error = invoke(&h.main, "send_message", request).expect_err("missing capture");
+    assert_eq!(error["code"], "notFound");
 }
