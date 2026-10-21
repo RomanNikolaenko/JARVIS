@@ -14,7 +14,7 @@ export type CuratedModel = { id: string, displayName: string, description: strin
  */
 role: ServerRole, };
 
-export type DownloadKind = "model" | "runtime";
+export type DownloadKind = "model" | "runtime" | "voice";
 
 export type DownloadPhase = "downloading" | "verifying" | "installing" | "completed" | "failed" | "cancelled";
 

@@ -1,3 +1,5 @@
+import type { DownloadStatus } from '@jarvis/shared-types';
+
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
 export function formatBytes(bytes: number | null | undefined): string {
@@ -67,4 +69,9 @@ export function formatShortDate(timestampMs: number, now = Date.now()): string {
     month: 'short',
     year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric',
   });
+}
+
+/** Progress of a download in percent (0 while the size is unknown). */
+export function downloadPercent(download: DownloadStatus): number {
+  return download.totalBytes ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100)) : 0;
 }

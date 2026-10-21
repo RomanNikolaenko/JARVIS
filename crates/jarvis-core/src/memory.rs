@@ -70,6 +70,10 @@ pub struct ChatTurnRequest {
     pub model: Option<String>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
+    /// Read the reply aloud (requests made by voice). Takes effect only
+    /// when speech synthesis is installed and `voice.speakReplies` is on.
+    #[serde(default)]
+    pub speak: bool,
 }
 
 /// State of the memory background work.
@@ -400,8 +404,13 @@ impl JarvisCore {
 
         let assistant_id = Uuid::new_v4();
         let (done, outcome) = oneshot::channel();
+        // A new spoken request also interrupts the previous reply.
+        let speech = (request.speak && self.voice.speaks_replies()).then(|| self.voice.speak());
         let sink = RecordingSink {
-            inner: sink,
+            inner: crate::voice::SpeakingSink {
+                inner: sink,
+                speech,
+            },
             text: String::new(),
             done: Some(done),
             slot,

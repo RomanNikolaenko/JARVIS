@@ -401,3 +401,47 @@ button.link {
   color: inherit;
   text-decoration: underline;
 }
+
+.voice-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--jv-border);
+  border-radius: var(--jv-radius);
+  font-size: 12.5px;
+  color: var(--jv-text-muted);
+}
+
+.voice-notice {
+  color: var(--jv-warning);
+}
+
+.level {
+  width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--jv-surface-2);
+  overflow: hidden;
+}
+
+.level-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--jv-accent), var(--jv-accent-2));
+  transition: width 120ms linear;
+}
+
+.mic-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 9px;
+
+  &.live {
+    border-color: var(--jv-danger);
+    color: var(--jv-danger);
+    box-shadow: 0 0 8px rgb(248 113 113 / 35%);
+  }
+}

@@ -147,7 +147,8 @@ export class ChatStore {
     this.error.set(null);
   }
 
-  async send(text: string): Promise<void> {
+  /** Sends a message; `speak` reads the reply aloud (spoken requests). */
+  async send(text: string, speak = false): Promise<void> {
     const content = text.trim();
     if (!content || this.busy() || content.length > MAX_MESSAGE_LENGTH || this.readOnly()) {
       return;
@@ -172,6 +173,7 @@ export class ChatStore {
           model: selection?.model.id ?? null,
           temperature: null,
           maxOutputTokens: null,
+          speak,
         },
         (event) => this.onEvent(assistantId, event)
       );

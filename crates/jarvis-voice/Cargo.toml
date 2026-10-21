@@ -22,7 +22,12 @@ tracing.workspace = true
 ts-rs.workspace = true
 url.workspace = true
 
+[features]
+# Fake audio devices and engines for tests of dependent crates.
+test-support = []
+
 [dev-dependencies]
+jarvis-voice = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 

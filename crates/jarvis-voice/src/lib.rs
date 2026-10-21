@@ -16,6 +16,8 @@ pub mod process;
 pub mod resample;
 pub mod store;
 pub mod stt;
+#[cfg(feature = "test-support")]
+pub mod testing;
 pub mod text;
 pub mod tts;
 pub mod types;

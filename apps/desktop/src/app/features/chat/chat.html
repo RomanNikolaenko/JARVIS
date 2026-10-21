@@ -252,6 +252,36 @@
       }
     </div>
 
+    @if (voice.phase() !== 'idle' || voice.state().awaitingCommand || voice.notice()) {
+      <div class="voice-bar" role="status">
+        @switch (voice.phase()) {
+          @case ('listening') {
+            <jv-icon name="mic" [size]="16" />
+            <span>{{ voice.state().hearingSpeech ? 'Listening…' : 'Speak now' }}</span>
+            <div class="level" aria-hidden="true">
+              <div class="level-fill" [style.width.%]="levelPercent(voice.level())"></div>
+            </div>
+            <button type="button" class="ghost small" (click)="voice.submit()">Done</button>
+            <button type="button" class="ghost small" (click)="voice.cancelListening()">Cancel</button>
+          }
+          @case ('transcribing') {
+            <jv-icon name="mic" [size]="16" />
+            <span>Recognizing speech…</span>
+          }
+          @case ('speaking') {
+            <jv-icon name="volume" [size]="16" />
+            <span>Speaking</span>
+            <button type="button" class="ghost small" (click)="voice.stopSpeaking()">Stop</button>
+          }
+        }
+        @if (voice.state().awaitingCommand) {
+          <span>Yes? Say your request.</span>
+        }
+        @if (voice.notice(); as notice) {
+          <span class="voice-notice">{{ notice }}</span>
+        }
+      </div>
+    }
     <footer class="composer">
       <textarea
         rows="3"
@@ -265,6 +295,19 @@
       <div class="composer-actions">
         @if (nearLimit()) {
           <span class="counter">{{ draft().length }} / {{ maxLength }}</span>
+        }
+        @if (voice.available()) {
+          <button
+            type="button"
+            class="mic-button"
+            [class.live]="voice.phase() === 'listening'"
+            [attr.aria-pressed]="voice.phase() === 'listening'"
+            [attr.aria-label]="micTitle()"
+            [title]="micTitle()"
+            [disabled]="store.readOnly()"
+            (click)="toggleMic()">
+            <jv-icon name="mic" [size]="16" />
+          </button>
         }
         @if (store.busy()) {
           <button type="button" class="danger" (click)="stop()">

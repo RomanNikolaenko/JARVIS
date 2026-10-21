@@ -2,7 +2,6 @@ import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, injec
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import type {
   BinarySource,
-  DownloadStatus,
   GpuOffload,
   LocalModel,
   RuntimeBackend,
@@ -14,7 +13,9 @@ import type {
 
 import { pollWhileVisible } from '../../core/state/poll';
 import { RuntimeStore, recommendedBackend } from '../../core/state/runtime.store';
-import { formatBytes, formatUptime } from '../../shared/format';
+import { downloadPercent, formatBytes, formatUptime } from '../../shared/format';
+
+export { downloadPercent };
 import { HudPanel } from '../../shared/hud-panel/hud-panel';
 import { Icon } from '../../shared/icon/icon';
 import { StatusBadge } from '../../shared/status-badge/status-badge';
@@ -76,10 +77,6 @@ interface ServerView {
   role: ServerRole;
   state: ServerState;
   logTail: readonly string[];
-}
-
-export function downloadPercent(download: DownloadStatus): number {
-  return download.totalBytes ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100)) : 0;
 }
 
 @Component({

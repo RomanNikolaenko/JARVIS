@@ -209,6 +209,7 @@ async fn memory_search_becomes_semantic_while_the_embedding_server_runs() {
             model: None,
             temperature: None,
             max_output_tokens: None,
+            speak: false,
         },
         move |event| tx.send(event).map_err(|_| SinkClosed),
     )

@@ -15,10 +15,12 @@ import type { ContextReport } from '@jarvis/shared-types';
 
 import { type ChatEntry, ChatStore, MAX_MESSAGE_LENGTH } from '../../core/state/chat.store';
 import { MAX_FACT_LENGTH, MemoryStore } from '../../core/state/memory.store';
+import { VoiceStore } from '../../core/state/voice.store';
 import { type ModelOption, optionKey } from '../../core/state/models.store';
 import { formatTokens } from '../../shared/format';
 import { Icon } from '../../shared/icon/icon';
 import { MarkdownPipe } from '../../shared/markdown/markdown';
+import { levelPercent } from '../voice/voice';
 import { ConversationList } from './conversation-list/conversation-list';
 
 /** Distance from the bottom (px) within which new content keeps the view pinned. */
@@ -46,6 +48,8 @@ function withoutReasoning(text: string): string {
 export class Chat {
   protected readonly store = inject(ChatStore);
   protected readonly memory = inject(MemoryStore);
+  protected readonly voice = inject(VoiceStore);
+  protected readonly levelPercent = levelPercent;
   private readonly router = inject(Router);
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private stickToBottom = true;
@@ -232,6 +236,27 @@ export class Chat {
 
   protected stop(): void {
     void this.store.cancel();
+  }
+
+  protected readonly micTitle = computed(() => {
+    if (!this.voice.canListen()) {
+      return 'Set up voice input in Settings → Voice';
+    }
+    return this.voice.phase() === 'listening' ? 'Done speaking' : 'Speak a request';
+  });
+
+  /** Push-to-talk: the first press opens the microphone, the second sends. */
+  protected toggleMic(): void {
+    if (!this.voice.canListen()) {
+      void this.router.navigateByUrl('/settings/voice');
+      return;
+    }
+    this.stickToBottom = true;
+    if (this.voice.phase() === 'listening') {
+      void this.voice.submit();
+    } else {
+      void this.voice.listen();
+    }
   }
 
   protected refreshModels(): void {

@@ -10,3 +10,4 @@ export type * from './generated/platform';
 export type * from './generated/runtime';
 export type * from './generated/security';
 export type * from './generated/tools';
+export type * from './generated/voice';

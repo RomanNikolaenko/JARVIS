@@ -148,6 +148,7 @@ fn turn(conversation_id: Uuid, text: &str) -> ChatTurnRequest {
         model: None,
         temperature: None,
         max_output_tokens: None,
+        speak: false,
     }
 }
 

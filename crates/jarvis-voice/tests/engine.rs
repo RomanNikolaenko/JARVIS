@@ -3,200 +3,20 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use jarvis_voice::audio::CaptureEvent;
-use jarvis_voice::backend::{InputDevice, OutputDevice, Recognizer, Synthesizer, VoiceBackend};
-use jarvis_voice::catalog::{self, PackageSpec};
-use jarvis_voice::store::PackageStore;
-use jarvis_voice::tts::PiperOptions;
-use jarvis_voice::vad::SpeechScorer;
-use jarvis_voice::wav::Decoded;
+use jarvis_voice::testing::{self, FakeBackend};
 use jarvis_voice::{
-    AudioDevice, Result, SpeechLanguage, TranscriptSource, VoiceEngine, VoiceEngineOptions,
-    VoicePhase, VoiceSettings, VoiceState, VoiceTranscript,
+    SpeechLanguage, TranscriptSource, VoiceEngine, VoiceEngineOptions, VoicePhase, VoiceSettings,
+    VoiceState, VoiceTranscript,
 };
-use tokio::sync::{broadcast, mpsc, watch};
-use tokio_util::sync::CancellationToken;
-
-/// Frames louder than 0.1 are speech.
-struct LoudIsSpeech;
-
-impl SpeechScorer for LoudIsSpeech {
-    fn score(&mut self, frame: &[f32]) -> f32 {
-        if frame.iter().any(|s| s.abs() > 0.1) {
-            1.0
-        } else {
-            0.0
-        }
-    }
-    fn reset(&mut self) {}
-}
-
-#[derive(Default)]
-struct Shared {
-    /// The open microphone's event sender.
-    mic: Option<mpsc::Sender<CaptureEvent>>,
-    mic_opened: usize,
-    /// What the recognizer answers, in order.
-    replies: VecDeque<String>,
-    /// Lengths of the audio it was asked to recognize.
-    recognized: Vec<usize>,
-    recognizers_started: usize,
-    synthesized: Vec<String>,
-    synthesizer_options: Vec<PiperOptions>,
-    played: usize,
-    cleared: usize,
-    /// Playback never finishes while set.
-    hold_playback: bool,
-}
-
-#[derive(Clone, Default)]
-struct Fake(Arc<Mutex<Shared>>);
-
-impl Fake {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
-        self.0.lock().unwrap()
-    }
-
-    fn reply(&self, text: &str) {
-        self.lock().replies.push_back(text.to_owned());
-    }
-
-    async fn speak_into_mic(&self, phrase_secs: f32) {
-        let mic = self.lock().mic.clone().expect("microphone is open");
-        // Speech, then enough silence to end the phrase; 20 ms chunks.
-        let speech = (phrase_secs * 50.0) as usize;
-        for i in 0..speech + 60 {
-            let level = if i < speech { 0.5 } else { 0.0 };
-            mic.send(CaptureEvent::Audio(vec![level; 320]))
-                .await
-                .expect("send");
-        }
-    }
-}
-
-struct FakeMic(Fake);
-
-impl InputDevice for FakeMic {
-    fn name(&self) -> String {
-        "Test microphone".to_owned()
-    }
-}
-
-impl Drop for FakeMic {
-    fn drop(&mut self) {
-        self.0.lock().mic = None;
-    }
-}
-
-struct FakeSpeaker(Fake);
-
-impl OutputDevice for FakeSpeaker {
-    fn enqueue(&self, samples: &[f32], _rate: u32) {
-        assert!(!samples.is_empty());
-        self.0.lock().played += 1;
-    }
-    fn clear(&self) {
-        self.0.lock().cleared += 1;
-    }
-    fn pending_secs(&self) -> f32 {
-        if self.0.lock().hold_playback {
-            1.0
-        } else {
-            0.0
-        }
-    }
-    fn failure(&self) -> Option<String> {
-        None
-    }
-}
-
-struct FakeRecognizer(Fake);
-
-#[async_trait]
-impl Recognizer for FakeRecognizer {
-    async fn transcribe(&self, samples: &[f32], language: &str) -> Result<String> {
-        assert_eq!(language, "uk");
-        let mut shared = self.0.lock();
-        shared.recognized.push(samples.len());
-        Ok(shared.replies.pop_front().unwrap_or_default())
-    }
-    fn is_running(&mut self) -> bool {
-        true
-    }
-    async fn stop(self: Box<Self>) {}
-}
-
-struct FakeSynthesizer(Fake);
-
-#[async_trait]
-impl Synthesizer for FakeSynthesizer {
-    async fn synthesize(&mut self, text: &str, cancel: &CancellationToken) -> Result<Decoded> {
-        self.0.lock().synthesized.push(text.to_owned());
-        tokio::select! {
-            () = cancel.cancelled() => return Err(jarvis_voice::VoiceError::Cancelled),
-            () = tokio::time::sleep(Duration::from_millis(10)) => {}
-        }
-        Ok(Decoded {
-            samples: vec![0.2; 2205],
-            sample_rate: 22_050,
-        })
-    }
-    fn is_running(&mut self) -> bool {
-        true
-    }
-    async fn stop(self: Box<Self>) {}
-}
-
-#[async_trait]
-impl VoiceBackend for Fake {
-    fn input_devices(&self) -> Result<Vec<AudioDevice>> {
-        Ok(vec![AudioDevice {
-            id: "mic".into(),
-            name: "Test microphone".into(),
-            is_default: true,
-        }])
-    }
-    fn output_devices(&self) -> Result<Vec<AudioDevice>> {
-        Ok(Vec::new())
-    }
-    fn open_input(
-        &self,
-        _device: Option<&str>,
-        events: mpsc::Sender<CaptureEvent>,
-    ) -> Result<Box<dyn InputDevice>> {
-        let mut shared = self.lock();
-        shared.mic = Some(events);
-        shared.mic_opened += 1;
-        Ok(Box::new(FakeMic(self.clone())))
-    }
-    fn open_output(&self, _device: Option<&str>) -> Result<Box<dyn OutputDevice>> {
-        Ok(Box::new(FakeSpeaker(self.clone())))
-    }
-    fn scorer(&self) -> Box<dyn SpeechScorer> {
-        Box::new(LoudIsSpeech)
-    }
-    async fn start_recognizer(&self, _model: &PackageSpec) -> Result<Box<dyn Recognizer>> {
-        self.lock().recognizers_started += 1;
-        Ok(Box::new(FakeRecognizer(self.clone())))
-    }
-    async fn start_synthesizer(
-        &self,
-        _voice: &PackageSpec,
-        options: PiperOptions,
-    ) -> Result<Box<dyn Synthesizer>> {
-        self.lock().synthesizer_options.push(options);
-        Ok(Box::new(FakeSynthesizer(self.clone())))
-    }
-}
+use tokio::sync::{broadcast, watch};
 
 struct Setup {
     engine: VoiceEngine,
-    fake: Fake,
+    fake: FakeBackend,
     state: watch::Receiver<VoiceState>,
     transcripts: broadcast::Receiver<VoiceTranscript>,
     _dir: tempfile::TempDir,
@@ -205,20 +25,11 @@ struct Setup {
 /// An engine with everything "installed", or `None` where voice is not
 /// offered (other platforms).
 fn setup() -> Option<Setup> {
-    catalog::unsupported_reason().is_none().then_some(())?;
     let dir = tempfile::tempdir().expect("tempdir");
-    let store = PackageStore::new(dir.path());
-    for id in [
-        catalog::WHISPER_ENGINE,
-        catalog::PIPER_ENGINE,
-        "whisper-base-q5_1",
-        "piper-uk_UA-ukrainian_tts-medium",
-    ] {
-        store
-            .mark_installed_for_tests(&catalog::find(id).expect(id))
-            .expect("install");
+    if !testing::install_defaults(dir.path()) {
+        return None;
     }
-    let fake = Fake::default();
+    let fake = FakeBackend::default();
     let engine = VoiceEngine::new(VoiceEngineOptions {
         voice_dir: dir.path().to_path_buf(),
         client: reqwest::Client::new(),

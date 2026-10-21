@@ -204,6 +204,7 @@ describe('ChatStore', () => {
       model: 'echo',
       temperature: null,
       maxOutputTokens: null,
+      speak: false,
     });
     expect(store.conversation()?.id).toBe('c1');
     expect(store.phase()).toBe('connecting');

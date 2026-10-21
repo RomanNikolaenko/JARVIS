@@ -4,6 +4,7 @@ import type { ContextReport } from "./memory";
 import type { OsFamily } from "./platform";
 import type { RuntimeSettings } from "./runtime";
 import type { ToolSpec } from "./tools";
+import type { VoiceSettings } from "./voice";
 
 /**
  * A new agent task as the UI sends it.
@@ -102,7 +103,12 @@ export type ChatTurnRequest = { conversationId: string, content: string,
 /**
  * Provider to use; without it the model router chooses.
  */
-providerId: ProviderId | null, model: string | null, temperature: number | null, maxOutputTokens: number | null, };
+providerId: ProviderId | null, model: string | null, temperature: number | null, maxOutputTokens: number | null, 
+/**
+ * Read the reply aloud (requests made by voice). Takes effect only
+ * when speech synthesis is installed and `voice.speakReplies` is on.
+ */
+speak: boolean, };
 
 export type ComponentHealth = { 
 /**
@@ -244,7 +250,11 @@ runtime: RuntimeSettings, memory: MemorySettings,
 /**
  * Tools agents may use and what they need approval for.
  */
-tools: ToolSettings, agents: AgentsSettings, privacy: PrivacySettings, logging: LoggingSettings, };
+tools: ToolSettings, agents: AgentsSettings, 
+/**
+ * Settings → Голос.
+ */
+voice: VoiceSettings, privacy: PrivacySettings, logging: LoggingSettings, };
 
 /**
  * Kinds of work JARVIS routes to models. Speech categories arrive with the

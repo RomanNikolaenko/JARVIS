@@ -63,6 +63,14 @@
     "allow-resolve-approval",
     "allow-get-audit-log",
     "allow-verify-audit-log",
-    "allow-add-workspace-folder"
+    "allow-add-workspace-folder",
+    "allow-get-voice-status",
+    "allow-install-voice-package",
+    "allow-remove-voice-package",
+    "allow-cancel-voice-download",
+    "allow-start-listening",
+    "allow-stop-listening",
+    "allow-stop-speaking",
+    "allow-speak-text"
   ]
 }
