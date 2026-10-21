@@ -10,6 +10,7 @@ members = [
     "crates/jarvis-security",
     "crates/jarvis-tools",
     "crates/jarvis-agent",
+    "crates/jarvis-voice",
     "crates/jarvis-core",
     "apps/desktop/src-tauri",
 ]
@@ -31,6 +32,7 @@ jarvis-memory = { path = "crates/jarvis-memory" }
 jarvis-runtime = { path = "crates/jarvis-runtime" }
 jarvis-security = { path = "crates/jarvis-security" }
 jarvis-tools = { path = "crates/jarvis-tools" }
+jarvis-voice = { path = "crates/jarvis-voice" }
 jarvis-storage = { path = "crates/jarvis-storage" }
 
 # Async runtime and utilities
@@ -57,6 +59,10 @@ flate2 = "1.1"
 sha2 = "0.10"
 tar = "0.4.44"
 zip = { version = "9", default-features = false, features = ["deflate"] }
+
+# Voice: audio I/O (WASAPI / ALSA) and voice activity detection
+cpal = "0.18"
+earshot = "1.2"
 
 # Local database (bundled SQLite with FTS5)
 rusqlite = { version = "0.40", features = ["bundled"] }

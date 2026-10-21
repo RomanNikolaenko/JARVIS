@@ -220,6 +220,8 @@ pub struct ModelDownloadRequest {
 pub enum DownloadKind {
     Model,
     Runtime,
+    /// Voice engines, speech models and voices.
+    Voice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -112,7 +112,7 @@ pub struct LogTail {
 }
 
 impl LogTail {
-    fn push(&self, line: String) {
+    pub fn push(&self, line: String) {
         let mut lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
         if lines.len() == LOG_LINES {
             lines.pop_front();
