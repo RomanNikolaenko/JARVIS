@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -75,7 +76,7 @@ pub struct ChatTurnRequest {
 #[derive(Debug, Default)]
 pub(crate) struct MemoryState {
     /// One turn at a time per conversation.
-    turns: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
+    turns: Mutex<HashMap<Uuid, Arc<TurnSlot>>>,
     compacting: Mutex<HashSet<Uuid>>,
     embedding: Mutex<EmbeddingRuntime>,
     index_notify: Notify,
@@ -90,19 +91,60 @@ struct EmbeddingRuntime {
     error: Option<String>,
 }
 
+/// How long a new turn waits for the previous reply to be saved.
+const TURN_HANDOVER: Duration = Duration::from_secs(10);
+
+/// The turn of one conversation.
+#[derive(Debug, Default)]
+struct TurnSlot {
+    lock: Arc<tokio::sync::Mutex<()>>,
+    /// The reply has ended (the client already has its last event) and is
+    /// being saved: the next turn waits for it instead of failing. Set
+    /// before the last event is forwarded, cleared by the next owner.
+    finishing: AtomicBool,
+}
+
+impl TurnSlot {
+    /// `true` when no reply runs: none is running, or the one that ended
+    /// was saved within the handover time.
+    async fn settle(&self) -> bool {
+        if self.lock.try_lock().is_ok() {
+            return true;
+        }
+        self.finishing.load(Ordering::Acquire)
+            && tokio::time::timeout(TURN_HANDOVER, self.lock.lock())
+                .await
+                .is_ok()
+    }
+}
+
 fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl MemoryState {
-    fn turn_lock(&self, conversation_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+    fn turn_slot(&self, conversation_id: Uuid) -> Arc<TurnSlot> {
         Arc::clone(guard(&self.turns).entry(conversation_id).or_default())
     }
 
-    fn busy(&self, conversation_id: Uuid) -> bool {
-        guard(&self.turns)
-            .get(&conversation_id)
-            .is_some_and(|lock| lock.try_lock().is_err())
+    /// Whether a reply is running in the conversation.
+    async fn busy(&self, conversation_id: Uuid) -> bool {
+        let slot = guard(&self.turns).get(&conversation_id).cloned();
+        match slot {
+            Some(slot) => !slot.settle().await,
+            None => false,
+        }
+    }
+
+    /// Whether a reply is running in any conversation.
+    async fn any_busy(&self) -> bool {
+        let slots: Vec<Arc<TurnSlot>> = guard(&self.turns).values().cloned().collect();
+        for slot in slots {
+            if !slot.settle().await {
+                return true;
+            }
+        }
+        false
     }
 
     fn forget(&self, conversation_id: Uuid) {
@@ -160,10 +202,12 @@ struct RecordingSink<S> {
     inner: S,
     text: String,
     done: Option<oneshot::Sender<TurnOutcome>>,
+    slot: Arc<TurnSlot>,
 }
 
 impl<S> RecordingSink<S> {
     fn finish(&mut self, finish: TurnFinish) {
+        self.slot.finishing.store(true, Ordering::Release);
         if let Some(done) = self.done.take() {
             let _ = done.send(TurnOutcome {
                 text: std::mem::take(&mut self.text),
@@ -188,6 +232,11 @@ impl<S: ChatEventSink> ChatEventSink for RecordingSink<S> {
             ChatStreamEvent::Failed { .. } => Some(TurnFinish::Failed),
             ChatStreamEvent::Started { .. } => None,
         };
+        // Before the client learns that the reply ended, so a message it
+        // sends right away waits for the reply to be saved.
+        if finish.is_some() {
+            self.slot.finishing.store(true, Ordering::Release);
+        }
         let result = self.inner.send(event);
         if let Some(finish) = finish {
             self.finish(finish);
@@ -276,15 +325,21 @@ impl JarvisCore {
             )
             .into());
         }
-        let turn = self
-            .memory_state
-            .turn_lock(conversation_id)
-            .try_lock_owned()
-            .map_err(|_| {
-                CoreError::LimitExceeded(
-                    "JARVIS is still answering in this conversation".to_owned(),
-                )
-            })?;
+        let still_answering = || {
+            CoreError::LimitExceeded("JARVIS is still answering in this conversation".to_owned())
+        };
+        let slot = self.memory_state.turn_slot(conversation_id);
+        let turn = match Arc::clone(&slot.lock).try_lock_owned() {
+            Ok(turn) => turn,
+            // The previous reply has ended and is being saved.
+            Err(_) if slot.finishing.load(Ordering::Acquire) => {
+                tokio::time::timeout(TURN_HANDOVER, Arc::clone(&slot.lock).lock_owned())
+                    .await
+                    .map_err(|_| still_answering())?
+            }
+            Err(_) => return Err(still_answering()),
+        };
+        slot.finishing.store(false, Ordering::Release);
 
         let model = self
             .chat
@@ -349,6 +404,7 @@ impl JarvisCore {
             inner: sink,
             text: String::new(),
             done: Some(done),
+            slot,
         };
         let needs_compaction = assembled.report.needs_compaction;
         let provider = Arc::clone(&model.provider);
@@ -649,7 +705,7 @@ impl JarvisCore {
     }
 
     pub async fn delete_conversation(&self, id: Uuid) -> Result<(), CoreError> {
-        if self.memory_state.busy(id) {
+        if self.memory_state.busy(id).await {
             return Err(CoreError::LimitExceeded(
                 "Stop the reply before deleting the conversation".to_owned(),
             ));
@@ -875,10 +931,7 @@ impl JarvisCore {
 
     /// Deletes all saved memory.
     pub async fn clear_memory(&self) -> Result<(), CoreError> {
-        if guard(&self.memory_state.turns)
-            .values()
-            .any(|lock| lock.try_lock().is_err())
-        {
+        if self.memory_state.any_busy().await {
             return Err(CoreError::LimitExceeded(
                 "Stop the running replies before clearing memory".to_owned(),
             ));

@@ -523,3 +523,43 @@ async fn temporary_chats_are_forgotten() {
     );
     core.shutdown().await;
 }
+
+/// A message sent as soon as the previous reply has streamed waits for that
+/// reply to be saved instead of being refused, and the history stays in
+/// order. (The reply is saved after its last event reaches the client.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_right_after_a_reply_waits_for_it_to_be_saved() {
+    let test = start(Recorder::new(DataLocality::OnDevice)).await;
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    for i in 0..5 {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        test.core
+            .send_message(
+                turn(conversation.id, &format!("message {i}")),
+                move |event| tx.send(event).map_err(|_| SinkClosed),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("message {i} was refused: {err}"));
+        while rx.recv().await.is_some() {}
+    }
+    let mut messages = Vec::new();
+    for _ in 0..100 {
+        messages = test
+            .core
+            .memory()
+            .conversation(conversation.id)
+            .await
+            .unwrap()
+            .messages;
+        if messages.len() == 10 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let roles: Vec<MessageRole> = messages.iter().map(|m| m.role).collect();
+    let expected: Vec<MessageRole> = (0..5)
+        .flat_map(|_| [MessageRole::User, MessageRole::Assistant])
+        .collect();
+    assert_eq!(roles, expected);
+    test.core.shutdown().await;
+}
