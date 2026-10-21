@@ -234,7 +234,9 @@ impl Tool for RunCommand {
     ) -> Result<PreparedCall, ToolError> {
         let mut args: RunArgs = parse(input)?;
         validate_args(&args.args)?;
-        let cwd = ctx.scope.resolve(args.cwd.as_deref().unwrap_or("."))?;
+        let cwd = ctx
+            .scope
+            .resolve(crate::util::optional_path(args.cwd.as_deref()))?;
         if !cwd.is_dir() {
             return Err(ToolError::InvalidInput(format!(
                 "{} is not a folder",

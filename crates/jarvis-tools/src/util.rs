@@ -64,6 +64,12 @@ pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
     p == pattern.len()
 }
 
+/// An optional path from the model: missing, empty or blank means the first
+/// workspace folder (models often send `""` for it).
+pub(crate) fn optional_path(path: Option<&str>) -> &str {
+    path.map(str::trim).filter(|p| !p.is_empty()).unwrap_or(".")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

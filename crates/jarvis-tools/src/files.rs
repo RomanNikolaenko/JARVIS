@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::io::AsyncReadExt;
 
-use crate::util::{glob_match, parse, text_of, to_args, truncate};
+use crate::util::{glob_match, optional_path, parse, text_of, to_args, truncate};
 use crate::{PreparedCall, Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 
 /// Directories that searches skip (build output, dependencies, VCS data).
@@ -135,7 +135,7 @@ impl Tool for ListDirectory {
         ctx: &ToolContext,
     ) -> Result<PreparedCall, ToolError> {
         let args: PathArgs = parse(input)?;
-        let path = ctx.scope.resolve(args.path.as_deref().unwrap_or("."))?;
+        let path = ctx.scope.resolve(optional_path(args.path.as_deref()))?;
         Ok(PreparedCall {
             action: action(
                 &self.0,
@@ -344,7 +344,7 @@ impl Tool for SearchFiles {
         if empty(&args.name) && empty(&args.text) {
             return Err(ToolError::InvalidInput("give `name` or `text`".to_owned()));
         }
-        let path = ctx.scope.resolve(args.path.as_deref().unwrap_or("."))?;
+        let path = ctx.scope.resolve(optional_path(args.path.as_deref()))?;
         args.path = Some(shown(&path));
         let what = args
             .text

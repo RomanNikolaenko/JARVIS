@@ -161,7 +161,9 @@ impl Tool for Git {
         ctx: &ToolContext,
     ) -> Result<PreparedCall, ToolError> {
         let mut args: GitArgs = parse(input)?;
-        let repo = ctx.scope.resolve(args.repo.as_deref().unwrap_or("."))?;
+        let repo = ctx
+            .scope
+            .resolve(crate::util::optional_path(args.repo.as_deref()))?;
         let mut paths = vec![repo.clone()];
         if args.command == GitCommand::Diff
             && let Some(target) = &args.target

@@ -128,8 +128,13 @@ export class ToolsPanel {
   }
 
   /** Folders change right away (the dialog runs in the core). */
-  protected addFolder(): void {
-    void this.store.addWorkspaceFolder();
+  protected async addFolder(): Promise<void> {
+    await this.store.addWorkspaceFolder();
+    // The folder is saved at once; other unsaved edits in the form stay.
+    const folders = this.settingsStore.settings()?.tools.workspaceFolders;
+    if (folders) {
+      this.update((d) => (d.tools.workspaceFolders = [...folders]));
+    }
   }
 
   protected async removeFolder(path: string): Promise<void> {

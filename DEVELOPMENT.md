@@ -216,18 +216,30 @@ The exact paths are shown on the Settings screen.
   run dependency install scripts unless approved. The build does not need
   them (esbuild ships platform binaries as optional dependencies; `lmdb` and
   `msgpackr-extract` are optional caches).
-- **Blank window on Linux under some GPU drivers**: try
+- **Blank window on Linux under some GPU drivers, and always under WSLg**
+  (WSL on Windows 11): WebKitGTK cannot use DMA-BUF buffers there
+  (`libEGL warning: failed to get driver name`, `ZINK: failed to choose
+  pdev`). Start JARVIS with `WEBKIT_DISABLE_DMABUF_RENDERER=1`, e.g.
   `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
+- **Running the Linux build from WSL**: build in WSL with its own target
+  folder and the UI built on Windows, so the shared `node_modules` is not
+  replaced with Linux binaries:
+  `npm run build` (Windows), then in WSL
+  `CARGO_TARGET_DIR=~/jarvis-target cargo build -p jarvis-desktop --features tauri/custom-protocol`
+  and `WEBKIT_DISABLE_DMABUF_RENDERER=1 ~/jarvis-target/debug/jarvis-desktop`.
+  Models on the Windows disk can be imported in place from `/mnt/c/...`
+  (loading over 9P is slower).
 
 ## Verified environments
 
-| Check | Windows 11 (local + CI `windows-latest`) | Linux (CI `ubuntu-24.04`) |
+| Check | Windows 11 (local + CI `windows-latest`) | Linux (CI `ubuntu-24.04`; WSL Ubuntu 24.04 + WSLg, Wayland) |
 | --- | --- | --- |
 | `cargo fmt --check`, `clippy -D warnings`, `cargo test` | ✔ | ✔ |
 | Angular tests + production build | ✔ | ✔ |
 | `tauri build --no-bundle` | ✔ | ✔ |
-| App launch and UI check (CDP-driven, incl. mock Ollama server) | ✔ | not yet verified |
+| App launch and UI check (CDP-driven, incl. mock Ollama server) | ✔ | ✔ WSLg (needs `WEBKIT_DISABLE_DMABUF_RENDERER=1`); not on a physical X11/Wayland desktop |
 | Runtime supervisor with real processes (fake `llama-server`) | ✔ | CI only |
-| Runtime screen: hardware detection, llama.cpp release lookup (no install) | ✔ | not yet verified |
-| Real llama.cpp build (b11739 Vulkan) + Qwen2.5 3B: install, start, chat, stop | ✔ CPU offload; Vulkan on Radeon Vega 8 gives garbled output | not yet verified |
+| Runtime screen: hardware detection, llama.cpp release lookup (no install) | ✔ | ✔ WSL |
+| Real llama.cpp build + Qwen2.5 3B: install, start, chat, stop | ✔ b11739 Vulkan, CPU offload; Vulkan on Radeon Vega 8 gives garbled output | ✔ WSL: b11782 CPU build installed through the app, model imported from `/mnt/c`, streamed chat saved and kept after restart |
+| Agents with the real model: tools, policy, verifier, journal, audit | ✔ (approvals allowed and denied, injected delete held) | ✔ WSL: read-only tasks, workspace folder from the GTK dialog, tasks kept after restart; approval dialog not exercised on Linux yet |
 | Real Ollama / LM Studio | not installed on the dev machine | not verified |

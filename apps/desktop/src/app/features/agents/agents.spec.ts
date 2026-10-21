@@ -33,6 +33,10 @@ describe('AgentsPage', () => {
       saved.push(settings);
       return settings;
     }),
+    addWorkspaceFolder: vi.fn(async () => ({
+      ...SETTINGS,
+      tools: { ...SETTINGS.tools, workspaceFolders: ['/work', '/new'] },
+    })),
   };
 
   async function render() {
@@ -112,6 +116,26 @@ describe('AgentsPage', () => {
     expect(saved[0].tools.enabled).toContain('write_file');
     expect(saved[0].tools.allowedPrograms).toEqual(['git', 'cargo']);
     expect(saved[0].privacy.allowCloudAgents).toBe(false);
+  });
+
+  // Seen live: the added folder did not show up, and a later Save dropped it.
+  it('shows an added folder at once and keeps it when saving', async () => {
+    const { fixture, element } = await render();
+    button(element, 'Tools & permissions').click();
+    await settle(fixture);
+    button(element, 'Add folder').click();
+    await settle(fixture);
+    expect(element.querySelector('.folders')?.textContent).toContain('/new');
+
+    const writeFile = [...element.querySelectorAll('label.tool')].find((l) => l.textContent?.includes('write_file'));
+    const checkbox = writeFile?.querySelector('input') as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    button(element, 'Save').click();
+    await settle(fixture);
+    expect(saved.at(-1)?.tools.workspaceFolders).toEqual(['/work', '/new']);
+    expect(saved.at(-1)?.tools.enabled).toContain('write_file');
   });
 
   it('lists audit entries and reports a broken chain', async () => {

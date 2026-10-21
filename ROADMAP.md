@@ -12,7 +12,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Dark HUD UI: Dashboard, Chat (streaming + stop), Event log, Settings
 - ✅ Tests (Rust unit/integration/IPC, Angular unit), Windows + Linux CI
 - ⬜ End-to-end UI tests (WebDriver) — moved to Phase 8
-- ⬜ Manual verification on a Linux desktop (X11 and Wayland)
+- 🟡 Manual verification on Linux: done in WSL (Ubuntu 24.04, WSLg/Wayland);
+  a physical X11/Wayland desktop is still to do
 
 ## Phase 2 — AI integration 🟡
 
@@ -44,7 +45,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   context size, autostart (opt-in)
 - ✅ Runtime screen; embedded provider in routing and health
 - ✅ Verified with the real llama.cpp engine on Windows (b11739, Qwen2.5 3B)
-- ⬜ Verification with the real engine on Linux
+- ✅ Verification with the real engine on Linux (WSL Ubuntu 24.04: official
+  b11782 CPU build installed through the app, Qwen2.5 3B chat)
 - ⬜ CUDA build installation (needs the separate CUDA runtime archive)
 - ✅ Embedding model serving: second supervised server (`--embedding`,
   pooling from GGUF), separate start/stop and autostart, BGE-M3 in the

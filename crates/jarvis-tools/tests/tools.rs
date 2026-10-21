@@ -164,6 +164,15 @@ async fn file_tools_work_inside_the_workspace() {
 
     let listing = w.call("list_directory", json!({})).await.expect("list");
     assert!(listing.content.contains("notes/"));
+    // Models often send an empty path for "the workspace" (seen live).
+    let blank = w
+        .call("list_directory", json!({"path": " "}))
+        .await
+        .expect("an empty path lists the workspace");
+    assert_eq!(blank.content, listing.content);
+    w.call("search_files", json!({"path": "", "text": "docs"}))
+        .await
+        .expect("an empty path searches the workspace");
 
     let by_name = w
         .call("search_files", json!({"name": "*.md"}))
