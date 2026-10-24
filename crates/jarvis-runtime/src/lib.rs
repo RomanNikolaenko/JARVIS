@@ -33,8 +33,8 @@ pub use manager::{
     RuntimeOptions, gpu_layers,
 };
 pub use types::{
-    BinarySource, CuratedModel, DownloadKind, DownloadPhase, DownloadStatus, FileDigest, GgufInfo,
-    GpuOffload, LocalModel, MemoryEstimate, ModelDownloadRequest, ModelSource, PoolingType,
-    RuntimeBackend, RuntimeBinary, RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase,
-    ServerRole, ServerState,
+    BinarySource, CuratedFile, CuratedModel, DownloadKind, DownloadPhase, DownloadStatus,
+    FileDigest, GgufInfo, GpuOffload, LocalModel, MemoryEstimate, ModelDownloadRequest,
+    ModelSource, PoolingType, ProjectorFile, RuntimeBackend, RuntimeBinary, RuntimeRelease,
+    RuntimeSettings, RuntimeStatus, ServerPhase, ServerRole, ServerState,
 };

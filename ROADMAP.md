@@ -99,10 +99,32 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Agents started from chat: composer action uses the selected model and
   opens the saved task journal; conversation history is not sent
 
-## Phase 6 — Voice and vision ⬜
+## Phase 6 — Voice and vision 🟡
 
-STT (whisper.cpp), TTS, VAD, wake word «Джарвіс», device selection, barge-in;
-screen/window capture per platform (portal on Wayland), camera, vision models.
+- ✅ `jarvis-voice`: audio capture and playback (cpal), VAD (earshot),
+  speech recognition with a managed whisper.cpp server, speech synthesis
+  with a long-running Piper process (uk + en voices), wake word «Джарвіс» /
+  "Jarvis", push-to-talk, streamed replies read sentence by sentence,
+  barge-in, device selection
+- ✅ Pinned and checksummed engine/model/voice packages, installed only
+  after confirmation; program integrity checked before every start
+- ✅ Microphone indicator on every screen and in the event log; wake word
+  mode is opt-in
+- ✅ `jarvis-vision`: screen and window capture on Windows and X11,
+  portal dialog on Wayland, capability reporting; image files and camera
+  photos (WebView camera)
+- ✅ Images for vision models (OpenAI-compatible, Ollama, llama.cpp with
+  `--mmproj`; curated Qwen3-VL 2B and Gemma 3 4B), vision routing,
+  separate permission for sending captures to cloud models
+- ✅ UI: microphone button with level meter, voice status, Settings →
+  Voice, attachments with previews in the chat
+- ✅ Live check on Windows: verified installs, speech, spoken replies,
+  microphone, wake word mode switch, screenshot and window capture with
+  Qwen3-VL 2B (found and fixed: a crash in synchronous IPC commands,
+  microphone closing on a WASAPI glitch, 20 s recognition per phrase)
+- ⬜ Live check on Linux; wake word with a live voice
+- ⬜ Cloud speech (optional), echo cancellation, a dedicated wake-word model
+- ⬜ Camera on Linux (WebKitGTK media capture is off in Tauri)
 
 ## Phase 7 — Sync and extensions ⬜
 
@@ -116,6 +138,7 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Live verification of Phase 5 on Linux, then Phase 6 (voice and vision).
+Live check of Phase 6 on Linux (WSLg audio and the X11/portal capture) and
+the wake word with a live voice; then Phase 7.
 Open Phase 2 items: live verification of local and cloud providers, including
 the Linux Secret Service integration.

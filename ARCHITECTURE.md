@@ -34,6 +34,8 @@ crates with explicit interfaces) instead of services. See
 │ jarvis-core  → composition root: config, health, chat, router │
 │ jarvis-ai    → AiProvider trait, Ollama/OpenAI-compatible     │
 │ jarvis-runtime → supervised llama.cpp server, GGUF, downloads │
+│ jarvis-voice → audio, VAD, whisper.cpp, Piper, wake word      │
+│ jarvis-vision → screen/window capture, images for models      │
 │ jarvis-events→ event bus + system event log                   │
 │ jarvis-platform → OS adapters, hardware, system monitor       │
 └───────────────────────────────────────────────────────────────┘
@@ -67,6 +69,12 @@ crates/
   jarvis-agent/               Task manager (states, limits, persisted journal),
                               orchestrator (planner, executor, verifier,
                               recovery), text protocol for the model
+  jarvis-voice/               VoiceEngine: audio I/O (cpal), VAD (earshot),
+                              managed whisper-server and Piper processes,
+                              wake word, sentence splitter, pinned packages
+  jarvis-vision/              Screen/window capture (xcap on Windows, x11rb on
+                              X11, xdg-desktop-portal on Wayland), image
+                              decoding, downscaling and previews
   jarvis-ai/                  AiProvider trait, ProviderRegistry, ProviderFactory,
                               Ollama + OpenAI-compatible HTTP providers,
                               EchoProvider, provider config + URL privacy class
@@ -79,12 +87,12 @@ apps/desktop/
   src/                        Angular UI
     app/core/ipc/             TauriBridge (only user of @tauri-apps/api), JarvisApi
     app/core/state/           signal stores (system, events, settings, models,
-                              runtime, chat, memory, agents)
+                              runtime, chat, memory, agents, voice, vision)
     app/core/errors/          global error handler → core log
     app/features/             dashboard, chat (+ conversation list), models,
                               runtime, agents (tasks, tools & permissions, audit
                               log), memory (facts, projects, history, search,
-                              data), events, settings (lazy)
+                              data), events, settings and Settings → Voice (lazy)
     app/shared/               HUD panel, AI core, icons, status badge, Markdown,
                               approval dialog, formatters
   src-tauri/                  Tauri 2 shell (crate jarvis-desktop)
@@ -95,8 +103,8 @@ docs/decisions/               Architecture Decision Records
 .github/workflows/ci.yml      Windows + Linux CI
 ```
 
-Crates that exist only on the roadmap (`jarvis-voice`, `jarvis-vision`,
-`jarvis-sync`) are **not created yet**; they
+Crates that exist only on the roadmap (`jarvis-sync`) are **not created
+yet**; they
 are added when their phase starts, so the tree never contains empty modules.
 
 ## 4. Components (implemented)
@@ -323,6 +331,31 @@ attention to the window.
 `allowCloudAgents` for cloud models; temperature 0.2, at most 1 024 output
 tokens per turn, the request timeout from settings; the conversation sent
 to the model is trimmed to its context window (oldest steps first).
+
+### 4.3c Voice and vision (`jarvis-voice`, `jarvis-vision`, `jarvis-core::voice`, `::vision`)
+
+See [ADR 0011](docs/decisions/0011-voice-and-vision.md).
+
+```
+microphone ─cpal─▶ 16 kHz mono ─VAD─▶ phrase ─whisper-server─▶ text
+   push-to-talk ─────────────────────────────▶ chat turn (speak: true)
+   wake word: «Джарвіс …» ───────────────────▶ chat turn, or wait for the command
+reply deltas ─sentences─▶ Piper (stdin JSON) ─▶ WAV ─▶ speakers   (barge-in cuts it)
+
+capture button ─▶ ScreenCapture (xcap │ x11rb │ portal) ─▶ JPEG ≤ 1568 px + preview
+   ─▶ CaptureStore (memory, 30 min, used once) ─▶ ChatMessage.images ─▶ vision model
+```
+
+- Engines run as child processes from `<data>/voice`: `whisper-server` on
+  loopback with a random port and a secret path prefix, Piper with one JSON
+  request per sentence. Every package is pinned with its SHA-256; program
+  and library hashes are checked before every start.
+- The microphone opens only for push-to-talk or in wake word mode
+  (`voice.wakeWord`); `VoiceState.micOpen` drives the indicator shown on
+  every screen (`jarvis://voice-state`), and opening/closing is logged.
+- A message with images goes to the `vision` route; cloud models get
+  images only with `privacy.shareCapturesWithCloud`. The embedded runtime
+  passes a model's projector with `--mmproj`.
 
 ### 4.4 `jarvis-events` — event bus
 
@@ -682,8 +715,16 @@ must be granted by a capability; anything not granted is denied. See
   tries).
 - The audit log detects changes but cannot stop someone with access to the
   database from rewriting it entirely.
-- UI text is English; the assistant language setting is stored but not used
-  until real models and voice exist.
+- UI text is English; the assistant language sets the language of replies
+  and of speech.
+- Voice: no echo cancellation of its own (laptop microphone arrays often
+  cancel the speakers themselves); the wake word is recognized by Whisper,
+  which keeps a CPU core busy while people talk nearby; Whisper Small needs
+  4–7 s per phrase on a laptop CPU.
+- Vision: X11 lets any program read the screen, so JARVIS relies on its own
+  UI to capture only on request; Wayland portals may keep a copy of each
+  screenshot; local vision models answer a screenshot in about a minute on
+  a CPU. The camera works where the WebView offers one (not WebKitGTK).
 - Linux builds are verified in CI only (not on the development machine).
 - No end-to-end (WebDriver) tests yet.
 
@@ -693,8 +734,8 @@ See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
 - `jarvis-security`: process isolation for tools.
 - `jarvis-tools`: native tool calling where providers support it, MCP tools.
-- `jarvis-voice` / `jarvis-vision`: STT/TTS/VAD/wake word; screen capture via
-  OS-specific adapters (including xdg-desktop-portal on Wayland).
+- `jarvis-voice`: echo cancellation, optional cloud speech, a dedicated
+  wake-word model.
 - `jarvis-sync`: optional Supabase sync with an offline queue.
 
 

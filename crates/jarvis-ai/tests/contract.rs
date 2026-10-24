@@ -11,8 +11,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use jarvis_ai::{
     AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, EmbeddingRequest, FinishReason,
-    GenerationOptions, HttpProviderFactory, ProviderBackend, ProviderConfig, ProviderFactory,
-    ProviderId,
+    GenerationOptions, HttpProviderFactory, ImageData, ProviderBackend, ProviderConfig,
+    ProviderFactory, ProviderId,
 };
 use serde_json::{Value, json};
 use support::{MockServer, Reply, Request, unused_addr};
@@ -40,6 +40,8 @@ struct Backend {
     handler: fn(Scenario) -> Handler,
     /// Checks how generation options are encoded in the request body.
     assert_options: fn(&Value),
+    /// Checks how a message with an image is encoded.
+    assert_image_message: fn(&Value),
 }
 
 fn model_of(request: &Request) -> String {
@@ -75,6 +77,10 @@ const OLLAMA: Backend = Backend {
     assert_options: |body| {
         assert_eq!(body["options"]["temperature"], json!(0.5));
         assert_eq!(body["options"]["num_predict"], json!(64));
+    },
+    assert_image_message: |message| {
+        assert_eq!(message["content"], "Що на екрані?");
+        assert_eq!(message["images"], json!(["iVBORw0KGgo="]));
     },
 };
 
@@ -149,6 +155,15 @@ const OPENAI: Backend = Backend {
     assert_options: |body| {
         assert_eq!(body["temperature"], json!(0.5));
         assert_eq!(body["max_tokens"], json!(64));
+    },
+    assert_image_message: |message| {
+        assert_eq!(
+            message["content"],
+            json!([
+                { "type": "text", "text": "Що на екрані?" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgo=" } },
+            ])
+        );
     },
 };
 
@@ -325,6 +340,29 @@ async fn check_streaming(backend: &Backend) {
     (backend.assert_options)(&sent);
 }
 
+async fn check_images(backend: &Backend) {
+    let (server, provider) = start(backend, Scenario::default()).await;
+    let mut request = chat_request(backend.chat_model);
+    request.messages = vec![
+        ChatMessage::user("Що на екрані?").with_images(vec![ImageData {
+            media_type: "image/png".into(),
+            base64: "iVBORw0KGgo=".into(),
+        }]),
+    ];
+    let _: Vec<ChatChunk> = provider
+        .stream_chat(request)
+        .await
+        .expect("stream")
+        .map(|c| c.expect("chunk"))
+        .collect()
+        .await;
+    let sent = server
+        .last_request_to(backend.chat_path)
+        .expect("chat request")
+        .json();
+    (backend.assert_image_message)(&sent["messages"][0]);
+}
+
 async fn check_chat_collects(backend: &Backend) {
     let (_server, provider) = start(backend, Scenario::default()).await;
     let response = provider
@@ -424,6 +462,11 @@ macro_rules! contract_suite {
             #[tokio::test]
             async fn streams_chat_across_split_chunks() {
                 check_streaming(&$backend).await;
+            }
+
+            #[tokio::test]
+            async fn sends_images_to_vision_models() {
+                check_images(&$backend).await;
             }
 
             #[tokio::test]

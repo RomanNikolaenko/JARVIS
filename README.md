@@ -3,14 +3,16 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 5 — Tools and agents.** JARVIS chats with local models
+> **Status: Phase 6 — Voice and vision.** JARVIS chats with local models
 > served by **Ollama**, any **OpenAI-compatible** server (LM Studio,
 > llama.cpp server, vLLM, …) or its own **embedded llama.cpp runtime**,
 > remembers conversations, facts and projects in a local SQLite database,
 > and runs **multi-step agent tasks** with tools (files, programs, system,
 > web, git) behind a Security Policy Engine with approvals and an audit log.
 > Cloud providers: OpenAI, Anthropic and Gemini with OS-keychain API keys.
-> Not yet: voice and vision input. See
+> It listens and speaks (whisper.cpp, Piper, wake word «Джарвіс») and looks
+> at screenshots, windows and photos with vision models — all on your
+> computer. See
 > [ROADMAP.md](ROADMAP.md).
 
 ## What works today
@@ -41,6 +43,17 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
   verified models, start/stop a model with memory checks, GPU offload and
   hardware detection; a second server serves an embedding model (BGE-M3)
   for semantic memory search without Ollama.
+- Voice (Settings → Voice): press the microphone button in the chat or say
+  «Джарвіс» / "Jarvis" (wake word mode, off by default); speech is
+  recognized by whisper.cpp and replies are read aloud by Piper in
+  Ukrainian or English, interruptible at any time. A red indicator shows
+  whenever the microphone is open. Engines, models and voices are verified
+  downloads you approve one by one.
+- Vision: attach a screenshot, a window, an image file or a camera photo to
+  a message and ask a vision model about it (Ollama, OpenAI-compatible, or
+  the embedded runtime with Qwen3-VL / Gemma 3). Captures happen only when
+  you ask, you see them before sending, and they reach cloud models only
+  with a separate privacy switch.
 - Rust core (`jarvis-core`) independent of the UI shell:
   - health check of all core components with timeouts;
   - settings in `config.toml` with validation, atomic writes and safe recovery;

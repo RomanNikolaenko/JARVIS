@@ -7,6 +7,7 @@ import { EventLogStore } from './core/state/event-log.store';
 import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
 import { SystemStore } from './core/state/system.store';
+import { VoiceStore } from './core/state/voice.store';
 import { ApprovalDialog } from './shared/approval-dialog/approval-dialog';
 import { Icon, type IconName } from './shared/icon/icon';
 import { StatusBadge } from './shared/status-badge/status-badge';
@@ -32,6 +33,7 @@ export class App {
   private readonly system = inject(SystemStore);
   private readonly settings = inject(SettingsStore);
   private readonly now = signal(Date.now());
+  protected readonly voice = inject(VoiceStore);
 
   protected readonly nav: readonly NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -80,6 +82,8 @@ export class App {
     // Approval requests must reach the user on every screen.
     const agents = inject(AgentsStore);
     void agents.start();
+    // The microphone indicator and spoken requests work on every screen.
+    void this.voice.start();
     void this.settings.load().then(() => chat.loadModels());
     pollWhileVisible(
       async () => {

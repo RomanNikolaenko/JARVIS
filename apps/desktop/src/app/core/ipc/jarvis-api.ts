@@ -44,6 +44,12 @@ import type {
   SystemEvent,
   SystemMetrics,
   UiErrorReport,
+  CaptureInfo,
+  VisionStatus,
+  WindowInfo,
+  VoiceState,
+  VoiceStatus,
+  VoiceTranscript,
 } from '@jarvis/shared-types';
 
 import { TauriBridge } from './tauri-bridge';
@@ -54,6 +60,12 @@ export const SYSTEM_EVENT = 'jarvis://system-event';
 export const AGENT_TASK_EVENT = 'jarvis://agent-task';
 /** Pushed with every pending approval whenever the list changes. */
 export const APPROVALS_EVENT = 'jarvis://approvals';
+/** Pushed with the voice engine's state (microphone, listening, speaking). */
+export const VOICE_STATE_EVENT = 'jarvis://voice-state';
+/** Pushed with every recognized spoken request. */
+export const VOICE_TRANSCRIPT_EVENT = 'jarvis://voice-transcript';
+/** Pushed with the microphone level (0–1) while it is open. */
+export const VOICE_LEVEL_EVENT = 'jarvis://voice-level';
 
 /**
  * Typed facade over the IPC commands registered in
@@ -345,5 +357,97 @@ export class JarvisApi {
 
   onSystemEvent(handler: (event: SystemEvent) => void): Promise<UnlistenFn> {
     return this.bridge.listen<SystemEvent>(SYSTEM_EVENT, handler);
+  }
+
+  // ---- Vision ----
+
+  getVisionStatus(): Promise<VisionStatus> {
+    return this.bridge.invoke('get_vision_status');
+  }
+
+  listWindows(): Promise<WindowInfo[]> {
+    return this.bridge.invoke('list_windows');
+  }
+
+  /** Captures a display (`null`: the primary one); `hideJarvis` steps the window aside. */
+  captureScreen(display: string | null, hideJarvis: boolean): Promise<CaptureInfo> {
+    return this.bridge.invoke('capture_screen', { display, hideJarvis });
+  }
+
+  captureWindow(id: string): Promise<CaptureInfo> {
+    return this.bridge.invoke('capture_window', { id });
+  }
+
+  /** A window or area picked in the system dialog (Wayland). */
+  captureSelection(): Promise<CaptureInfo> {
+    return this.bridge.invoke('capture_selection');
+  }
+
+  /** Opens a file dialog in the core; `null` when the user cancelled. */
+  attachImageFile(): Promise<CaptureInfo | null> {
+    return this.bridge.invoke('attach_image_file');
+  }
+
+  /** A camera photo as a `data:` URL. */
+  attachPhoto(data: string): Promise<CaptureInfo> {
+    return this.bridge.invoke('attach_photo', { data });
+  }
+
+  discardCapture(id: string): Promise<boolean> {
+    return this.bridge.invoke('discard_capture', { id });
+  }
+
+  /** Opens a file dialog in the core to add a vision projector to a model. */
+  attachProjector(modelId: string): Promise<LocalModel | null> {
+    return this.bridge.invoke('attach_projector', { modelId });
+  }
+
+  // ---- Voice ----
+
+  getVoiceStatus(): Promise<VoiceStatus> {
+    return this.bridge.invoke('get_voice_status');
+  }
+
+  /** Installs a voice package the user approved; returns the download id. */
+  installVoicePackage(id: string): Promise<string> {
+    return this.bridge.invoke('install_voice_package', { id });
+  }
+
+  removeVoicePackage(id: string): Promise<void> {
+    return this.bridge.invoke('remove_voice_package', { id });
+  }
+
+  cancelVoiceDownload(id: string): Promise<boolean> {
+    return this.bridge.invoke('cancel_voice_download', { id });
+  }
+
+  /** Opens the microphone for one spoken request. */
+  startListening(): Promise<void> {
+    return this.bridge.invoke('start_listening');
+  }
+
+  /** `submit` recognizes what was said so far; otherwise it is dropped. */
+  stopListening(submit: boolean): Promise<void> {
+    return this.bridge.invoke('stop_listening', { submit });
+  }
+
+  stopSpeaking(): Promise<void> {
+    return this.bridge.invoke('stop_speaking');
+  }
+
+  speakText(text: string): Promise<void> {
+    return this.bridge.invoke('speak_text', { text });
+  }
+
+  onVoiceState(handler: (state: VoiceState) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<VoiceState>(VOICE_STATE_EVENT, handler);
+  }
+
+  onVoiceTranscript(handler: (transcript: VoiceTranscript) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<VoiceTranscript>(VOICE_TRANSCRIPT_EVENT, handler);
+  }
+
+  onVoiceLevel(handler: (level: number) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<number>(VOICE_LEVEL_EVENT, handler);
   }
 }

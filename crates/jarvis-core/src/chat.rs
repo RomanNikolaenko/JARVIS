@@ -320,6 +320,34 @@ impl ChatService {
         Ok(resolved)
     }
 
+    /// Like [`Self::resolve_model`] for a message with images: automatic
+    /// routing uses the vision route.
+    pub(crate) async fn resolve_vision_model(
+        &self,
+        provider_id: Option<&ProviderId>,
+        model: Option<&str>,
+        settings: &Settings,
+    ) -> Result<ResolvedModel, CoreError> {
+        if provider_id.is_some() || model.is_some() {
+            return self.resolve_model(provider_id, model, settings).await;
+        }
+        let catalog = self.catalog.get(&self.registry, false).await;
+        let selection = routing::select(
+            TaskCategory::Vision,
+            &settings.ai.routing,
+            &catalog,
+            settings.privacy.allow_cloud_providers,
+        )?;
+        let provider = self.registry.get(&selection.provider.id)?;
+        Ok(ResolvedModel {
+            descriptor: provider.descriptor().clone(),
+            provider,
+            model: selection.model.id,
+            capabilities: selection.model.capabilities,
+            context_window: selection.model.context_window,
+        })
+    }
+
     /// Chooses provider and model: an explicit pair is used as is (after the
     /// privacy check, before any network call); otherwise the catalog and the
     /// model router decide.

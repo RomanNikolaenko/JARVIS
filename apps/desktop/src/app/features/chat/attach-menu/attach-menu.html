@@ -1,0 +1,85 @@
+<div class="attach">
+  <button
+    type="button"
+    class="attach-button"
+    title="Attach an image"
+    aria-label="Attach an image"
+    aria-haspopup="menu"
+    [attr.aria-expanded]="open()"
+    [disabled]="vision.full() || vision.busy()"
+    (click)="toggle()">
+    <jv-icon name="image" [size]="16" />
+  </button>
+
+  @if (open()) {
+    <div class="attach-menu" role="menu">
+      @if (choosingWindow()) {
+        <div class="menu-title">Choose a window</div>
+        @for (w of vision.windows(); track w.id) {
+          <button type="button" role="menuitem" (click)="window(w.id)">
+            <span class="ellipsis">{{ w.title }}</span>
+            @if (w.app) {
+              <span class="dim">{{ w.app }}</span>
+            }
+          </button>
+        } @empty {
+          <p class="hint">{{ vision.busy() ? 'Loading windows…' : 'No windows to capture.' }}</p>
+        }
+        <button type="button" class="back" (click)="choosingWindow.set(false)">Back</button>
+      } @else {
+        @if (capabilities(); as caps) {
+          @if (caps.screen === 'available') {
+            @if (displays().length > 1) {
+              @for (d of displays(); track d.id) {
+                <button type="button" role="menuitem" (click)="screen(d.id)">
+                  <jv-icon name="monitor" [size]="14" /> Screen: {{ d.name }}{{ d.primary ? ' (main)' : '' }}
+                </button>
+              }
+            } @else {
+              <button type="button" role="menuitem" (click)="screen(null)">
+                <jv-icon name="monitor" [size]="14" /> Screenshot
+              </button>
+            }
+            <label class="option">
+              <input type="checkbox" [checked]="hideJarvis()" (change)="onHideJarvis($event)" />
+              Hide JARVIS while capturing
+            </label>
+          } @else if (caps.screen === 'systemDialog') {
+            <button type="button" role="menuitem" (click)="screen(null)">
+              <jv-icon name="monitor" [size]="14" /> Screenshot (system dialog)
+            </button>
+          }
+          @if (caps.window === 'available') {
+            <button type="button" role="menuitem" (click)="showWindows()">
+              <jv-icon name="dashboard" [size]="14" /> Window…
+            </button>
+          }
+          @if (caps.selection === 'systemDialog') {
+            <button type="button" role="menuitem" (click)="selection()">
+              <jv-icon name="dashboard" [size]="14" /> Window or area (system dialog)
+            </button>
+          }
+        }
+        <button type="button" role="menuitem" (click)="file()"><jv-icon name="folder" [size]="14" /> Image file…</button>
+        <button
+          type="button"
+          role="menuitem"
+          (click)="camera()"
+          [disabled]="!cameraSupported"
+          [title]="cameraSupported ? '' : 'This window cannot use a camera on this system'">
+          <jv-icon name="camera" [size]="14" /> Camera photo…
+        </button>
+        @for (note of capabilities()?.notes ?? []; track $index) {
+          <p class="hint">{{ note }}</p>
+        }
+        @if (!cameraSupported) {
+          <p class="hint">The camera is not available in this window on this system.</p>
+        }
+      }
+    </div>
+  }
+</div>
+
+@if (cameraOpen()) {
+  <jv-camera-dialog (closed)="cameraOpen.set(false)" />
+}

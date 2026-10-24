@@ -35,6 +35,8 @@ pub struct LaunchPlan {
     pub api_key: String,
     /// Set for an embedding server.
     pub embeddings: Option<EmbeddingOptions>,
+    /// Vision projector (`--mmproj`) of a chat model.
+    pub projector: Option<PathBuf>,
 }
 
 /// Options of an embedding server.
@@ -60,6 +62,9 @@ pub fn server_args(plan: &LaunchPlan) -> Vec<OsString> {
     push("--n-gpu-layers", plan.gpu_layers.to_string().into());
     push("--alias", plan.model_alias.clone().into());
     push("--parallel", "1".into());
+    if let Some(projector) = &plan.projector {
+        push("--mmproj", projector.clone().into_os_string());
+    }
     if let Some(embeddings) = plan.embeddings {
         push("--pooling", embeddings.pooling.as_arg().into());
         // Each input must fit into one micro-batch: llama-server rejects
@@ -112,7 +117,7 @@ pub struct LogTail {
 }
 
 impl LogTail {
-    fn push(&self, line: String) {
+    pub fn push(&self, line: String) {
         let mut lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
         if lines.len() == LOG_LINES {
             lines.pop_front();
@@ -267,6 +272,7 @@ mod tests {
             gpu_layers: 99,
             api_key: "k".into(),
             embeddings: None,
+            projector: None,
         }
     }
 
@@ -348,5 +354,15 @@ mod tests {
             ]
         );
         assert_eq!(logs.last(10_000).len(), LOG_LINES);
+    }
+
+    #[test]
+    fn a_vision_projector_is_passed_to_chat_servers() {
+        let mut plan = plan();
+        assert!(!args(&plan).contains(&"--mmproj".to_owned()));
+        plan.projector = Some(PathBuf::from("/models/m.mmproj.gguf"));
+        let args = args(&plan);
+        let at = args.iter().position(|a| a == "--mmproj").expect("--mmproj");
+        assert!(args[at + 1].ends_with("m.mmproj.gguf"));
     }
 }

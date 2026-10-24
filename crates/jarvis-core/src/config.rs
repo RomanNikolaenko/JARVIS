@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use jarvis_ai::{EchoProvider, ProviderConfig};
 use jarvis_runtime::{RUNTIME_EMBEDDINGS_PROVIDER_ID, RUNTIME_PROVIDER_ID, RuntimeSettings};
+use jarvis_voice::VoiceSettings;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
@@ -42,6 +43,8 @@ pub struct Settings {
     /// Tools agents may use and what they need approval for.
     pub tools: ToolSettings,
     pub agents: AgentsSettings,
+    /// Settings → Голос.
+    pub voice: VoiceSettings,
     pub privacy: PrivacySettings,
     pub logging: LoggingSettings,
 }
@@ -57,6 +60,7 @@ impl Default for Settings {
             memory: MemorySettings::default(),
             tools: ToolSettings::default(),
             agents: AgentsSettings::default(),
+            voice: VoiceSettings::default(),
             privacy: PrivacySettings::default(),
             logging: LoggingSettings::default(),
         }
@@ -355,6 +359,10 @@ pub struct PrivacySettings {
     /// program output to the model; this also needs `allowCloudProviders`.
     /// Off by default.
     pub allow_cloud_agents: bool,
+    /// Whether attached images (screen captures, photos) may be sent to
+    /// cloud models. A capture can show anything on the screen, so this is
+    /// separate from `allowCloudProviders`. Off by default.
+    pub share_captures_with_cloud: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -421,6 +429,9 @@ impl Settings {
         problems.extend(self.memory.problems(&ai.providers));
         problems.extend(self.tools.problems());
         problems.extend(self.agents.problems());
+        if let Err(problem) = self.voice.validate() {
+            problems.push(format!("voice: {problem}"));
+        }
 
         if problems.is_empty() {
             Ok(())

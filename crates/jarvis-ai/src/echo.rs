@@ -91,7 +91,15 @@ impl AiProvider for EchoProvider {
             .find(|message| message.role == ChatRole::User)
             .ok_or_else(|| AiError::InvalidRequest("no user message to echo".to_owned()))?;
 
-        let reply = format!("{}{}", Self::PREFIX, last_user_message.content);
+        let reply = match last_user_message.images.len() {
+            0 => format!("{}{}", Self::PREFIX, last_user_message.content),
+            count => format!(
+                "{}({count} image{}) {}",
+                Self::PREFIX,
+                if count == 1 { "" } else { "s" },
+                last_user_message.content
+            ),
+        };
         let chunks: Vec<String> = reply.split_inclusive(' ').map(str::to_owned).collect();
         let completion_tokens = u32::try_from(chunks.len()).unwrap_or(u32::MAX);
         let delay = self.chunk_delay;

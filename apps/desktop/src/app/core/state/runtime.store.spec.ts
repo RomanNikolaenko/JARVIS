@@ -39,6 +39,7 @@ function server(phase: ServerPhase, model: string): ServerState {
     threads: null,
     memoryBytes: null,
     error: null,
+    vision: false,
   };
 }
 
@@ -317,6 +318,7 @@ describe('RuntimeStore', () => {
         license: 'MIT',
         description: '',
         role: 'chat',
+        projector: null,
       },
     ]);
     api['downloadCuratedModel'] = vi.fn(async () => 'new-download');

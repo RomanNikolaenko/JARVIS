@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::download::Expected;
 use crate::error::{Result, RuntimeError};
-use crate::types::{CuratedModel, ModelDownloadRequest, ServerRole};
+use crate::types::{CuratedFile, CuratedModel, ModelDownloadRequest, ServerRole};
 
 const HF: &str = "https://huggingface.co";
 
@@ -34,6 +34,7 @@ pub fn curated_models() -> Vec<CuratedModel> {
         size_bytes,
         license: license.to_owned(),
         role: ServerRole::Chat,
+        projector: None,
     };
     vec![
         chat(
@@ -80,6 +81,46 @@ pub fn curated_models() -> Vec<CuratedModel> {
             2_104_932_768,
             "Qwen Research License",
         ),
+        // Vision models published by the llama.cpp project, each with its
+        // projector (`mmproj`), which lets the model see images.
+        CuratedModel {
+            projector: Some(CuratedFile {
+                file: "mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf".to_owned(),
+                sha256: "69066c8f279ec85ff48ab4059f6ebba0d2932ca57667f2bbdac7d9805bca9e7b"
+                    .to_owned(),
+                size_bytes: 445_053_056,
+            }),
+            ..chat(
+                "qwen3-vl-2b-instruct-q8_0",
+                "Qwen3-VL 2B Instruct (Q8_0, vision)",
+                "Sees images: screenshots, photos, documents. Needs a llama.cpp build from late 2025 or newer. ~3 GB RAM.",
+                "ggml-org/Qwen3-VL-2B-Instruct-GGUF",
+                "Qwen3-VL-2B-Instruct-Q8_0.gguf",
+                "ea6a11058182570be6436b9a2e4ee7f7b49f908d",
+                "b7802e29f71a9e5b5e3f83f613df898a2204342dcea71a231ea501d481813c39",
+                1_834_427_296,
+                "Apache-2.0",
+            )
+        },
+        CuratedModel {
+            projector: Some(CuratedFile {
+                file: "mmproj-model-f16.gguf".to_owned(),
+                sha256: "8c0fb064b019a6972856aaae2c7e4792858af3ca4561be2dbf649123ba6c40cb"
+                    .to_owned(),
+                size_bytes: 851_251_104,
+            }),
+            ..chat(
+                "gemma-3-4b-it-q4_k_m",
+                "Gemma 3 4B Instruct (Q4_K_M, vision)",
+                "Multilingual model with good Ukrainian that also sees images. ~5 GB RAM.",
+                "ggml-org/gemma-3-4b-it-GGUF",
+                "gemma-3-4b-it-Q4_K_M.gguf",
+                "d0976223747697cb51e056d85c532013931fe52e",
+                "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
+                2_489_757_856,
+                "Gemma Terms of Use",
+            )
+        },
         // Published by the llama.cpp project; BAAI/bge-m3 converted to GGUF
         // (architecture `bert`, CLS pooling, 8 192-token training context).
         CuratedModel {
@@ -119,6 +160,20 @@ impl ResolvedFile {
             expected: Expected {
                 sha256: model.sha256.clone(),
                 size: Some(model.size_bytes),
+            },
+        })
+    }
+
+    /// The projector of a curated vision model.
+    pub fn from_curated_projector(model: &CuratedModel, projector: &CuratedFile) -> Result<Self> {
+        Ok(Self {
+            url: resolve_url(&model.repo, &model.revision, &projector.file)?,
+            repo: model.repo.clone(),
+            file: projector.file.clone(),
+            revision: model.revision.clone(),
+            expected: Expected {
+                sha256: projector.sha256.clone(),
+                size: Some(projector.size_bytes),
             },
         })
     }

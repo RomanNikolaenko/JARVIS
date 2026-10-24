@@ -94,6 +94,8 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "list_pending_approvals",
     "get_audit_log",
     "verify_audit_log",
+    "get_voice_status",
+    "get_vision_status",
 ];
 
 #[test]
@@ -145,6 +147,21 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "clear_finished_agent_tasks",
         "resolve_approval",
         "add_workspace_folder",
+        "install_voice_package",
+        "remove_voice_package",
+        "cancel_voice_download",
+        "start_listening",
+        "stop_listening",
+        "stop_speaking",
+        "speak_text",
+        "list_windows",
+        "capture_screen",
+        "capture_window",
+        "capture_selection",
+        "attach_image_file",
+        "attach_photo",
+        "discard_capture",
+        "attach_projector",
     ]);
     for cmd in all {
         let result = invoke(&h.other, cmd, json!({}));
@@ -649,4 +666,62 @@ fn agent_commands_report_state_and_validate_input() {
         invoke(&h.main, "clear_finished_agent_tasks", json!({})).expect("clear"),
         json!(1)
     );
+}
+
+#[test]
+fn voice_commands_validate_input_without_downloading() {
+    let h = harness();
+    let status = invoke(&h.main, "get_voice_status", json!({})).expect("status");
+    assert_eq!(status["state"]["micOpen"], false);
+    assert_eq!(status["canListen"], false);
+    assert!(status["packages"].is_array());
+
+    let error = invoke(
+        &h.main,
+        "install_voice_package",
+        json!({ "id": "no-such-voice" }),
+    )
+    .expect_err("unknown package");
+    assert_eq!(error["code"], "validation");
+    let error = invoke(&h.main, "speak_text", json!({ "text": "" })).expect_err("empty text");
+    assert_eq!(error["code"], "validation");
+    // Nothing is installed, so the microphone must stay closed.
+    let error = invoke(&h.main, "start_listening", json!({})).expect_err("not installed");
+    assert!(
+        ["notFound", "unsupported"].contains(&error["code"].as_str().unwrap_or_default()),
+        "{error}"
+    );
+    assert_eq!(
+        invoke(&h.main, "cancel_voice_download", json!({ "id": "nothing" })).expect("cancel"),
+        json!(false)
+    );
+    invoke(&h.main, "stop_listening", json!({ "submit": false })).expect("stop");
+    invoke(&h.main, "stop_speaking", json!({})).expect("stop");
+    let status = invoke(&h.main, "get_voice_status", json!({})).expect("status");
+    assert_eq!(status["state"]["micOpen"], false);
+}
+
+#[test]
+fn vision_commands_validate_input_without_capturing() {
+    let h = harness();
+    let status = invoke(&h.main, "get_vision_status", json!({})).expect("status");
+    assert!(status["capabilities"]["notes"].is_array());
+    let error =
+        invoke(&h.main, "attach_photo", json!({ "data": "not an image" })).expect_err("garbage");
+    assert_eq!(error["code"], "validation");
+    assert_eq!(
+        invoke(&h.main, "discard_capture", json!({ "id": "nothing" })).expect("discard"),
+        json!(false)
+    );
+    // A message cannot point at a capture that does not exist.
+    let conversation = invoke(
+        &h.main,
+        "create_conversation",
+        json!({ "projectId": null, "temporary": false }),
+    )
+    .expect("conversation");
+    let mut request = turn(&conversation["id"], "What is this?");
+    request["request"]["attachments"] = json!(["missing"]);
+    let error = invoke(&h.main, "send_message", request).expect_err("missing capture");
+    assert_eq!(error["code"], "notFound");
 }

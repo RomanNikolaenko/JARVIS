@@ -38,6 +38,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/events/events').then((m) => m.Events),
   },
   {
+    path: 'settings/voice',
+    title: 'Voice · JARVIS',
+    loadComponent: () => import('./features/voice/voice').then((m) => m.VoicePage),
+  },
+  {
     path: 'settings',
     title: 'Settings · JARVIS',
     loadComponent: () => import('./features/settings/settings').then((m) => m.SettingsPage),

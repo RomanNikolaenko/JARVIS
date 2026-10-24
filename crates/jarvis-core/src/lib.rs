@@ -14,6 +14,8 @@ pub mod health;
 mod memory;
 pub mod routing;
 mod ui_errors;
+mod vision;
+mod voice;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +31,9 @@ use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, curr
 use jarvis_runtime::process::CommandFactory;
 use jarvis_runtime::{RuntimeManager, RuntimeOptions, ServerRole};
 use jarvis_security::{KeyringSecretStore, SecretStore};
+use jarvis_vision::ScreenCapture;
+use jarvis_voice::backend::VoiceBackend;
+use jarvis_voice::{VoiceEngine, VoiceEngineOptions};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -44,7 +49,8 @@ pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
-pub use {jarvis_agent, jarvis_security, jarvis_tools};
+pub use vision::{MAX_ATTACHMENTS, VisionStatus};
+pub use {jarvis_agent, jarvis_security, jarvis_tools, jarvis_vision, jarvis_voice};
 
 /// Filesystem locations used by JARVIS. Resolved by the host application
 /// (e.g. via Tauri's path resolver) and passed in, so the core never guesses.
@@ -110,6 +116,10 @@ pub struct CoreOptions {
     pub runtime_command_factory: Option<CommandFactory>,
     /// Storage for sensitive credentials like API keys.
     pub secrets: Option<Arc<dyn SecretStore>>,
+    /// Replaces audio devices and voice engines (tests).
+    pub voice_backend: Option<Arc<dyn VoiceBackend>>,
+    /// Replaces screen capture (tests).
+    pub screen_capture: Option<Arc<dyn ScreenCapture>>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -132,7 +142,21 @@ impl CoreOptions {
             provider_factory: Some(Arc::new(HttpProviderFactory::new())),
             runtime_command_factory: None,
             secrets: None,
+            voice_backend: None,
+            screen_capture: None,
         }
+    }
+
+    /// Replaces screen capture (tests).
+    pub fn with_screen_capture(mut self, capture: Arc<dyn ScreenCapture>) -> Self {
+        self.screen_capture = Some(capture);
+        self
+    }
+
+    /// Replaces audio devices and voice engines (tests).
+    pub fn with_voice_backend(mut self, backend: Arc<dyn VoiceBackend>) -> Self {
+        self.voice_backend = Some(backend);
+        self
     }
 
     pub fn with_runtime_command_factory(mut self, factory: CommandFactory) -> Self {
@@ -181,6 +205,9 @@ pub struct JarvisCore {
     memory_state: Arc<memory::MemoryState>,
     agents: agents::AgentSystem,
     secrets: Arc<dyn SecretStore>,
+    voice: VoiceEngine,
+    capture: Arc<dyn ScreenCapture>,
+    captures: vision::CaptureStore,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
@@ -196,6 +223,8 @@ impl JarvisCore {
             provider_factory,
             runtime_command_factory,
             secrets,
+            voice_backend,
+            screen_capture,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -294,6 +323,20 @@ impl JarvisCore {
         let agents =
             agents::AgentSystem::open(&memory, Arc::clone(&config), &paths, &events).await?;
 
+        let voice = VoiceEngine::new(VoiceEngineOptions {
+            voice_dir: paths.data_dir.join("voice"),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .read_timeout(std::time::Duration::from_secs(60))
+                .user_agent(concat!("JARVIS/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .map_err(|err| CoreError::Internal(format!("HTTP client: {err}")))?,
+            adapter: Arc::from(current_adapter()),
+            backend: voice_backend,
+            launchers: None,
+            runtime: tokio::runtime::Handle::current(),
+        });
+
         let catalog = Arc::new(ModelCatalog::default());
         let chat = ChatService::new(
             Arc::clone(&registry),
@@ -328,6 +371,9 @@ impl JarvisCore {
             memory_state: Arc::default(),
             agents,
             secrets: Arc::clone(&secrets),
+            voice,
+            capture: screen_capture.unwrap_or_else(jarvis_vision::system_capture),
+            captures: vision::CaptureStore::default(),
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
@@ -337,6 +383,9 @@ impl JarvisCore {
         Self::autostart_runtime(&core);
         Self::spawn_memory_tasks(&core);
         Self::spawn_agent_events(&core);
+        Self::spawn_voice_events(&core);
+        // Wake word mode the user enabled before opens the microphone again.
+        voice::apply_settings(&core.voice, &core.config.current());
         Ok(core)
     }
 
@@ -486,6 +535,11 @@ impl JarvisCore {
         let saved = self.config.update(settings).await?;
         self.events.info(EventCategory::Config, "Settings saved");
 
+        if previous.voice != saved.voice
+            || previous.general.assistant_language != saved.general.assistant_language
+        {
+            voice::apply_settings(&self.voice, &saved);
+        }
         if previous.ai.providers != saved.ai.providers {
             // Rebuilds from the latest saved settings, so concurrent updates
             // cannot leave an older provider set active.
@@ -723,6 +777,7 @@ impl JarvisCore {
         // Running agent tasks pause and can be resumed after a restart.
         self.agents.manager.shutdown().await;
         self.chat.cancel_all();
+        self.voice.shutdown().await;
         self.runtime.shutdown().await;
         // Last: the action history records the steps above.
         self.stop_memory_tasks().await;

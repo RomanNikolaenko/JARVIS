@@ -1,5 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import type {
+  CaptureInfo,
   ChatStreamEvent,
   ContextReport,
   Conversation,
@@ -27,6 +28,8 @@ export interface ChatEntry {
   /** How the core built the context of this reply. */
   readonly context?: ContextReport;
   readonly createdAtMs?: number;
+  /** Images sent with this message (previews, this session only). */
+  readonly images?: readonly CaptureInfo[];
 }
 
 /** `connecting`: request sent, waiting for `started`; `streaming`: receiving text. */
@@ -147,14 +150,18 @@ export class ChatStore {
     this.error.set(null);
   }
 
-  async send(text: string): Promise<void> {
+  /**
+   * Sends a message; `speak` reads the reply aloud (spoken requests) and
+   * `attachments` are captures shown to a vision model.
+   */
+  async send(text: string, speak = false, attachments: readonly CaptureInfo[] = []): Promise<void> {
     const content = text.trim();
     if (!content || this.busy() || content.length > MAX_MESSAGE_LENGTH || this.readOnly()) {
       return;
     }
     this.phase.set('connecting');
     this.cancelRequested = false;
-    this.addEntry({ role: 'user', content, status: 'complete' });
+    this.addEntry({ role: 'user', content, status: 'complete', images: attachments.length ? attachments : undefined });
     const assistantId = this.addEntry({ role: 'assistant', content: '', status: 'streaming' }).id;
 
     const selection = this.selected();
@@ -172,6 +179,8 @@ export class ChatStore {
           model: selection?.model.id ?? null,
           temperature: null,
           maxOutputTokens: null,
+          speak,
+          attachments: attachments.map((a) => a.id),
         },
         (event) => this.onEvent(assistantId, event)
       );

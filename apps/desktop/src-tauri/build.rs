@@ -68,6 +68,23 @@ const COMMANDS: &[&str] = &[
     "get_audit_log",
     "verify_audit_log",
     "add_workspace_folder",
+    "get_voice_status",
+    "install_voice_package",
+    "remove_voice_package",
+    "cancel_voice_download",
+    "start_listening",
+    "stop_listening",
+    "stop_speaking",
+    "speak_text",
+    "get_vision_status",
+    "list_windows",
+    "capture_screen",
+    "capture_window",
+    "capture_selection",
+    "attach_image_file",
+    "attach_photo",
+    "discard_capture",
+    "attach_projector",
 ];
 
 fn main() {

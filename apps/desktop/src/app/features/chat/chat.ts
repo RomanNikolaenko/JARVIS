@@ -15,10 +15,14 @@ import type { ContextReport } from '@jarvis/shared-types';
 
 import { type ChatEntry, ChatStore, MAX_MESSAGE_LENGTH } from '../../core/state/chat.store';
 import { MAX_FACT_LENGTH, MemoryStore } from '../../core/state/memory.store';
+import { VisionStore } from '../../core/state/vision.store';
+import { VoiceStore } from '../../core/state/voice.store';
 import { type ModelOption, optionKey } from '../../core/state/models.store';
 import { formatTokens } from '../../shared/format';
 import { Icon } from '../../shared/icon/icon';
 import { MarkdownPipe } from '../../shared/markdown/markdown';
+import { levelPercent } from '../voice/voice';
+import { AttachMenu } from './attach-menu/attach-menu';
 import { ConversationList } from './conversation-list/conversation-list';
 import { ChatAgentAction } from './chat-agent-action';
 
@@ -39,7 +43,7 @@ function withoutReasoning(text: string): string {
 
 @Component({
   selector: 'jv-chat',
-  imports: [ConversationList, Icon, MarkdownPipe, RouterLink, ChatAgentAction],
+  imports: [AttachMenu, ConversationList, Icon, MarkdownPipe, RouterLink, ChatAgentAction],
   templateUrl: './chat.html',
   styleUrl: './chat.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -47,6 +51,9 @@ function withoutReasoning(text: string): string {
 export class Chat {
   protected readonly store = inject(ChatStore);
   protected readonly memory = inject(MemoryStore);
+  protected readonly voice = inject(VoiceStore);
+  protected readonly vision = inject(VisionStore);
+  protected readonly levelPercent = levelPercent;
   private readonly router = inject(Router);
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private stickToBottom = true;
@@ -101,12 +108,10 @@ export class Chat {
   });
   protected readonly canSend = computed(() => {
     const text = this.draft().trim();
+    // An image alone can be sent too.
+    const hasContent = text.length > 0 || this.vision.attachments().length > 0;
     return (
-      text.length > 0 &&
-      text.length <= MAX_MESSAGE_LENGTH &&
-      !this.store.busy() &&
-      !this.store.readOnly() &&
-      !this.agentStarting()
+      hasContent && text.length <= MAX_MESSAGE_LENGTH && !this.store.busy() && !this.store.readOnly() && !this.agentStarting()
     );
   });
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
@@ -234,11 +239,13 @@ export class Chat {
     if (!this.canSend()) {
       return;
     }
-    const text = this.draft();
+    const attachments = this.vision.take();
+    // An image alone is a question about the image.
+    const text = this.draft().trim() || (attachments.length ? 'What is in this image?' : '');
     this.draft.set('');
     this.stickToBottom = true;
     const isNew = !this.store.conversation();
-    void this.store.send(text).then(() => {
+    void this.store.send(text, false, attachments).then(() => {
       const id = this.store.conversation()?.id;
       if (isNew && id) {
         void this.router.navigate([], { queryParams: { c: id }, replaceUrl: true });
@@ -248,6 +255,27 @@ export class Chat {
 
   protected stop(): void {
     void this.store.cancel();
+  }
+
+  protected readonly micTitle = computed(() => {
+    if (!this.voice.canListen()) {
+      return 'Set up voice input in Settings → Voice';
+    }
+    return this.voice.phase() === 'listening' ? 'Done speaking' : 'Speak a request';
+  });
+
+  /** Push-to-talk: the first press opens the microphone, the second sends. */
+  protected toggleMic(): void {
+    if (!this.voice.canListen()) {
+      void this.router.navigateByUrl('/settings/voice');
+      return;
+    }
+    this.stickToBottom = true;
+    if (this.voice.phase() === 'listening') {
+      void this.voice.submit();
+    } else {
+      void this.voice.listen();
+    }
   }
 
   protected refreshModels(): void {

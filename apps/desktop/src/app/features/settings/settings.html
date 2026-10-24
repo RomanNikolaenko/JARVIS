@@ -14,12 +14,20 @@
           <option value="uk">Українська</option>
           <option value="en">English</option>
         </select>
-        <span class="hint">Language JARVIS answers and (later) speaks in.</span>
+        <span class="hint">Language JARVIS answers and speaks in.</span>
       </label>
       <label class="check">
         <input type="checkbox" formControlName="reducedMotion" />
         <span>Reduce motion (disable decorative animations)</span>
       </label>
+    </jv-hud-panel>
+
+    <jv-hud-panel heading="Voice">
+      <p class="hint">
+        Talk to JARVIS and hear its replies. Speech is recognized and spoken on this computer; the microphone opens only when you
+        press the microphone button or turn on the wake word.
+      </p>
+      <a class="voice-link" routerLink="/settings/voice"><jv-icon name="mic" [size]="16" /> Voice settings</a>
     </jv-hud-panel>
 
     <jv-hud-panel heading="AI">
@@ -72,6 +80,14 @@
         <jv-icon name="shield" [size]="14" />
         Agents send file contents and program output to the model. Tools and folders are set on the
         <a routerLink="/agents">Agents</a> screen.
+      </p>
+      <label class="check">
+        <input type="checkbox" formControlName="shareCapturesWithCloud" />
+        <span>Send screenshots and photos to cloud AI providers</span>
+      </label>
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        A screenshot can show anything that was on the screen. When off, images go only to local vision models.
       </p>
     </jv-hud-panel>
 

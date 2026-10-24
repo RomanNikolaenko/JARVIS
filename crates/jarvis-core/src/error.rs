@@ -2,6 +2,8 @@ use jarvis_agent::AgentError;
 use jarvis_ai::AiError;
 use jarvis_memory::{MemoryError, StorageError};
 use jarvis_runtime::RuntimeError;
+use jarvis_vision::VisionError;
+use jarvis_voice::VoiceError;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -93,6 +95,12 @@ pub enum CoreError {
     #[error(transparent)]
     Agent(#[from] AgentError),
 
+    #[error(transparent)]
+    Voice(#[from] VoiceError),
+
+    #[error(transparent)]
+    Vision(#[from] VisionError),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -165,6 +173,26 @@ impl CoreError {
                 AgentError::Model(_) => ErrorCode::Unavailable,
                 AgentError::Storage(StorageError::Io { .. }) => ErrorCode::Io,
                 AgentError::Storage(_) | AgentError::Internal(_) => ErrorCode::Internal,
+            },
+            Self::Voice(err) => match err {
+                VoiceError::Device(_) | VoiceError::Engine(_) | VoiceError::Install(_) => {
+                    ErrorCode::Unavailable
+                }
+                VoiceError::NotInstalled(_) => ErrorCode::NotFound,
+                VoiceError::Unsupported(_) => ErrorCode::Unsupported,
+                VoiceError::InvalidAudio(_) | VoiceError::Invalid(_) => ErrorCode::Validation,
+                VoiceError::Busy(_) => ErrorCode::LimitExceeded,
+                VoiceError::Cancelled => ErrorCode::Cancelled,
+                VoiceError::Timeout => ErrorCode::Timeout,
+                VoiceError::Io { .. } => ErrorCode::Io,
+            },
+            Self::Vision(err) => match err {
+                VisionError::Unsupported(_) => ErrorCode::Unsupported,
+                VisionError::Cancelled => ErrorCode::Cancelled,
+                VisionError::NotFound(_) => ErrorCode::NotFound,
+                VisionError::InvalidImage(_) => ErrorCode::Validation,
+                VisionError::Capture(_) => ErrorCode::Unavailable,
+                VisionError::Io { .. } => ErrorCode::Io,
             },
         }
     }

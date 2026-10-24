@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-attach-image-file"
+description = "Enables the attach_image_file command without any pre-configured scope."
+commands.allow = ["attach_image_file"]
+
+[[permission]]
+identifier = "deny-attach-image-file"
+description = "Denies the attach_image_file command without any pre-configured scope."
+commands.deny = ["attach_image_file"]

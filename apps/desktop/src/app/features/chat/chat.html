@@ -162,6 +162,16 @@
               </div>
             } @else {
               <div class="bubble">
+                @if (entry.images; as images) {
+                  <div class="sent-images">
+                    @for (image of images; track image.id) {
+                      <img
+                        [src]="image.preview"
+                        [alt]="image.label"
+                        [title]="image.label + ' · ' + image.width + '×' + image.height" />
+                    }
+                  </div>
+                }
                 <span class="text">{{ entry.content }}</span>
               </div>
             }
@@ -252,6 +262,50 @@
       }
     </div>
 
+    @if (voice.phase() !== 'idle' || voice.state().awaitingCommand || voice.notice()) {
+      <div class="voice-bar" role="status">
+        @switch (voice.phase()) {
+          @case ('listening') {
+            <jv-icon name="mic" [size]="16" />
+            <span>{{ voice.state().hearingSpeech ? 'Listening…' : 'Speak now' }}</span>
+            <div class="level" aria-hidden="true">
+              <div class="level-fill" [style.width.%]="levelPercent(voice.level())"></div>
+            </div>
+            <button type="button" class="ghost small" (click)="voice.submit()">Done</button>
+            <button type="button" class="ghost small" (click)="voice.cancelListening()">Cancel</button>
+          }
+          @case ('transcribing') {
+            <jv-icon name="mic" [size]="16" />
+            <span>Recognizing speech…</span>
+          }
+          @case ('speaking') {
+            <jv-icon name="volume" [size]="16" />
+            <span>Speaking</span>
+            <button type="button" class="ghost small" (click)="voice.stopSpeaking()">Stop</button>
+          }
+        }
+        @if (voice.state().awaitingCommand) {
+          <span>Yes? Say your request.</span>
+        }
+        @if (voice.notice(); as notice) {
+          <span class="voice-notice">{{ notice }}</span>
+        }
+      </div>
+    }
+    @if (vision.attachments().length || vision.error()) {
+      <div class="attachments">
+        @for (a of vision.attachments(); track a.id) {
+          <figure class="attachment">
+            <img [src]="a.preview" [alt]="a.label" />
+            <figcaption>{{ a.label }} · {{ a.width }}×{{ a.height }}</figcaption>
+            <button type="button" class="remove" (click)="vision.remove(a.id)" [attr.aria-label]="'Remove ' + a.label">×</button>
+          </figure>
+        }
+        @if (vision.error(); as error) {
+          <span class="voice-notice" role="alert">{{ error.message }}</span>
+        }
+      </div>
+    }
     <jv-chat-agent-action
       [text]="draft()"
       [model]="agentModel()"
@@ -271,6 +325,20 @@
       <div class="composer-actions">
         @if (nearLimit()) {
           <span class="counter">{{ draft().length }} / {{ maxLength }}</span>
+        }
+        <jv-attach-menu />
+        @if (voice.available()) {
+          <button
+            type="button"
+            class="mic-button"
+            [class.live]="voice.phase() === 'listening'"
+            [attr.aria-pressed]="voice.phase() === 'listening'"
+            [attr.aria-label]="micTitle()"
+            [title]="micTitle()"
+            [disabled]="store.readOnly()"
+            (click)="toggleMic()">
+            <jv-icon name="mic" [size]="16" />
+          </button>
         }
         @if (store.busy()) {
           <button type="button" class="danger" (click)="stop()">

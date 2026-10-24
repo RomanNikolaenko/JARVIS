@@ -11,6 +11,8 @@ mod logging;
 mod memory_commands;
 mod runtime_commands;
 mod state;
+mod vision_commands;
+mod voice_commands;
 
 #[cfg(test)]
 mod bindings;
@@ -22,6 +24,7 @@ use std::error::Error;
 use jarvis_core::config::LogLevel;
 use jarvis_core::jarvis_agent::AgentTask;
 use jarvis_core::jarvis_security::PendingApproval;
+use jarvis_core::jarvis_voice::VoiceEngine;
 use jarvis_core::{AppPaths, CoreOptions, JarvisCore};
 use jarvis_events::{EventSubscription, RecvError};
 use tauri::{App, AppHandle, Builder, Emitter, Manager, RunEvent, Runtime, UserAttentionType};
@@ -37,6 +40,12 @@ pub const SYSTEM_EVENT: &str = "jarvis://system-event";
 pub const AGENT_TASK_EVENT: &str = "jarvis://agent-task";
 /// Event with the list of actions waiting for approval.
 pub const APPROVALS_EVENT: &str = "jarvis://approvals";
+/// Event with the voice engine's state (microphone, listening, speaking).
+pub const VOICE_STATE_EVENT: &str = "jarvis://voice-state";
+/// Event with a recognized spoken request.
+pub const VOICE_TRANSCRIPT_EVENT: &str = "jarvis://voice-transcript";
+/// Event with the microphone level (0–1) while it is open.
+pub const VOICE_LEVEL_EVENT: &str = "jarvis://voice-level";
 
 /// Registers all IPC commands. Shared by the application and the IPC tests.
 pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
@@ -102,6 +111,23 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         agent_commands::get_audit_log,
         agent_commands::verify_audit_log,
         agent_commands::add_workspace_folder,
+        voice_commands::get_voice_status,
+        voice_commands::install_voice_package,
+        voice_commands::remove_voice_package,
+        voice_commands::cancel_voice_download,
+        voice_commands::start_listening,
+        voice_commands::stop_listening,
+        voice_commands::stop_speaking,
+        voice_commands::speak_text,
+        vision_commands::get_vision_status,
+        vision_commands::list_windows,
+        vision_commands::capture_screen,
+        vision_commands::capture_window,
+        vision_commands::capture_selection,
+        vision_commands::attach_image_file,
+        vision_commands::attach_photo,
+        vision_commands::discard_capture,
+        runtime_commands::attach_projector,
     ])
 }
 
@@ -148,6 +174,7 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
         core.subscribe_agent_tasks(),
         core.subscribe_approvals(),
     );
+    spawn_voice_forwarders(app.handle().clone(), core.voice());
     app.manage(AppState::new(core, Some(logging)));
     Ok(())
 }
@@ -201,6 +228,51 @@ fn spawn_agent_forwarders<R: Runtime>(
                 tracing::debug!("cannot request attention: {err}");
             }
             count = pending.len();
+        }
+    });
+}
+
+/// Forwards the voice state, recognized requests and microphone levels.
+fn spawn_voice_forwarders<R: Runtime>(app: AppHandle<R>, voice: &VoiceEngine) {
+    let mut state = voice.subscribe_state();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while state.changed().await.is_ok() {
+            let current = state.borrow_and_update().clone();
+            if let Err(err) = handle.emit_to(MAIN_WINDOW, VOICE_STATE_EVENT, &current) {
+                tracing::debug!("cannot forward the voice state: {err}");
+            }
+        }
+    });
+    let mut transcripts = voice.subscribe_transcripts();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match transcripts.recv().await {
+                Ok(transcript) => {
+                    if let Err(err) =
+                        handle.emit_to(MAIN_WINDOW, VOICE_TRANSCRIPT_EVENT, &transcript)
+                    {
+                        tracing::debug!("cannot forward a transcript: {err}");
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!("UI voice forwarder skipped {skipped} transcripts");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    let mut levels = voice.subscribe_levels();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match levels.recv().await {
+                Ok(level) => {
+                    let _ = app.emit_to(MAIN_WINDOW, VOICE_LEVEL_EVENT, level);
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
         }
     });
 }

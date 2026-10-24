@@ -188,6 +188,11 @@ export class RuntimeStore {
     return this.command('import', 'Import model', () => this.api.importModel());
   }
 
+  /** Lets the user pick a vision projector (mmproj) for a model. */
+  attachProjector(modelId: string): Promise<boolean> {
+    return this.command(`model:${modelId}`, `Add vision to ${modelId}`, () => this.api.attachProjector(modelId));
+  }
+
   downloadCurated(id: string): Promise<boolean> {
     if (this.isCuratedDownloading(id)) return Promise.resolve(false);
     return this.command(`curated:${id}`, `Download ${id}`, () => this.api.downloadCuratedModel(id));

@@ -204,9 +204,27 @@ describe('ChatStore', () => {
       model: 'echo',
       temperature: null,
       maxOutputTokens: null,
+      speak: false,
+      attachments: [],
     });
     expect(store.conversation()?.id).toBe('c1');
     expect(store.phase()).toBe('connecting');
+  });
+
+  it('sends attached images by id and shows them with the message', async () => {
+    const capture = {
+      id: 'shot-1',
+      source: 'screen' as const,
+      label: 'Display 1',
+      width: 1568,
+      height: 882,
+      preview: 'data:image/jpeg;base64,AAAA',
+      capturedAtMs: 1,
+    };
+    await store.send('Що на екрані?', true, [capture]);
+    expect(api.turns[0].attachments).toEqual(['shot-1']);
+    expect(api.turns[0].speak).toBe(true);
+    expect(store.entries()[0].images).toEqual([capture]);
   });
 
   it('streams the reply with its context report and refreshes the title', async () => {

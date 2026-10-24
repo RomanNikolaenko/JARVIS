@@ -181,6 +181,32 @@ pub struct LocalModel {
     /// The file exists and has the recorded size (computed when listing).
     #[serde(default)]
     pub available: bool,
+    /// Vision projector (`mmproj`): with it the model can see images.
+    #[serde(default)]
+    pub projector: Option<ProjectorFile>,
+}
+
+/// A vision projector (`mmproj` GGUF) for a chat model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "runtime.ts")]
+pub struct ProjectorFile {
+    pub path: String,
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    /// Verified SHA-256 (downloaded projectors only).
+    pub sha256: Option<String>,
+}
+
+/// An additional file of a curated model (same repository and revision).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "runtime.ts")]
+pub struct CuratedFile {
+    pub file: String,
+    pub sha256: String,
+    #[ts(type = "number")]
+    pub size_bytes: u64,
 }
 
 /// A model from the curated catalog: pinned repository revision and checksum.
@@ -199,6 +225,8 @@ pub struct CuratedModel {
     pub license: String,
     /// The server the model is meant for.
     pub role: ServerRole,
+    /// Vision projector downloaded with the model.
+    pub projector: Option<CuratedFile>,
 }
 
 /// A user-specified Hugging Face file to download.
@@ -220,6 +248,8 @@ pub struct ModelDownloadRequest {
 pub enum DownloadKind {
     Model,
     Runtime,
+    /// Voice engines, speech models and voices.
+    Voice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -306,6 +336,9 @@ pub struct ServerState {
     /// Resident memory of the server process (sampled when status is read).
     pub memory_bytes: Option<u64>,
     pub error: Option<String>,
+    /// Started with a vision projector: the model can see images.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 impl ServerState {
@@ -321,6 +354,7 @@ impl ServerState {
             threads: None,
             memory_bytes: None,
             error: None,
+            vision: false,
         }
     }
 }

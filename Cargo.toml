@@ -10,6 +10,8 @@ members = [
     "crates/jarvis-security",
     "crates/jarvis-tools",
     "crates/jarvis-agent",
+    "crates/jarvis-voice",
+    "crates/jarvis-vision",
     "crates/jarvis-core",
     "apps/desktop/src-tauri",
 ]
@@ -31,6 +33,8 @@ jarvis-memory = { path = "crates/jarvis-memory" }
 jarvis-runtime = { path = "crates/jarvis-runtime" }
 jarvis-security = { path = "crates/jarvis-security" }
 jarvis-tools = { path = "crates/jarvis-tools" }
+jarvis-voice = { path = "crates/jarvis-voice" }
+jarvis-vision = { path = "crates/jarvis-vision" }
 jarvis-storage = { path = "crates/jarvis-storage" }
 
 # Async runtime and utilities
@@ -60,6 +64,18 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # Secrets in OS keychain (Windows Credential Manager / Linux Secret Service)
 keyring = "3"
+
+# Voice: audio I/O (WASAPI / ALSA) and voice activity detection
+cpal = "0.18"
+earshot = "1.2"
+
+# Vision: images for vision models; screen capture on Windows (xcap), X11
+# (x11rb, pure Rust) and Wayland (xdg-desktop-portal through ashpd)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+xcap = "0.9"
+x11rb = { version = "0.14", features = ["randr"] }
+ashpd = { version = "0.13", default-features = false, features = ["screenshot", "tokio"] }
+base64 = "0.22"
 
 # Local database (bundled SQLite with FTS5)
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -98,3 +114,21 @@ print_stderr = "warn"
 codegen-units = 1
 lto = "thin"
 strip = "debuginfo"
+
+# Image decoding, resizing and encoding are unusably slow without
+# optimizations, even in development builds.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+# Resizing is generic code, compiled into the crate that calls it.
+[profile.dev.package.jarvis-vision]
+opt-level = 3

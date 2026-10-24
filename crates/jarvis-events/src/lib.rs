@@ -51,6 +51,8 @@ pub enum EventCategory {
     Security,
     Platform,
     Ui,
+    Voice,
+    Vision,
 }
 
 /// A structured, user-facing system event.

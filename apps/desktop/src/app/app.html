@@ -30,6 +30,18 @@
       <div class="topbar-left">
         <span class="topbar-label">System</span>
         <jv-status-badge [status]="status()" [label]="statusLabel()" />
+        @if (voice.micOpen()) {
+          <a class="mic-indicator" routerLink="/settings/voice" role="status" [title]="voice.state().inputDevice ?? 'Microphone'">
+            <span class="mic-dot" aria-hidden="true"></span>
+            <jv-icon name="mic" [size]="14" />
+            {{ voice.state().wakeWordActive ? 'Microphone on · listening for “Jarvis”' : 'Microphone on' }}
+          </a>
+        }
+        @if (voice.phase() === 'speaking') {
+          <button type="button" class="ghost small speaking" (click)="voice.stopSpeaking()" title="Stop speaking">
+            <jv-icon name="volume" [size]="14" /> Speaking · Stop
+          </button>
+        }
       </div>
       <time class="clock">{{ clock() }}</time>
     </header>

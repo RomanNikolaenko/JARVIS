@@ -27,8 +27,9 @@ use crate::library::{self, ModelLibrary, now_ms};
 use crate::process::{self, CommandFactory, EmbeddingOptions, LaunchPlan, LogTail};
 use crate::types::{
     BinarySource, CuratedModel, DownloadKind, DownloadPhase, FileDigest, GgufInfo, GpuOffload,
-    LocalModel, ModelDownloadRequest, ModelSource, PoolingType, RuntimeBackend, RuntimeBinary,
-    RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase, ServerRole, ServerState,
+    LocalModel, ModelDownloadRequest, ModelSource, PoolingType, ProjectorFile, RuntimeBackend,
+    RuntimeBinary, RuntimeRelease, RuntimeSettings, RuntimeStatus, ServerPhase, ServerRole,
+    ServerState,
 };
 
 /// Provider id of the embedded chat server in the AI registry.
@@ -138,6 +139,7 @@ impl Slot {
             ServerRole::Chat => ModelCapabilities {
                 chat: true,
                 streaming: true,
+                vision: self.state.borrow().vision,
                 ..ModelCapabilities::default()
             },
             ServerRole::Embeddings => ModelCapabilities {
@@ -469,6 +471,43 @@ impl RuntimeManager {
 
     // ---- Models ----------------------------------------------------------
 
+    /// Attaches a vision projector (`mmproj` GGUF) the user picked to a
+    /// model, so the model can see images. Takes effect on the next start.
+    pub async fn attach_projector(&self, model_id: &str, path: &Path) -> Result<LocalModel> {
+        let path = library::canonical(path)
+            .await
+            .map_err(|err| RuntimeError::io(format!("opening {}", path.display()), err))?;
+        let header = path.clone();
+        let info = tokio::task::spawn_blocking(move || gguf::read_gguf_info(&header))
+            .await
+            .map_err(|err| RuntimeError::Internal(err.to_string()))??;
+        if info.architecture.as_deref() != Some("clip") {
+            return Err(RuntimeError::InvalidModel(
+                "this is not a vision projector (an mmproj GGUF file)".into(),
+            ));
+        }
+        let size_bytes = tokio::fs::metadata(&path)
+            .await
+            .map_err(|err| RuntimeError::io("reading the projector", err))?
+            .len();
+        let model = self
+            .library
+            .set_projector(
+                model_id,
+                Some(ProjectorFile {
+                    path: path.display().to_string(),
+                    size_bytes,
+                    sha256: None,
+                }),
+            )
+            .await?;
+        self.events.info(
+            EventCategory::Runtime,
+            format!("Vision projector added to {}", model.display_name),
+        );
+        Ok(model)
+    }
+
     pub async fn import_model(&self, path: &Path) -> Result<LocalModel> {
         let model = self.library.import(path).await?;
         self.events.info(
@@ -484,22 +523,36 @@ impl RuntimeManager {
             .find(|m| m.id == id)
             .ok_or_else(|| RuntimeError::NotFound(format!("unknown catalog model \"{id}\"")))?;
         let resolved = ResolvedFile::from_curated(&model)?;
-        self.start_download(resolved, model.display_name)
+        let projector = model
+            .projector
+            .as_ref()
+            .map(|p| ResolvedFile::from_curated_projector(&model, p))
+            .transpose()?;
+        self.start_download(resolved, model.display_name, projector)
     }
 
     pub async fn download_model(self: &Arc<Self>, request: ModelDownloadRequest) -> Result<String> {
         let resolved = catalog::resolve(&self.client, &request).await?;
         let label = format!("{} / {}", resolved.repo, resolved.file);
-        self.start_download(resolved, label)
+        self.start_download(resolved, label, None)
     }
 
-    fn start_download(self: &Arc<Self>, resolved: ResolvedFile, label: String) -> Result<String> {
+    fn start_download(
+        self: &Arc<Self>,
+        resolved: ResolvedFile,
+        label: String,
+        projector: Option<ResolvedFile>,
+    ) -> Result<String> {
         download::check_source(&resolved.url)?;
+        if let Some(projector) = &projector {
+            download::check_source(&projector.url)?;
+        }
         let dest = self.library.download_path(resolved.file_name());
         let already = self.library.list().into_iter().any(|m| {
             Path::new(&m.path) == dest.as_path()
                 && m.available
                 && m.sha256.as_deref() == Some(&resolved.expected.sha256)
+                && (projector.is_none() || m.projector.is_some())
         });
         if already {
             return Err(RuntimeError::InvalidInput(format!(
@@ -524,8 +577,35 @@ impl RuntimeManager {
                     file: resolved.file.clone(),
                     revision: resolved.revision.clone(),
                 };
-                this.library
+                let model = this
+                    .library
                     .add_downloaded(dest.clone(), source, resolved.expected.sha256.clone())
+                    .await?;
+                let Some(projector) = projector else {
+                    return Ok(model);
+                };
+                // Generic projector names (mmproj-model-f16.gguf) would
+                // collide between models.
+                let projector_dest =
+                    this.library
+                        .download_path(&format!("{}.{}", model.id, projector.file_name()));
+                download::fetch_verified(
+                    &this.client,
+                    &projector.url,
+                    &projector_dest,
+                    &projector.expected,
+                    &handle,
+                )
+                .await?;
+                this.library
+                    .set_projector(
+                        &model.id,
+                        Some(ProjectorFile {
+                            path: projector_dest.display().to_string(),
+                            size_bytes: projector.expected.size.unwrap_or_default(),
+                            sha256: Some(projector.expected.sha256.clone()),
+                        }),
+                    )
                     .await
             }
             .await;
@@ -601,6 +681,22 @@ impl RuntimeManager {
                 model.display_name, model.path
             )));
         }
+        // Only a chat server loads the projector.
+        let projector = match (&model.projector, role) {
+            (Some(projector), ServerRole::Chat) => {
+                let present = tokio::fs::metadata(&projector.path)
+                    .await
+                    .is_ok_and(|m| m.is_file() && m.len() == projector.size_bytes);
+                if !present {
+                    return Err(RuntimeError::NotFound(format!(
+                        "the vision projector of \"{}\" is missing or changed: {}",
+                        model.display_name, projector.path
+                    )));
+                }
+                Some(projector.clone())
+            }
+            _ => None,
+        };
         let (context_size, embeddings) = match role {
             ServerRole::Chat => (settings.context_size, None),
             ServerRole::Embeddings => (
@@ -613,7 +709,10 @@ impl RuntimeManager {
 
         let hardware = Self::hardware().await;
         let gpu_layers = gpu_layers(settings, binary.backend, &hardware, &model);
-        let estimate = gguf::estimate_memory(model.size_bytes, &model.gguf, context_size);
+        let mut estimate = gguf::estimate_memory(model.size_bytes, &model.gguf, context_size);
+        if let Some(projector) = &projector {
+            estimate.total_bytes += projector.size_bytes;
+        }
         let gpu_credit = if gpu_layers > 0 {
             hardware
                 .gpus
@@ -648,6 +747,7 @@ impl RuntimeManager {
             gpu_layers,
             api_key: process::random_key(),
             embeddings,
+            projector: projector.as_ref().map(|p| PathBuf::from(&p.path)),
         };
         slot.logs.clear();
         let command = (self.command_factory)(&plan);
@@ -675,6 +775,7 @@ impl RuntimeManager {
             threads: Some(threads),
             memory_bytes: None,
             error: None,
+            vision: projector.is_some(),
         });
         self.events.info(
             EventCategory::Runtime,
@@ -1097,6 +1198,7 @@ mod tests {
             added_at_ms: 0,
             managed: false,
             available: true,
+            projector: None,
         }
     }
 

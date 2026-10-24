@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::{Result, RuntimeError};
 use crate::gguf;
-use crate::types::{LocalModel, ModelSource};
+use crate::types::{LocalModel, ModelSource, ProjectorFile};
 
 const INDEX_FILE: &str = "library.json";
 const INDEX_VERSION: u32 = 1;
@@ -194,6 +194,24 @@ impl ModelLibrary {
         self.add(model).await
     }
 
+    /// Attaches (or detaches) a vision projector to a model.
+    pub async fn set_projector(
+        &self,
+        id: &str,
+        projector: Option<ProjectorFile>,
+    ) -> Result<LocalModel> {
+        {
+            let mut models = self.models.write().unwrap_or_else(PoisonError::into_inner);
+            let model = models.iter_mut().find(|m| m.id == id).ok_or_else(|| {
+                RuntimeError::NotFound(format!("model \"{id}\" is not in the library"))
+            })?;
+            model.projector = projector;
+        }
+        self.save().await?;
+        self.get(id)
+            .ok_or_else(|| RuntimeError::NotFound(format!("model \"{id}\" is not in the library")))
+    }
+
     /// Removes a model from the library. The file is deleted only when
     /// `delete_file` is set and JARVIS manages it.
     pub async fn remove(&self, id: &str, delete_file: bool) -> Result<()> {
@@ -215,6 +233,18 @@ impl ModelLibrary {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(RuntimeError::io("deleting the model file", err)),
+            }
+            // A downloaded projector goes with its model unless another
+            // model uses it too.
+            if let Some(projector) = &model.projector
+                && is_inside(Path::new(&projector.path), &self.dir).await
+                && !self.list().iter().any(|m| {
+                    m.projector
+                        .as_ref()
+                        .is_some_and(|p| p.path == projector.path)
+                })
+            {
+                let _ = tokio::fs::remove_file(&projector.path).await;
             }
         }
         Ok(())
@@ -293,6 +323,7 @@ async fn describe(
         added_at_ms: now_ms(),
         managed,
         available: true,
+        projector: None,
     })
 }
 

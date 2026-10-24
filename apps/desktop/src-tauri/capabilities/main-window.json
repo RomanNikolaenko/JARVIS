@@ -66,6 +66,23 @@
     "allow-resolve-approval",
     "allow-get-audit-log",
     "allow-verify-audit-log",
-    "allow-add-workspace-folder"
+    "allow-add-workspace-folder",
+    "allow-get-voice-status",
+    "allow-install-voice-package",
+    "allow-remove-voice-package",
+    "allow-cancel-voice-download",
+    "allow-start-listening",
+    "allow-stop-listening",
+    "allow-stop-speaking",
+    "allow-speak-text",
+    "allow-get-vision-status",
+    "allow-list-windows",
+    "allow-capture-screen",
+    "allow-capture-window",
+    "allow-capture-selection",
+    "allow-attach-image-file",
+    "allow-attach-photo",
+    "allow-discard-capture",
+    "allow-attach-projector"
   ]
 }

@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use url::Url;
 
 use crate::http::{self, ChunkDecoder, HttpClient, SseParser};
 use crate::{
-    AiError, AiProvider, ChatChunk, ChatRequest, ChatStream, EmbeddingRequest, EmbeddingResponse,
-    FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
+    AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatStream, EmbeddingRequest,
+    EmbeddingResponse, FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
 };
 
 pub struct OpenAiCompatibleProvider {
@@ -114,9 +114,10 @@ impl AiProvider for OpenAiCompatibleProvider {
         let client = self.http.get()?;
         let url = self.url("chat/completions")?;
 
+        let messages: Vec<Value> = request.messages.iter().map(message_json).collect();
         let mut body = json!({
             "model": request.model,
-            "messages": request.messages,
+            "messages": messages,
             "stream": true,
         });
         if let Some(temperature) = request.options.temperature {
@@ -313,6 +314,22 @@ impl ChunkDecoder for SseChatDecoder {
         }
         Ok(chunks)
     }
+}
+
+/// A message in the Chat Completions format; images become `image_url`
+/// content parts.
+fn message_json(message: &ChatMessage) -> Value {
+    if message.images.is_empty() {
+        return json!({ "role": message.role, "content": message.content });
+    }
+    let mut parts = vec![json!({ "type": "text", "text": message.content })];
+    parts.extend(
+        message
+            .images
+            .iter()
+            .map(|image| json!({ "type": "image_url", "image_url": { "url": image.data_url() } })),
+    );
+    json!({ "role": message.role, "content": parts })
 }
 
 #[cfg(test)]

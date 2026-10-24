@@ -91,6 +91,17 @@ pub fn fake_embedding_gguf_bytes() -> Vec<u8> {
     fake_gguf(Some(2))
 }
 
+/// A minimal GGUF header of a vision projector (architecture `clip`).
+pub fn fake_projector_gguf_bytes() -> Vec<u8> {
+    let mut out = fake_gguf(None);
+    // Same layout as `fake`: replace the architecture string.
+    let at = out.len() - 4;
+    out.truncate(at - 8);
+    out.extend_from_slice(&4u64.to_le_bytes());
+    out.extend_from_slice(b"clip");
+    out
+}
+
 /// A minimal GGUF header, optionally declaring `fake.pooling_type` (the
 /// GGUF value: 0 none, 1 mean, 2 CLS, 3 last, 4 rank).
 pub fn fake_gguf(pooling_type: Option<u32>) -> Vec<u8> {

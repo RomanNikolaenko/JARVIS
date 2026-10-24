@@ -1,0 +1,309 @@
+<header class="page-header">
+  <a class="back" routerLink="/settings"><jv-icon name="settings" [size]="14" /> Settings</a>
+  <h1 class="title">Voice</h1>
+  <p class="subtitle">Speech recognition and speech run on this computer. Nothing you say is sent anywhere.</p>
+</header>
+
+@if (!loaded()) {
+  <p class="placeholder">Loading voice settings…</p>
+} @else if (status(); as status) {
+  @if (status.unsupported) {
+    <div class="notice" role="status"><jv-icon name="warning" [size]="16" /> {{ status.unsupported }}</div>
+  }
+  @if (voice.error(); as error) {
+    <div class="notice error" role="alert"><jv-icon name="warning" [size]="16" /> {{ error.message }}</div>
+  }
+
+  <div class="voice-grid">
+    <jv-hud-panel heading="Status">
+      <dl class="facts">
+        <div>
+          <dt>Microphone</dt>
+          <dd>
+            @if (state().micOpen) {
+              <span class="live"><span class="dot"></span> On · {{ state().inputDevice ?? 'default device' }}</span>
+            } @else {
+              Off
+            }
+          </dd>
+        </div>
+        <div>
+          <dt>Recognition</dt>
+          <dd [class.ok]="status.canListen">{{ status.canListen ? 'Ready' : 'Install whisper.cpp and a model below' }}</dd>
+        </div>
+        <div>
+          <dt>Speech</dt>
+          <dd [class.ok]="status.canSpeak">{{ status.canSpeak ? 'Ready' : 'Install Piper and a voice below' }}</dd>
+        </div>
+        <div>
+          <dt>Wake word</dt>
+          <dd>
+            @if (state().wakeWordActive) {
+              <span class="live">Listening for «Джарвіс» / “Jarvis”</span>
+            } @else {
+              Off
+            }
+          </dd>
+        </div>
+      </dl>
+      @if (state().lastError; as lastError) {
+        <p class="error-text">{{ lastError }}</p>
+      }
+
+      <div class="try">
+        <button
+          type="button"
+          [class.danger]="state().micOpen && testing()"
+          (click)="testMicrophone()"
+          [disabled]="!status.canListen || (state().micOpen && !testing())">
+          <jv-icon name="mic" [size]="16" />
+          {{ state().micOpen && testing() ? 'Done' : 'Try the microphone' }}
+        </button>
+        @if (testing() && state().micOpen) {
+          <div class="meter level" aria-label="Microphone level">
+            <div class="meter-fill" [style.width.%]="levelPercent(voice.level())"></div>
+          </div>
+        }
+        @if (state().phase === 'transcribing') {
+          <span class="dim">Recognizing…</span>
+        }
+      </div>
+      @if (voice.testTranscript(); as heard) {
+        <p class="heard">
+          Heard: <q>{{ heard }}</q>
+        </p>
+      }
+      <div class="try">
+        <button type="button" (click)="testVoice('uk')" [disabled]="!status.canSpeak">
+          <jv-icon name="volume" [size]="16" /> Try Ukrainian
+        </button>
+        <button type="button" (click)="testVoice('en')" [disabled]="!status.canSpeak">
+          <jv-icon name="volume" [size]="16" /> Try English
+        </button>
+        @if (state().phase === 'speaking') {
+          <button type="button" class="ghost" (click)="voice.stopSpeaking()"><jv-icon name="stop" [size]="16" /> Stop</button>
+        }
+      </div>
+    </jv-hud-panel>
+
+    <form class="settings-form" [formGroup]="form" (ngSubmit)="save()">
+      <jv-hud-panel heading="Settings">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Microphone</span>
+            <select formControlName="inputDevice">
+              <option value="">System default</option>
+              @for (device of status.inputDevices; track device.id) {
+                <option [value]="device.id">{{ device.name }}{{ device.isDefault ? ' (default)' : '' }}</option>
+              }
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Speakers</span>
+            <select formControlName="outputDevice">
+              <option value="">System default</option>
+              @for (device of status.outputDevices; track device.id) {
+                <option [value]="device.id">{{ device.name }}{{ device.isDefault ? ' (default)' : '' }}</option>
+              }
+            </select>
+          </label>
+        </div>
+        @if (status.deviceError; as deviceError) {
+          <p class="error-text">Audio devices: {{ deviceError }}</p>
+        }
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Language</span>
+            <select formControlName="language">
+              <option value="auto">Same as the assistant</option>
+              <option value="uk">Українська</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Recognition model</span>
+            <select formControlName="sttModel">
+              <option value="">Best installed</option>
+              @for (model of installedModels(); track model.id) {
+                <option [value]="model.id">{{ model.displayName }}</option>
+              }
+            </select>
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Ukrainian voice</span>
+            <select formControlName="voiceUk">
+              <option value="">Recommended installed</option>
+              @for (v of ukVoices(); track v.id) {
+                <option [value]="v.id">{{ v.displayName }}</option>
+              }
+            </select>
+          </label>
+          @if (speakersUk().length) {
+            <label class="field">
+              <span class="field-label">Speaker</span>
+              <select formControlName="speakerUk">
+                @for (name of speakersUk(); track $index) {
+                  <option [ngValue]="$index">{{ name }}</option>
+                }
+              </select>
+            </label>
+          }
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">English voice</span>
+            <select formControlName="voiceEn">
+              <option value="">Recommended installed</option>
+              @for (v of enVoices(); track v.id) {
+                <option [value]="v.id">{{ v.displayName }}</option>
+              }
+            </select>
+          </label>
+          @if (speakersEn().length) {
+            <label class="field">
+              <span class="field-label">Speaker</span>
+              <select formControlName="speakerEn">
+                @for (name of speakersEn(); track $index) {
+                  <option [ngValue]="$index">{{ name }}</option>
+                }
+              </select>
+            </label>
+          }
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Speech rate ({{ form.controls.speechRate.value }}×)</span>
+            <input type="range" min="0.5" max="2" step="0.05" formControlName="speechRate" />
+          </label>
+          <label class="field">
+            <span class="field-label">Pause that ends a phrase ({{ form.controls.endSilenceMs.value }} ms)</span>
+            <input type="range" min="300" max="3000" step="50" formControlName="endSilenceMs" />
+          </label>
+        </div>
+
+        <label class="check">
+          <input type="checkbox" formControlName="speakReplies" />
+          <span>Read replies to spoken requests aloud</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" formControlName="wakeWord" />
+          <span>Listen for the wake word «Джарвіс»</span>
+        </label>
+        <p class="hint">
+          <jv-icon name="shield" [size]="14" />
+          The microphone then stays open and the red indicator at the top stays on. Speech is recognized locally by whisper.cpp;
+          only phrases that start with the name become requests. Saying the name also interrupts JARVIS while it speaks.
+        </p>
+
+        <div class="actions">
+          @if (saveError(); as e) {
+            <span class="save-error" role="alert">{{ e.message }}</span>
+          } @else if (savedAt() && form.pristine) {
+            <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
+          }
+          <button type="button" class="ghost" (click)="discard()" [disabled]="form.pristine || saving()">Discard</button>
+          <button type="submit" class="primary" [disabled]="form.pristine || saving() || form.invalid">
+            {{ saving() ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+      </jv-hud-panel>
+    </form>
+
+    <jv-hud-panel class="packages" heading="Engines, models and voices">
+      <p class="hint">
+        <jv-icon name="shield" [size]="14" />
+        Each file comes from its official source at a fixed version and is checked against its SHA-256 before it is installed.
+        Nothing is downloaded until you confirm it.
+      </p>
+      @for (group of groups(); track group.title) {
+        <h3 class="group-title">{{ group.title }}</h3>
+        <p class="hint">{{ group.hint }}</p>
+        <table class="table">
+          <tbody>
+            @for (pkg of group.packages; track pkg.id) {
+              <tr>
+                <td>
+                  <div>
+                    {{ pkg.displayName }}
+                    @if (pkg.recommended) {
+                      <span class="chip">recommended</span>
+                    }
+                    @if (pkg.installed) {
+                      <span class="chip ok">installed</span>
+                    }
+                  </div>
+                  <div class="dim small">{{ pkg.description }}</div>
+                  @if (downloadFor(pkg); as download) {
+                    <div class="download">
+                      <div class="download-head">
+                        <span class="dim">
+                          {{ download.phase }}
+                          @if (download.phase === 'downloading') {
+                            · {{ formatBytes(download.receivedBytes) }} / {{ formatBytes(download.totalBytes) }} ·
+                            {{ formatBytes(download.bytesPerSecond) }}/s
+                          }
+                        </span>
+                        @if (download.phase === 'downloading') {
+                          <button type="button" class="ghost small" (click)="voice.cancelDownload(download.id)">Cancel</button>
+                        }
+                      </div>
+                      <div class="meter">
+                        <div class="meter-fill" [style.width.%]="downloadPercent(download)"></div>
+                      </div>
+                    </div>
+                  } @else if (failedDownload(pkg); as failed) {
+                    <div class="error-text">{{ failed.error }}</div>
+                  }
+                  @if (confirmingInstall() === pkg.id) {
+                    <div class="confirm">
+                      <p>
+                        Download {{ formatBytes(pkg.sizeBytes) }} from <span class="mono">{{ pkg.source }}</span> (license:
+                        {{ pkg.license }}).
+                        @if (pkg.kind === 'speechEngine' || pkg.kind === 'voiceEngine') {
+                          It contains programs that JARVIS will run on this computer.
+                        }
+                      </p>
+                      <button type="button" class="primary small" (click)="install(pkg)">
+                        <jv-icon name="download" [size]="14" /> Download &amp; install
+                      </button>
+                      <button type="button" class="ghost small" (click)="confirmingInstall.set(null)">Cancel</button>
+                    </div>
+                  }
+                </td>
+                <td class="num mono">{{ formatBytes(pkg.sizeBytes) }}</td>
+                <td class="actions-cell">
+                  @if (confirmingRemoval() === pkg.id) {
+                    <button type="button" class="danger small" (click)="remove(pkg)">Delete</button>
+                    <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">Cancel</button>
+                  } @else if (pkg.installed) {
+                    <button
+                      type="button"
+                      class="ghost small"
+                      (click)="confirmingRemoval.set(pkg.id)"
+                      [disabled]="!!downloadFor(pkg)">
+                      Remove
+                    </button>
+                  } @else {
+                    <button
+                      type="button"
+                      class="small"
+                      (click)="confirmingInstall.set(pkg.id)"
+                      [disabled]="!!downloadFor(pkg) || confirmingInstall() === pkg.id">
+                      Install…
+                    </button>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      <p class="hint mono">{{ status.voiceDir }}</p>
+    </jv-hud-panel>
+  </div>
+}
