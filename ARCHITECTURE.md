@@ -392,7 +392,7 @@ notification instead of blocking publishers.
 | `create_conversation` / `update_conversation` / `delete_conversation` | `projectId?`, `temporary` / `id`, `patch` / `id` | `Conversation` / `Conversation` / – |
 | `list_facts` / `save_fact` / `delete_fact` | – / `input: FactInput` / `id` | `Fact[]` / `Fact` / – |
 | `list_projects` / `save_project` / `delete_project` | – / `input: ProjectInput` / `id` | `Project[]` / `Project` / – |
-| `list_episodes` / `clear_episodes` | `limit?`, `beforeMs?` / – | `Episode[]` / count |
+| `list_episodes` / `clear_episodes` | `limit?`, `before?: EpisodeCursor` / – | `Episode[]` / count |
 | `search_memory` | `query: SearchQuery` | `SearchHit[]` |
 | `get_memory_status` | – | `MemoryStatus` |
 | `export_memory` / `import_memory` | – (native dialogs in Rust) | `TransferReport \| null` |
@@ -403,8 +403,28 @@ notification instead of blocking publishers.
 | `pause_agent_task` / `resume_agent_task` / `cancel_agent_task` | `id` | `boolean` / – / `boolean` |
 | `clear_finished_agent_tasks` | – | count |
 | `list_pending_approvals` / `resolve_approval` | – / `id`, `approved` | `PendingApproval[]` / `boolean` |
-| `get_audit_log` / `verify_audit_log` | `limit?`, `beforeMs?` / – | `AuditEntry[]` / `AuditVerification` |
+| `get_audit_log` / `verify_audit_log` | `limit?`, `beforeId?: UUID` / – | `AuditEntry[]` / `AuditVerification` |
 | `add_workspace_folder` | – (native folder dialog in Rust) | `Settings \| null` |
+
+Audit pages follow reverse append order, matching the hash chain rather than the
+wall clock. `beforeId` is the last displayed entry's UUID, resolved through the
+existing unique index to its SQLite sequence. Equal timestamps and clock rollback
+cannot skip records. A missing cursor entry returns an error instead of silently
+reporting the end of the log. No schema or hash format migration is required.
+
+The audit view coalesces concurrent page reads and lets a first-page refresh
+supersede an older-page request. Only the current read can update entries, loading
+state or errors. Reads have a 30-second frontend deadline and settle when the
+store is destroyed; this does not cancel native commands. Audit read errors stay
+visible independently of task operations, and previously loaded rows survive a
+failed refresh. Reaching the last page prevents further older-page requests.
+
+Integrity checks use a separate coalesced request, loading indicator and error,
+with the same frontend deadline and destruction handling. They do not block task
+operations or page reads. Starting a recheck clears the previous verdict; failures
+cannot leave a stale success visible. Completed verdicts are labelled as the last
+check, since the journal may change afterward. Late native responses after a
+timeout cannot replace the result of a retry.
 
 Events: `jarvis://system-event` → `SystemEvent`; `jarvis://agent-task` →
 `AgentTask`; `jarvis://approvals` → `PendingApproval[]`.
@@ -436,13 +456,168 @@ must be granted by a capability; anything not granted is denied. See
   resume / cancel; *Tools & permissions* (workspace folders, tools by risk,
   approvals, programs, network, limits, cloud permission); *Audit log* with
   an integrity check. The **approval dialog** is part of the app shell, so a
-  request reaches the user on every screen.
+  request reaches the user on every screen. Its task link selects the requesting
+  task; decision buttons lock while IPC is pending. A failed decision stays
+  visible in that request's dialog and can be retried. Live approval events
+  take precedence over a delayed initial queue snapshot.
 - **Chat** keeps a history of saved and temporary conversations (search,
   rename, delete), a project and a pinned note per conversation, shows how
   each reply's context was built and lets the user save a message as a fact.
+- **Run as agent** sends the composer text as an agent goal with the selected
+  model (or automatic agent routing) and default task limits. The UI explains
+  that tasks are saved separately, even from temporary chats. It does not send
+  conversation history, pinned notes or project instructions. A failed start
+  preserves the draft; a successful start opens `/agents?task=<id>`. Existing
+  core permissions and approval dialogs apply unchanged.
+  Agent list and journal reads retain task events received while IPC is pending,
+  including events with equal timestamps. Only the latest list/selection request
+  can publish its response or error. A start response also preserves events
+  already received for the created task. Full event payloads are retained only
+  for the lifetime of in-flight reads, rather than in a permanent journal cache.
+  Task list, journal, status, tools and pending-approval snapshot reads have a
+  30-second frontend deadline, including recovery reads. Destruction settles
+  waiting reads without applying late results; timeout allows retry without
+  cancelling native work. Status and tool responses also respect request order.
+  A new operation batch clears its old error at startup, while sibling or parent
+  success cannot erase a failure within the batch (including automatic journal
+  selection after a list read). A live journal event remains authoritative if
+  its pending snapshot times out.
+  Agent subscriptions share one pending connection attempt. Failed initialization
+  releases partial listeners before retry; store destruction also releases active
+  or late-registering listeners. Queued callbacks from disposed attempts are ignored.
+  Each task/approval listener registration has a 30-second frontend deadline.
+  Timeout releases any partial listeners and permits retry. The native registration
+  promise retains its cleanup handler, so a listener created after timeout or
+  destruction is immediately released instead of leaking. Obsolete attempts cannot
+  overwrite a newer connection's error or recovery state.
+  Connection errors have a separate signal and a retry action on the Agents page,
+  so successful background reads cannot hide a failed live subscription.
+  Retrying a failed connection also reloads the task list and currently open
+  journal after listeners are installed. Events received during recovery take
+  precedence; selection changes and newer list requests are respected. A missing
+  task clears its stale journal. Other recovery failures keep the connection
+  error and retry action visible, and responses after disposal are ignored.
+  The app's existing visible-window health poll invalidates agent subscriptions
+  on a failed probe and retries them after a successful probe. Old approval
+  prompts are withdrawn until the pending queue is reloaded. An unresolved old
+  registration cannot block a new attempt; late callbacks remain inactive.
+  Recovery never starts, resumes or cancels a native task. Detection follows the
+  health polling interval (15 seconds while visible), not individual event silence.
+  A health IPC request has a 10-second frontend deadline, above the core's
+  six-second maximum probe budget. Concurrent callers share the same result.
+  Timeout releases the frontend request slot for the next poll; late success
+  or rejection cannot overwrite current health. Destruction settles the waiter
+  and clears its timer. This does not cancel an already-dispatched native command.
+  Resource sampling uses the same deadline mechanism and an independent request
+  slot. Metrics failures clear stale samples and appear in the Resources panel;
+  they do not mark the core offline or trigger agent reconnection. A successful
+  sample clears only the metrics error, not an outstanding health-check failure.
+  System event registration and history reads each have a 30-second frontend
+  deadline and settle on store destruction. Late listener registration releases
+  its resource, while obsolete history responses and callbacks are ignored.
+  Failed reads preserve displayed events. The Events page shows connection
+  progress and a retry action rather than an empty-log message during failure.
+  The same health poll reconnects the system event log. A fresh history snapshot
+  replaces the previous log and merges events received during loading, with live
+  events taking precedence by ID. This prevents mixing sessions after the core's
+  event counter resets. Both the displayed log and the temporary live buffer are
+  capped at 500 entries. Failed or disposed attempts release their listener and
+  cannot publish late history; concurrent callers share one connection attempt.
+  Visibility-aware polling removes interval timers while the window is hidden
+  and performs an immediate refresh when it becomes visible. This applies to
+  health/reconnection, resource metrics, runtime status and the clock. A pending
+  poll is not duplicated or cancelled; polling resumes on a later tick after it
+  settles. Destruction removes both the timer and visibility listener. Unexpected
+  polling failures go through Angular's error handler and do not stop later ticks.
+  Runtime status shares the frontend deadline helper with health and metrics
+  (10 seconds). Failed reads retain the last snapshot with an explicit stale-data
+  notice, separate from action errors. Recovery clears only the read error.
+  After a runtime action, an earlier poll is awaited before requesting a fresh
+  snapshot. Late timed-out responses cannot roll back status or invalidate the
+  model catalog. These deadlines do not limit model downloads or server startup.
+  Runtime mutations are single-flight per resource (server role, model removal,
+  download cancellation, engine selection/installation, import dialog or download
+  submission). The first command owns that resource until the command and status
+  refresh settle; further calls share its result and do not queue another action.
+  Matching UI controls are disabled and a pending notice is shown. Independent
+  resources remain usable, and failures release the resource for an explicit retry.
+  Command results report their own success independently of concurrent failures
+  or a failed follow-up status read. Action errors are retained per resource with
+  a readable action label; only retrying that resource or dismissing its message
+  clears the error. Custom model submissions clear the form only on their own
+  success and only when its values still match the submitted values.
+  SettingsStore admits one settings write at a time; overlapping submissions
+  return false without sending another full snapshot.
+  The native workspace-folder picker shares this write guard
+  for its full lifetime, preventing duplicate dialogs and overlapping settings
+  saves. Cancellation leaves settings and the tool-policy draft unchanged;
+  success publishes the returned settings and merges folders into the draft
+  without replacing other edits. Folder errors use the shared settings error.
+  Policy saves take folders from confirmed settings, not the draft, so delayed
+  agent-status refreshes cannot cause a later save to drop an added folder.
+  Native file/folder dialogs (workspace folders, runtime binary/model selection,
+  memory import/export) use the dialog plugin's callback API and a Tokio oneshot
+  bridge. Waiting for user input does not block an async executor thread. User
+  cancellation remains `None`; a dropped callback reports `unavailable`. A late
+  callback after the IPC future is dropped is safely ignored. Dropping the future
+  does not close the OS dialog, and there is no timeout on user selection.
+  A write invalidates older settings reads, and reads started during a write are
+  skipped. Failed writes
+  preserve the last confirmed settings and release the save guard for a retry.
+  The Runtime, general Settings, memory and tool-policy forms compare current values with their
+  submitted snapshot before marking the form pristine, preserving edits made
+  while the write was pending. Runtime exposes shared saving and error states.
+  Memory and tool-policy saves refresh their dependent status after success even
+  when the draft has newer edits. Tool program lists are normalized only when the
+  submitted draft is still current. Discard is disabled while these saves run.
+  Runtime release discovery is a separate read with a 30-second frontend deadline.
+  Duplicate checks for the current backend share a request; changing the backend,
+  dismissing the result, or leaving the Runtime screen invalidates its generation.
+  Late results and errors cannot replace the current release or clear a newer
+  loading state, including CPU-to-Vulkan-to-CPU changes. This does not cancel the
+  native request. Hardware recommendations apply once and never override a manual
+  backend choice. Finishing an installation clears only its own release result.
+  Background model downloads reserve their destination atomically in the native
+  registry, independent of display labels or catalog/custom entry points. Windows
+  reservations ignore path case. Cancellation retains the reservation until the
+  worker exits, protecting the shared partial file. The catalog UI disables
+  known active transfers (including verification); native reservation remains
+  authoritative when the UI snapshot is stale or labels differ.
 - **Memory screen**: facts (pin, scope, edit), projects (instructions),
   action history, search with highlights, database status, memory settings,
   export/import and deleting everything after typing a confirmation word.
+  Export, import and clear share a store-level operation guard through the native
+  dialog, database work and post-import/clear refresh. Duplicate calls of the
+  same operation share completion; conflicting calls are not queued. Transfer
+  errors have a dedicated UI signal that background reads cannot clear. Starting
+  a new transfer removes the previous report, including when the dialog is later
+  cancelled. Parallel/nested memory reads retain failures until a new request
+  batch starts, so successful siblings cannot conceal a failed import refresh.
+  Memory search has its own loading/error state, request generation and 30-second
+  frontend deadline. Identical pending queries share completion; changed queries
+  or filters supersede older reads. Editing the search draft, leaving its panel,
+  importing or clearing memory invalidates results and late responses. Empty text
+  or no selected categories sends no search request. The deadline does not cancel
+  the native search; retries cannot be overwritten by its eventual response.
+  Fact and project lists track independent read generations. Superseded reads
+  cannot replace newer lists or publish obsolete errors. Successful mutations
+  invalidate earlier reads, apply the confirmed saved/deleted item immediately,
+  and invalidate search results before refreshing dependent lists. If that
+  refresh fails, the confirmed mutation remains visible with the read error.
+  List responses received after store destruction are ignored.
+  History pagination shares duplicate pending page reads. A first-page refresh
+  supersedes an older next-page request; load-more waits for a pending refresh
+  and sends no request once the end is known. Pages deduplicate episode IDs.
+  History reads have a 30-second frontend deadline, preserving the displayed
+  list on failure. Clearing history invalidates pending pages, shares duplicate
+  deletion calls and prevents reads until deletion finishes. Import/clear-all
+  also invalidate history reads before reloading. Late results and stale errors
+  cannot restore removed history or reset a newer loading indicator.
+  History uses an exclusive `(occurredAtMs, id)` cursor, ordered by timestamp and
+  UUID descending. Equal-millisecond entries therefore span pages without gaps;
+  the cursor does not require its boundary row to still exist. Schema migration
+  3 replaces the timestamp-only history index with a matching composite index,
+  preserving rows and using the storage layer's automatic pre-upgrade backup.
 - **Models screen** (AI Model Manager): add/edit/enable/remove providers with
   a connection test, model list with capabilities and context length,
   per-category routing.
@@ -468,10 +643,11 @@ must be granted by a capability; anything not granted is denied. See
 | Unsafe code | `unsafe_code = "forbid"` workspace-wide. |
 | Observability | `tracing` + rotating files; user-facing event log. |
 
-## 6. Known limitations (Phase 1)
+## 6. Known limitations
 
-- No API keys yet: servers that require authentication cannot be used; cloud
-  providers (OpenAI, Anthropic, Gemini) need keychain-backed secrets first.
+- Cloud providers (OpenAI, Anthropic, Gemini) use API keys stored in the OS
+  credential vault. Linux requires an unlocked Secret Service session.
+  Protocol mocks are tested; live cloud API compatibility requires credentials.
 - The embedded runtime installs CPU and Vulkan builds; CUDA/ROCm/SYCL builds
   must be selected manually. The real llama.cpp engine is verified manually,
   automated tests use a fake server.
@@ -515,8 +691,27 @@ must be granted by a capability; anything not granted is denied. See
 
 See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
-- `jarvis-security`: OS keychain for secrets; process isolation for tools.
+- `jarvis-security`: process isolation for tools.
 - `jarvis-tools`: native tool calling where providers support it, MCP tools.
 - `jarvis-voice` / `jarvis-vision`: STT/TTS/VAD/wake word; screen capture via
   OS-specific adapters (including xdg-desktop-portal on Wayland).
 - `jarvis-sync`: optional Supabase sync with an offline queue.
+
+
+## Provider credentials
+
+`jarvis-security::SecretStore` separates the OS vault from test doubles.
+The production dependency enables `windows-native` on Windows and
+`sync-secret-service` with `crypto-rust` on Linux. The UI can set, check for,
+or delete a key; it cannot retrieve saved secrets. Keys are kept out of settings.
+Set/delete operations rebuild the provider registry and invalidate the model
+catalog. Existing requests retain their provider; subsequent requests use the
+updated credential. Model-list and authentication errors propagate to connection
+tests instead of being replaced by a hard-coded catalog.
+
+All core-owned native vault operations run on Tokio's blocking pool, including
+reads during initialization, registry reloads and connection tests. Registry
+reloads remain serialized and publish a complete provider snapshot only after
+credential reads finish. An OS vault prompt can delay that operation, but does
+not occupy an async executor thread. Native blocking calls cannot be forcibly
+cancelled once started.

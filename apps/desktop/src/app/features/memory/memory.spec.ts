@@ -40,6 +40,7 @@ describe('MemoryPage', () => {
     listAiModels: vi.fn(async () => []),
     getModelRoutes: vi.fn(async () => []),
     clearMemory: vi.fn(async () => undefined),
+    searchMemory: vi.fn(async () => []),
   };
 
   async function render() {
@@ -111,5 +112,31 @@ describe('MemoryPage', () => {
     const text = element.querySelector('jv-search-panel .row-text');
     expect(text?.textContent).toBe('Коли дедлайн проєкту?');
     expect(text?.querySelector('.match')?.textContent).toBe('дедлайн');
+  });
+
+  it('clears results on draft changes and does not search with all filters disabled', async () => {
+    const { fixture, element } = await render();
+    button(element, 'Search').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const store = TestBed.inject(MemoryStore);
+    store.results.set([]);
+    fixture.detectChanges();
+    const input = element.querySelector<HTMLInputElement>('input[aria-label="Search text"]')!;
+    input.value = 'atlas';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(store.results()).toBeNull();
+    store.results.set([]);
+    for (const checkbox of element.querySelectorAll<HTMLInputElement>('jv-search-panel input[type="checkbox"]')) {
+      checkbox.checked = false;
+      checkbox.dispatchEvent(new Event('change'));
+    }
+    fixture.detectChanges();
+    expect(store.results()).toBeNull();
+    api.searchMemory.mockClear();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await fixture.whenStable();
+    expect(api.searchMemory).not.toHaveBeenCalled();
   });
 });

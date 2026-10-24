@@ -67,7 +67,7 @@ describe('JarvisApi', () => {
     });
 
     await api.resolveApproval('a-1', false);
-    await api.getAuditLog(50, 1234);
+    await api.getAuditLog(50, '12345678-1234-4234-8234-123456789012');
     await api.pauseAgentTask('t-1');
     await api.startAgentTask({
       goal: 'g',
@@ -79,7 +79,7 @@ describe('JarvisApi', () => {
 
     expect(calls).toEqual([
       { cmd: 'resolve_approval', args: { id: 'a-1', approved: false } },
-      { cmd: 'get_audit_log', args: { limit: 50, beforeMs: 1234 } },
+      { cmd: 'get_audit_log', args: { limit: 50, beforeId: '12345678-1234-4234-8234-123456789012' } },
       { cmd: 'pause_agent_task', args: { id: 't-1' } },
       {
         cmd: 'start_agent_task',
@@ -87,6 +87,21 @@ describe('JarvisApi', () => {
           request: { goal: 'g', providerId: null, model: null, maxSteps: 3, maxDurationSecs: null },
         },
       },
+    ]);
+  });
+
+  it('sends the full exclusive history cursor over IPC', async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      return [];
+    });
+    const before = { occurredAtMs: 1234, id: '00000000-0000-0000-0000-000000000001' };
+    await api.listEpisodes(100, null);
+    await api.listEpisodes(100, before);
+    expect(calls).toEqual([
+      { cmd: 'list_episodes', args: { limit: 100, before: null } },
+      { cmd: 'list_episodes', args: { limit: 100, before } },
     ]);
   });
 

@@ -448,12 +448,12 @@ impl JarvisCore {
     pub async fn audit_log(
         &self,
         limit: u32,
-        before_ms: Option<i64>,
+        before_id: Option<Uuid>,
     ) -> Result<Vec<AuditEntry>, CoreError> {
         Ok(self
             .agents()
             .audit
-            .list(limit, before_ms)
+            .list(limit, before_id)
             .await
             .map_err(AgentError::from)?)
     }

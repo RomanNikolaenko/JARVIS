@@ -35,7 +35,9 @@
   </jv-hud-panel>
 
   <jv-hud-panel class="resources" heading="Resources">
-    @if (metrics(); as m) {
+    @if (metricsError(); as error) {
+      <p class="placeholder" role="status">Resource measurements unavailable: {{ error.message }} Retrying automatically.</p>
+    } @else if (metrics(); as m) {
       <div class="meter">
         <div class="meter-label">
           <span><jv-icon name="cpu" [size]="15" /> CPU</span>

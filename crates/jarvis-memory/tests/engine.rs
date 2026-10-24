@@ -67,6 +67,71 @@ fn user(text: &str) -> NewMessage {
     }
 }
 
+#[tokio::test]
+async fn episode_pages_cover_equal_timestamps_without_gaps_or_duplicates() {
+    use jarvis_memory::{Episode, EpisodeCursor};
+    let memory = MemoryEngine::in_memory().unwrap();
+    let mut episodes: Vec<_> = (1..=251)
+        .map(|id| Episode {
+            id: Uuid::from_u128(id),
+            occurred_at_ms: 1000,
+            category: "test".into(),
+            level: "info".into(),
+            summary: format!("entry {id}"),
+        })
+        .collect();
+    // Insertion order must not act as a hidden cursor tie-breaker.
+    episodes.reverse();
+    episodes.push(Episode {
+        id: Uuid::from_u128(252),
+        occurred_at_ms: i64::MAX,
+        ..episodes[0].clone()
+    });
+    episodes.push(Episode {
+        id: Uuid::from_u128(253),
+        occurred_at_ms: 999,
+        ..episodes[0].clone()
+    });
+    memory.record_episodes(episodes.clone()).await.unwrap();
+    episodes.sort_by(|a, b| {
+        b.occurred_at_ms
+            .cmp(&a.occurred_at_ms)
+            .then(b.id.cmp(&a.id))
+    });
+    let mut cursor = None;
+    let mut received = Vec::new();
+    loop {
+        let page = memory.list_episodes(17, cursor).await.unwrap();
+        if page.is_empty() {
+            break;
+        }
+        let last = page.last().unwrap();
+        cursor = Some(EpisodeCursor {
+            occurred_at_ms: last.occurred_at_ms,
+            id: last.id,
+        });
+        received.extend(page);
+        assert!(
+            received.len() <= episodes.len(),
+            "pagination must make progress"
+        );
+    }
+    assert_eq!(received, episodes);
+
+    // A cursor is a value, not a lookup of the boundary row (which can be removed).
+    let page = memory
+        .list_episodes(
+            17,
+            Some(EpisodeCursor {
+                occurred_at_ms: 1000,
+                id: Uuid::from_u128(300),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.first().unwrap().id, Uuid::from_u128(251));
+}
+
 fn assistant(text: &str) -> NewMessage {
     NewMessage {
         role: MessageRole::Assistant,

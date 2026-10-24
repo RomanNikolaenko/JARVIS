@@ -13,10 +13,14 @@ mod approvals;
 mod audit;
 mod policy;
 mod scope;
+pub mod secrets;
 mod types;
 
 pub use approvals::{ApprovalBroker, ApprovalOutcome, ApprovalRequest, PendingApproval};
 pub use audit::{AuditEntry, AuditEvent, AuditLog, AuditVerification, NewAuditEntry};
 pub use policy::{PolicyConfig, SecurityPolicy, check_ip, check_url, is_plain_program_name};
 pub use scope::{FileScope, ScopeError, is_sensitive};
+pub use secrets::{
+    InMemorySecretStore, KEYCHAIN_SERVICE, KeyringSecretStore, SecretError, SecretStore,
+};
 pub use types::{ActionRequest, Capability, PolicyDecision, RiskLevel};

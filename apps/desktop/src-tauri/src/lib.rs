@@ -6,6 +6,7 @@
 
 mod agent_commands;
 mod commands;
+mod dialogs;
 mod logging;
 mod memory_commands;
 mod runtime_commands;
@@ -50,6 +51,9 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         commands::list_ai_models,
         commands::get_model_routes,
         commands::test_ai_provider,
+        commands::set_provider_api_key,
+        commands::has_provider_api_key,
+        commands::delete_provider_api_key,
         commands::cancel_chat,
         commands::report_ui_error,
         runtime_commands::get_runtime_status,

@@ -28,11 +28,11 @@ use crate::error::{MemoryError, Result};
 use crate::store::{self, ConversationFilter, FactScope, MessageHit};
 use crate::text::{self, TermMatch, TextQuery, format_date, truncate_chars};
 use crate::types::{
-    Conversation, ConversationDetail, ConversationPatch, ConversationSummary, Episode, Fact,
-    FactInput, FactSource, MAX_FACT_CHARS, MAX_FACTS, MAX_MESSAGE_CHARS, MAX_NOTE_CHARS,
-    MAX_PROJECT_DESCRIPTION_CHARS, MAX_PROJECT_INSTRUCTIONS_CHARS, MAX_PROJECT_NAME_CHARS,
-    MAX_PROJECTS, MAX_TITLE_CHARS, MemoryCounts, MemoryKind, MessageRole, MessageStatus,
-    NewMessage, Project, ProjectInput, SearchHit, SearchQuery, StoredMessage,
+    Conversation, ConversationDetail, ConversationPatch, ConversationSummary, Episode,
+    EpisodeCursor, Fact, FactInput, FactSource, MAX_FACT_CHARS, MAX_FACTS, MAX_MESSAGE_CHARS,
+    MAX_NOTE_CHARS, MAX_PROJECT_DESCRIPTION_CHARS, MAX_PROJECT_INSTRUCTIONS_CHARS,
+    MAX_PROJECT_NAME_CHARS, MAX_PROJECTS, MAX_TITLE_CHARS, MemoryCounts, MemoryKind, MessageRole,
+    MessageStatus, NewMessage, Project, ProjectInput, SearchHit, SearchQuery, StoredMessage,
 };
 use crate::vector::{self, Embedder, SimilarityCuts, VectorIndex, VectorKind};
 
@@ -924,9 +924,13 @@ impl MemoryEngine {
             .await
     }
 
-    pub async fn list_episodes(&self, limit: u32, before_ms: Option<i64>) -> Result<Vec<Episode>> {
+    pub async fn list_episodes(
+        &self,
+        limit: u32,
+        before: Option<EpisodeCursor>,
+    ) -> Result<Vec<Episode>> {
         self.db()?
-            .call(move |conn| store::list_episodes(conn, limit.clamp(1, 1000), before_ms))
+            .call(move |conn| store::list_episodes(conn, limit.clamp(1, 1000), before))
             .await
     }
 

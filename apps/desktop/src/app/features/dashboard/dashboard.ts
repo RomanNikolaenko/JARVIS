@@ -42,6 +42,7 @@ export class Dashboard {
   protected readonly status = this.system.status;
   protected readonly health = this.system.health;
   protected readonly metrics = this.system.metrics;
+  protected readonly metricsError = this.system.metricsError;
   protected readonly platform = this.system.platform;
   protected readonly diagnosticOnly = this.chat.diagnosticOnly;
   protected readonly generalRoute = this.models.generalRoute;

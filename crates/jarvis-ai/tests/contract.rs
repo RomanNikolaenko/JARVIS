@@ -206,13 +206,16 @@ fn openai_handler(scenario: Scenario) -> Handler {
 
 fn provider_at(backend: &Backend, base_url: String) -> Arc<dyn AiProvider> {
     HttpProviderFactory::new()
-        .create(&ProviderConfig {
-            id: ProviderId::new("test"),
-            backend: backend.kind,
-            display_name: "Test".into(),
-            base_url,
-            enabled: true,
-        })
+        .create(
+            &ProviderConfig {
+                id: ProviderId::new("test"),
+                backend: backend.kind,
+                display_name: "Test".into(),
+                base_url,
+                enabled: true,
+            },
+            None,
+        )
         .expect("provider")
 }
 
@@ -523,4 +526,50 @@ async fn openai_compatible_reports_fixed_capabilities_when_configured() {
     assert!(!models.is_empty());
     // The id guess would call the chat model a chat model; the fixed value wins.
     assert!(models.iter().all(|m| m.capabilities == embeddings_only));
+}
+
+#[tokio::test]
+async fn cloud_providers_propagate_model_listing_and_health_errors() {
+    for backend in [ProviderBackend::Anthropic, ProviderBackend::Gemini] {
+        for status in [401, 403, 429, 500] {
+            let server = MockServer::start(move |_| {
+                Reply::Json(status, json!({"error":{"message":"rejected"}}))
+            })
+            .await;
+            let provider = HttpProviderFactory::new()
+                .create(
+                    &ProviderConfig {
+                        id: ProviderId::new("cloud-test"),
+                        backend,
+                        display_name: "Cloud test".into(),
+                        base_url: server.url("/v1"),
+                        enabled: true,
+                    },
+                    Some("test-key"),
+                )
+                .expect("provider");
+            assert!(
+                provider.list_models().await.is_err(),
+                "{backend:?}: {status}"
+            );
+            assert!(
+                provider.health_check().await.is_err(),
+                "{backend:?}: {status}"
+            );
+        }
+        let addr = unused_addr().await;
+        let provider = HttpProviderFactory::new()
+            .create(
+                &ProviderConfig {
+                    id: ProviderId::new("offline-test"),
+                    backend,
+                    display_name: "Offline".into(),
+                    base_url: format!("http://{addr}/v1"),
+                    enabled: true,
+                },
+                None,
+            )
+            .expect("provider");
+        assert!(provider.list_models().await.is_err());
+    }
 }

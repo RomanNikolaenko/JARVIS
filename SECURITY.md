@@ -59,11 +59,17 @@ main window make the core send a `GET` request to a URL the user typed (no
 conversation data). This is intended; the command is granted to the main
 window only.
 
+## Provider credentials
+
+API keys are stored in Windows Credential Manager or Linux Secret Service,
+not in `config.toml`. The UI accepts a new key but cannot read back saved keys.
+Changing or deleting a key rebuilds providers for subsequent requests;
+already-running requests retain their original provider. A locked or unavailable
+vault is reported as an error. Connection tests contact the selected endpoint
+without sending conversation content, including when cloud chat is disabled.
+
 ## Planned controls (not implemented yet)
 
-- Secrets (API keys, tokens) in the OS keychain (Windows Credential Manager,
-  Secret Service on Linux); never in `config.toml`, logs or the UI
-  (remaining Phase 2 work, required before cloud providers).
 - Visible indicators and explicit consent for microphone, camera and screen
   capture (Phase 6).
 - Encryption of the memory database at rest with a key in the OS keychain.

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import type { MemoryKind, SearchHit } from '@jarvis/shared-types';
 
@@ -31,7 +31,17 @@ export class SearchPanel {
   protected readonly text = signal('');
   protected readonly selected = signal<ReadonlySet<MemoryKind>>(new Set(KINDS.map((k) => k.id)));
 
+  constructor() {
+    inject(DestroyRef).onDestroy(() => this.store.clearSearch());
+  }
+
+  protected onText(value: string): void {
+    this.text.set(value);
+    this.store.clearSearch();
+  }
+
   protected toggle(kind: MemoryKind, on: boolean): void {
+    this.store.clearSearch();
     this.selected.update((current) => {
       const next = new Set(current);
       if (on) {

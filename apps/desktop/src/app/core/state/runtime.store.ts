@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import type {
   CuratedModel,
   HardwareInfo,
@@ -14,11 +14,14 @@ import type {
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
+import { withRequestDeadline } from '../ipc/request-deadline';
 import { ModelsStore } from './models.store';
 import { SettingsStore } from './settings.store';
 
 /** Dedicated GPU memory from which the Vulkan build is recommended. */
 export const VULKAN_MIN_VRAM_BYTES = 4 * 1024 ** 3;
+export const RUNTIME_STATUS_TIMEOUT_MS = 10_000;
+export const RUNTIME_RELEASE_TIMEOUT_MS = 30_000;
 
 /**
  * Vulkan when a Vulkan loader and a GPU with enough dedicated memory exist,
@@ -39,19 +42,30 @@ function settling(server: ServerState): boolean {
 @Injectable({ providedIn: 'root' })
 export class RuntimeStore {
   private readonly api = inject(JarvisApi);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly models = inject(ModelsStore);
   private readonly settingsStore = inject(SettingsStore);
   /** Last seen phase of the chat and the embedding server. */
   private lastPhases: [ServerPhase, ServerPhase] | null = null;
-  private refreshing = false;
+  private refreshing: Promise<void> | null = null;
+  private releaseEpoch = 0;
+  private releaseRequest: { backend: RuntimeBackend; promise: Promise<void> } | null = null;
+  private readonly commands = new Map<string, Promise<boolean>>();
+  private readonly pendingCommands = signal<ReadonlySet<string>>(new Set());
+  readonly commandPending = computed(() => this.pendingCommands().size > 0);
+
+  isPending(key: string): boolean {
+    return this.pendingCommands().has(key);
+  }
 
   readonly status = signal<RuntimeStatus | null>(null);
   readonly hardware = signal<HardwareInfo | null>(null);
   readonly curated = signal<readonly CuratedModel[]>([]);
   readonly release = signal<RuntimeRelease | null>(null);
   readonly checkingRelease = signal(false);
-  /** Last failed action, shown on the screen. */
-  readonly error = signal<IpcError | null>(null);
+  /** Failures remain visible until the same resource is retried or dismissed. */
+  readonly actionErrors = signal<readonly { key: string; label: string; error: IpcError }[]>([]);
+  readonly statusError = signal<IpcError | null>(null);
 
   /** The chat model server. */
   readonly server = computed(() => this.status()?.server ?? null);
@@ -70,15 +84,29 @@ export class RuntimeStore {
     );
   });
   readonly settings = computed<RuntimeSettings | null>(() => this.settingsStore.settings()?.runtime ?? null);
+  readonly savingSettings = this.settingsStore.saving;
+  readonly settingsError = this.settingsStore.error;
 
-  async refresh(): Promise<void> {
-    if (this.refreshing) {
-      return;
-    }
-    this.refreshing = true;
+  refresh(): Promise<void> {
+    if (this.destroyRef.destroyed) return Promise.resolve();
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.readStatus().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async readStatus(): Promise<void> {
     try {
-      const status = await this.api.getRuntimeStatus();
+      const status = await withRequestDeadline(
+        () => this.api.getRuntimeStatus(),
+        RUNTIME_STATUS_TIMEOUT_MS,
+        'Runtime status',
+        this.destroyRef
+      );
+      if (this.destroyRef.destroyed) return;
       this.status.set(status);
+      this.statusError.set(null);
       const phases: [ServerPhase, ServerPhase] = [status.server.phase, status.embeddingServer.phase];
       // The set of AI models changes when a local model starts or stops.
       const last = this.lastPhases;
@@ -90,64 +118,113 @@ export class RuntimeStore {
       }
       this.lastPhases = phases;
     } catch (error) {
-      this.error.set(IpcError.from(error));
-    } finally {
-      this.refreshing = false;
+      if (!this.destroyRef.destroyed) this.statusError.set(IpcError.from(error));
     }
   }
 
   async loadStatic(): Promise<void> {
-    await this.run(async () => {
+    await this.command('catalog', 'Load model catalog', async () => {
       const [hardware, curated] = await Promise.all([this.api.getHardwareInfo(), this.api.listCuratedModels()]);
       this.hardware.set(hardware);
       this.curated.set(curated);
     });
   }
 
-  async checkRelease(backend: RuntimeBackend): Promise<void> {
-    this.checkingRelease.set(true);
+  clearRelease(): void {
+    this.releaseEpoch++;
+    this.releaseRequest = null;
     this.release.set(null);
-    await this.run(async () => this.release.set(await this.api.checkRuntimeRelease(backend)));
     this.checkingRelease.set(false);
+    this.dismissError('release');
+  }
+
+  checkRelease(backend: RuntimeBackend): Promise<void> {
+    if (this.destroyRef.destroyed) return Promise.resolve();
+    if (this.releaseRequest?.backend === backend) return this.releaseRequest.promise;
+    this.clearRelease();
+    const epoch = this.releaseEpoch;
+    this.checkingRelease.set(true);
+    const promise = this.readRelease(backend, epoch);
+    this.releaseRequest = { backend, promise };
+    return promise;
+  }
+
+  private async readRelease(backend: RuntimeBackend, epoch: number): Promise<void> {
+    try {
+      const release = await withRequestDeadline(
+        () => this.api.checkRuntimeRelease(backend),
+        RUNTIME_RELEASE_TIMEOUT_MS,
+        'Runtime release',
+        this.destroyRef
+      );
+      if (epoch === this.releaseEpoch && !this.destroyRef.destroyed) this.release.set(release);
+    } catch (error) {
+      if (epoch === this.releaseEpoch && !this.destroyRef.destroyed) {
+        this.actionErrors.update((errors) => [
+          ...errors,
+          { key: 'release', label: 'Check runtime release', error: IpcError.from(error) },
+        ]);
+      }
+    } finally {
+      if (epoch === this.releaseEpoch) {
+        this.releaseRequest = null;
+        this.checkingRelease.set(false);
+      }
+    }
   }
 
   async install(release: RuntimeRelease): Promise<void> {
-    await this.run(async () => {
+    await this.command('engine', 'Install runtime', async () => {
       await this.api.installRuntime(release);
-      this.release.set(null);
+      if (this.release() === release) this.release.set(null);
     });
   }
 
-  selectBinary(): Promise<void> {
-    return this.run(() => this.api.selectRuntimeBinary());
+  selectBinary(): Promise<boolean> {
+    return this.command('engine', 'Select runtime binary', () => this.api.selectRuntimeBinary());
   }
 
-  importModel(): Promise<void> {
-    return this.run(() => this.api.importModel());
+  importModel(): Promise<boolean> {
+    return this.command('import', 'Import model', () => this.api.importModel());
   }
 
-  downloadCurated(id: string): Promise<void> {
-    return this.run(() => this.api.downloadCuratedModel(id));
+  downloadCurated(id: string): Promise<boolean> {
+    if (this.isCuratedDownloading(id)) return Promise.resolve(false);
+    return this.command(`curated:${id}`, `Download ${id}`, () => this.api.downloadCuratedModel(id));
   }
 
-  downloadModel(request: ModelDownloadRequest): Promise<void> {
-    return this.run(() => this.api.downloadModel(request));
+  isCuratedDownloading(id: string): boolean {
+    const model = this.curated().find((entry) => entry.id === id);
+    if (!model) return false;
+    const labels = [model.displayName, `${model.repo} / ${model.file}`];
+    return (
+      this.status()?.downloads.some(
+        (download) =>
+          download.kind === 'model' &&
+          labels.includes(download.label) &&
+          !['completed', 'failed', 'cancelled'].includes(download.phase)
+      ) ?? false
+    );
   }
 
-  cancelDownload(id: string): Promise<void> {
-    return this.run(() => this.api.cancelDownload(id));
+  downloadModel(request: ModelDownloadRequest): Promise<boolean> {
+    return this.command('custom-download', `Download ${request.file}`, () => this.api.downloadModel(request));
   }
 
-  removeModel(id: string, deleteFile: boolean): Promise<void> {
-    return this.run(() => this.api.removeModel(id, deleteFile));
+  cancelDownload(id: string): Promise<boolean> {
+    return this.command(`download:${id}`, 'Cancel download', () => this.api.cancelDownload(id));
   }
 
-  start(modelId: string, role: ServerRole): Promise<void> {
-    return this.run(() => this.api.startLocalModel(modelId, role));
+  removeModel(id: string, deleteFile: boolean): Promise<boolean> {
+    return this.command(`model:${id}`, `Remove ${id}`, () => this.api.removeModel(id, deleteFile));
   }
 
-  stop(role: ServerRole): Promise<void> {
-    return this.run(() => this.api.stopLocalModel(role));
+  start(modelId: string, role: ServerRole): Promise<boolean> {
+    return this.command(`server:${role}`, `Start ${role} model`, () => this.api.startLocalModel(modelId, role));
+  }
+
+  stop(role: ServerRole): Promise<boolean> {
+    return this.command(`server:${role}`, `Stop ${role} model`, () => this.api.stopLocalModel(role));
   }
 
   async saveSettings(runtime: RuntimeSettings): Promise<boolean> {
@@ -155,14 +232,44 @@ export class RuntimeStore {
     return settings ? this.settingsStore.save({ ...settings, runtime }) : false;
   }
 
-  /** Runs an action, records its error and refreshes the status. */
-  private async run(action: () => Promise<unknown>): Promise<void> {
-    this.error.set(null);
+  /** One mutation per resource until its result and following status read settle. */
+  private command(key: string, label: string, action: () => Promise<unknown>): Promise<boolean> {
+    if (this.destroyRef.destroyed) return Promise.resolve(false);
+    const current = this.commands.get(key);
+    if (current) return current;
+    this.pendingCommands.update((keys) => new Set([...keys, key]));
+    const pending = this.run(key, label, action).finally(() => {
+      this.commands.delete(key);
+      this.pendingCommands.update((keys) => {
+        const next = new Set(keys);
+        next.delete(key);
+        return next;
+      });
+    });
+    this.commands.set(key, pending);
+    return pending;
+  }
+
+  dismissError(key: string): void {
+    this.actionErrors.update((errors) => errors.filter((entry) => entry.key !== key));
+  }
+
+  /** Returns this action's outcome independently of other actions and status reads. */
+  private async run(key: string, label: string, action: () => Promise<unknown>): Promise<boolean> {
+    this.dismissError(key);
+    let succeeded = true;
     try {
       await action();
     } catch (error) {
-      this.error.set(IpcError.from(error));
+      succeeded = false;
+      if (!this.destroyRef.destroyed) {
+        this.actionErrors.update((errors) => [...errors, { key, label, error: IpcError.from(error) }]);
+      }
     }
+    // A poll started before the action may return its old state. Wait for it,
+    // then request a snapshot taken after the action completed.
+    if (this.refreshing) await this.refreshing;
     await this.refresh();
+    return succeeded && !this.destroyRef.destroyed;
   }
 }

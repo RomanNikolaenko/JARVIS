@@ -71,11 +71,13 @@ pub async fn select_runtime_binary<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<RuntimeBinary>> {
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Select llama-server")
-        .blocking_pick_file();
+    let picked = crate::dialogs::selection(|complete| {
+        app.dialog()
+            .file()
+            .set_title("Select llama-server")
+            .pick_file(complete)
+    })
+    .await?;
     let Some(picked) = picked else {
         return Ok(None);
     };
@@ -97,12 +99,14 @@ pub async fn import_model<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<LocalModel>> {
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Import a GGUF model")
-        .add_filter("GGUF model", &["gguf"])
-        .blocking_pick_file();
+    let picked = crate::dialogs::selection(|complete| {
+        app.dialog()
+            .file()
+            .set_title("Import a GGUF model")
+            .add_filter("GGUF model", &["gguf"])
+            .pick_file(complete)
+    })
+    .await?;
     let Some(picked) = picked else {
         return Ok(None);
     };

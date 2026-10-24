@@ -21,14 +21,23 @@ pub enum ProviderBackend {
     /// OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`, ...):
     /// LM Studio, llama.cpp server, vLLM, LocalAI, ...
     OpenAiCompatible,
+    /// Official OpenAI API (`https://api.openai.com/v1`).
+    OpenAi,
+    /// Anthropic Messages API (`https://api.anthropic.com/v1`).
+    Anthropic,
+    /// Google Gemini API (`https://generativelanguage.googleapis.com/v1beta`).
+    Gemini,
 }
 
 impl ProviderBackend {
-    /// Usual local endpoint of the backend's reference server.
+    /// Usual endpoint of the backend's reference server.
     pub fn default_base_url(self) -> &'static str {
         match self {
             Self::Ollama => "http://127.0.0.1:11434",
             Self::OpenAiCompatible => "http://127.0.0.1:1234/v1",
+            Self::OpenAi => "https://api.openai.com/v1",
+            Self::Anthropic => "https://api.anthropic.com/v1",
+            Self::Gemini => "https://generativelanguage.googleapis.com/v1beta",
         }
     }
 }

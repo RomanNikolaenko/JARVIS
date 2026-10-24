@@ -70,11 +70,16 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
               <span class="queue">1 of {{ count() }} waiting</span>
             }
             @if (approval.taskId) {
-              <a class="task-link" routerLink="/agents">Open the task</a>
+              <a class="task-link" routerLink="/agents" [queryParams]="{ task: approval.taskId }">Open the task</a>
             }
-            <button #deny type="button" class="ghost" (click)="decide(approval.id, false)">Deny</button>
-            <button type="button" class="primary" (click)="decide(approval.id, true)">Allow once</button>
+            <button #deny type="button" class="ghost" [disabled]="deciding()" (click)="decide(approval.id, false)">Deny</button>
+            <button type="button" class="primary" [disabled]="deciding()" (click)="decide(approval.id, true)">Allow once</button>
           </footer>
+          @if (decisionError(); as error) {
+            @if (error.id === approval.id) {
+              <p class="warning" role="alert">{{ error.message }}</p>
+            }
+          }
         </section>
       </div>
     }
@@ -214,6 +219,8 @@ export class ApprovalDialog {
   private readonly store = inject(AgentsStore);
   private readonly now = signal(Date.now());
   private readonly denyButton = viewChild<ElementRef<HTMLButtonElement>>('deny');
+  protected readonly deciding = signal(false);
+  protected readonly decisionError = signal<{ id: string; message: string } | null>(null);
 
   protected readonly current = computed(() => this.store.approvals()[0] ?? null);
   protected readonly count = computed(() => this.store.approvals().length);
@@ -244,7 +251,15 @@ export class ApprovalDialog {
     return RISK_LABEL[risk];
   }
 
-  protected decide(id: string, approved: boolean): void {
-    void this.store.resolve(id, approved);
+  protected async decide(id: string, approved: boolean): Promise<void> {
+    if (this.deciding()) return;
+    this.deciding.set(true);
+    this.decisionError.set(null);
+    try {
+      const error = await this.store.resolve(id, approved);
+      if (error) this.decisionError.set({ id, message: error.message });
+    } finally {
+      this.deciding.set(false);
+    }
   }
 }

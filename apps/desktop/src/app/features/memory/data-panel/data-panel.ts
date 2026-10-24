@@ -81,19 +81,24 @@ export class DataPanel {
   }
 
   protected async save(): Promise<void> {
+    if (this.saving()) return;
     const current = this.settingsStore.settings();
     const memory = this.form();
     if (!current || !memory) {
       return;
     }
+    this.saved.set(false);
     if (await this.settingsStore.save({ ...current, memory })) {
-      this.dirty.set(false);
-      this.saved.set(true);
+      if (JSON.stringify(this.form()) === JSON.stringify(memory)) {
+        this.dirty.set(false);
+        this.saved.set(true);
+      }
       void this.store.refreshStatus();
     }
   }
 
   protected discard(): void {
+    if (this.saving()) return;
     const settings = this.settingsStore.settings();
     this.dirty.set(false);
     this.saved.set(false);
@@ -103,6 +108,7 @@ export class DataPanel {
   }
 
   protected async clearAll(): Promise<void> {
+    if (this.store.busy()) return;
     if (this.confirmation() !== CLEAR_WORD) {
       return;
     }

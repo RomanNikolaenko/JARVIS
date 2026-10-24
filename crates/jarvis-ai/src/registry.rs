@@ -122,7 +122,7 @@ mod tests {
         let factory = HttpProviderFactory::new();
         let configured: Vec<Arc<dyn AiProvider>> = ProviderConfig::defaults()
             .iter()
-            .map(|c| factory.create(c).expect("provider"))
+            .map(|c| factory.create(c, None).expect("provider"))
             .collect();
         let mut all: Vec<Arc<dyn AiProvider>> = vec![Arc::new(EchoProvider::new())];
         all.extend(configured);

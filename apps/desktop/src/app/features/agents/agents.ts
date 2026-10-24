@@ -1,4 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute } from '@angular/router';
+import { combineLatest, from } from 'rxjs';
 
 import { AgentsStore } from '../../core/state/agents.store';
 import { Icon, type IconName } from '../../shared/icon/icon';
@@ -33,6 +36,15 @@ export class AgentsPage {
 
   constructor() {
     void this.store.start();
-    void this.store.loadAll();
+    // Select after initial loading so its success cannot erase a missing-link error.
+    combineLatest([inject(ActivatedRoute).queryParamMap, from(this.store.loadAll())])
+      .pipe(takeUntilDestroyed())
+      .subscribe(([params]) => {
+        const id = params.get('task');
+        if (id) {
+          this.tab.set('tasks');
+          void this.store.select(id);
+        }
+      });
   }
 }

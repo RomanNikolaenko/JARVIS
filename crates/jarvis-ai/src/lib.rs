@@ -11,10 +11,12 @@
 //! a [`ProviderFactory`]; their privacy class ([`DataLocality`]) is derived
 //! from the endpoint URL, never from user input.
 
+mod anthropic;
 mod config;
 mod echo;
 mod error;
 mod factory;
+mod gemini;
 mod http;
 mod ollama;
 mod openai;
@@ -22,12 +24,14 @@ mod provider;
 mod registry;
 mod types;
 
+pub use anthropic::AnthropicProvider;
 pub use config::{
     ProviderBackend, ProviderConfig, classify_locality, is_valid_provider_id, parse_base_url,
 };
 pub use echo::EchoProvider;
 pub use error::AiError;
 pub use factory::{HttpProviderFactory, ProviderFactory};
+pub use gemini::GeminiProvider;
 pub use http::HttpClient;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiCompatibleProvider;

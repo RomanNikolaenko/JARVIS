@@ -18,7 +18,7 @@
 
 <div class="layout">
   <jv-hud-panel class="providers" heading="Providers">
-    <button panelActions type="button" class="ghost small" (click)="startAdd()">+ Add</button>
+    <button panelActions type="button" class="ghost small" (click)="startAdd()" [disabled]="saving() || testing()">+ Add</button>
 
     <ul class="provider-list">
       @for (row of rows(); track row.config.id) {
@@ -51,7 +51,9 @@
                 <button type="button" class="ghost small" (click)="toggle(row.config)">
                   {{ row.config.enabled ? 'Disable' : 'Enable' }}
                 </button>
-                <button type="button" class="ghost small" (click)="startEdit(row.config)">Edit</button>
+                <button type="button" class="ghost small" (click)="startEdit(row.config)" [disabled]="saving() || testing()">
+                  Edit
+                </button>
                 <button type="button" class="ghost small" (click)="askRemove(row.config)">Remove</button>
               }
             </div>
@@ -64,56 +66,74 @@
 
     @if (editingId() !== null) {
       <form class="provider-form" [formGroup]="form" (ngSubmit)="saveProvider()">
-        <h3>{{ editingId() ? 'Edit provider' : 'Add provider' }}</h3>
-        <div class="form-grid">
-          <label class="field">
-            <span class="field-label">Name</span>
-            <input type="text" formControlName="displayName" placeholder="e.g. Ollama on GPU box" />
-          </label>
-          <label class="field">
-            <span class="field-label">Server type</span>
-            <select formControlName="backend" (change)="onBackendChange()">
-              <option value="ollama">Ollama</option>
-              <option value="openAiCompatible">OpenAI-compatible (LM Studio, llama.cpp, vLLM…)</option>
-            </select>
-          </label>
-          <label class="field wide">
-            <span class="field-label">Base URL</span>
-            <input type="url" formControlName="baseUrl" spellcheck="false" />
-            @if (form.controls.baseUrl.invalid && form.controls.baseUrl.touched) {
-              <span class="field-error">Enter an http:// or https:// URL</span>
-            }
-          </label>
-        </div>
-        <p class="hint">
-          <jv-icon name="shield" [size]="14" />
-          Addresses on this device or the local network are treated as local. Any other host is a cloud provider and receives data
-          only if allowed in Settings → Privacy. API keys are not supported yet.
-        </p>
-
-        @if (testResult(); as result) {
-          <div class="test-result" [class.bad]="!result.reachable">
-            @if (result.reachable) {
-              <jv-icon name="check" [size]="15" />
-              Connected in {{ result.latencyMs }} ms · {{ result.models.length }} models ·
-              {{ localityLabels[result.locality] }}
-            } @else {
-              <jv-icon name="warning" [size]="15" />
-              {{ result.error }}
+        <fieldset [disabled]="saving() || testing()">
+          <h3>{{ editingId() ? 'Edit provider' : 'Add provider' }}</h3>
+          <div class="form-grid">
+            <label class="field">
+              <span class="field-label">Name</span>
+              <input type="text" formControlName="displayName" placeholder="e.g. Ollama on GPU box" />
+            </label>
+            <label class="field">
+              <span class="field-label">Server type</span>
+              <select formControlName="backend" (change)="onBackendChange()">
+                <option value="ollama">Ollama</option>
+                <option value="openAi">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="openAiCompatible">OpenAI-compatible (LM Studio, llama.cpp, vLLM…)</option>
+              </select>
+            </label>
+            <label class="field wide">
+              <span class="field-label">Base URL</span>
+              <input type="url" formControlName="baseUrl" spellcheck="false" />
+              @if (form.controls.baseUrl.invalid && form.controls.baseUrl.touched) {
+                <span class="field-error">Enter an http:// or https:// URL</span>
+              }
+            </label>
+            <label class="field wide">
+              <span class="field-label">API key</span>
+              <input
+                type="password"
+                formControlName="apiKey"
+                autocomplete="new-password"
+                spellcheck="false"
+                [placeholder]="hasStoredKey() ? 'Leave blank to keep the saved key' : 'Optional for local servers'" />
+              <span class="hint">Stored in your operating system's credential vault.</span>
+            </label>
+            @if (hasStoredKey()) {
+              <button type="button" class="danger small" (click)="deleteKey()">Delete saved API key</button>
             }
           </div>
-        }
-        @if (testError(); as error) {
-          <div class="test-result bad"><jv-icon name="warning" [size]="15" /> {{ error }}</div>
-        }
+          <p class="hint">
+            <jv-icon name="shield" [size]="14" />
+            Addresses on this device or the local network are treated as local. Any other host is a cloud provider and receives
+            data for chats only if allowed in Settings → Privacy. Testing a connection contacts the selected server.
+          </p>
 
-        <div class="form-actions">
-          <button type="button" class="ghost" (click)="cancelEdit()">Cancel</button>
-          <button type="button" (click)="test()" [disabled]="testing()">
-            {{ testing() ? 'Testing…' : 'Test connection' }}
-          </button>
-          <button type="submit" class="primary">Save</button>
-        </div>
+          @if (testResult(); as result) {
+            <div class="test-result" [class.bad]="!result.reachable">
+              @if (result.reachable) {
+                <jv-icon name="check" [size]="15" />
+                Connected in {{ result.latencyMs }} ms · {{ result.models.length }} models ·
+                {{ localityLabels[result.locality] }}
+              } @else {
+                <jv-icon name="warning" [size]="15" />
+                {{ result.error }}
+              }
+            </div>
+          }
+          @if (testError(); as error) {
+            <div class="test-result bad"><jv-icon name="warning" [size]="15" /> {{ error }}</div>
+          }
+
+          <div class="form-actions">
+            <button type="button" class="ghost" (click)="cancelEdit()">Cancel</button>
+            <button type="button" (click)="test()" [disabled]="testing()">
+              {{ testing() ? 'Testing…' : 'Test connection' }}
+            </button>
+            <button type="submit" class="primary">{{ saving() ? 'Saving…' : 'Save' }}</button>
+          </div>
+        </fieldset>
       </form>
     }
   </jv-hud-panel>

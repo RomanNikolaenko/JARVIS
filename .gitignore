@@ -20,3 +20,7 @@ Thumbs.db
 *.log
 .env
 .env.*
+
+# Local tools: Claude Code (settings, worktrees) and Visual Studio caches
+.claude/
+.vs/

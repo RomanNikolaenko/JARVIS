@@ -85,8 +85,37 @@ pub async fn get_model_routes(state: State<'_, AppState>) -> CommandResult<Vec<R
 pub async fn test_ai_provider(
     state: State<'_, AppState>,
     config: ProviderConfig,
+    api_key: Option<String>,
 ) -> CommandResult<ProviderTestResult> {
-    Ok(state.core().test_provider(config).await?)
+    Ok(state.core().test_provider_with_key(config, api_key).await?)
+}
+
+#[tauri::command]
+pub async fn set_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+    api_key: String,
+) -> CommandResult<()> {
+    Ok(state
+        .core()
+        .set_provider_api_key(&provider_id, &api_key)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn has_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> CommandResult<bool> {
+    Ok(state.core().has_provider_api_key(&provider_id).await?)
+}
+
+#[tauri::command]
+pub async fn delete_provider_api_key(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> CommandResult<()> {
+    Ok(state.core().delete_provider_api_key(&provider_id).await?)
 }
 
 /// Returns `false` if the request is not running (already finished or unknown).

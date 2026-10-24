@@ -26,7 +26,11 @@
 </header>
 
 @if (error(); as e) {
-  <p class="error">Cannot subscribe to events: {{ e.message }}</p>
+  <p class="error" role="alert">Event log unavailable: {{ e.message }}</p>
+  <button type="button" (click)="store.start()" [disabled]="store.connecting()">Retry connection</button>
+}
+@if (store.connecting()) {
+  <p class="placeholder" role="status">Connecting to the event log…</p>
 }
 
 <jv-hud-panel [heading]="filtered().length + ' of ' + total() + ' events'">
@@ -41,7 +45,7 @@
         </li>
       }
     </ul>
-  } @else {
+  } @else if (!store.connecting() && !error()) {
     <p class="placeholder">No events match the current filters.</p>
   }
 </jv-hud-panel>

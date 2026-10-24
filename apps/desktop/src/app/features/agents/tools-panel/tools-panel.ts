@@ -121,6 +121,7 @@ export class ToolsPanel {
     const next = structuredClone(current);
     change(next);
     this.draft.set(next);
+    this.savedAt.set(null);
   }
 
   protected folderAvailable(path: string): boolean {
@@ -129,7 +130,8 @@ export class ToolsPanel {
 
   /** Folders change right away (the dialog runs in the core). */
   protected async addFolder(): Promise<void> {
-    await this.store.addWorkspaceFolder();
+    if (this.saving()) return;
+    if (!(await this.store.addWorkspaceFolder())) return;
     // The folder is saved at once; other unsaved edits in the form stay.
     const folders = this.settingsStore.settings()?.tools.workspaceFolders;
     if (folders) {
@@ -138,6 +140,7 @@ export class ToolsPanel {
   }
 
   protected async removeFolder(path: string): Promise<void> {
+    if (this.saving()) return;
     const settings = this.settingsStore.settings();
     if (!settings) {
       return;
@@ -150,6 +153,7 @@ export class ToolsPanel {
   }
 
   protected async save(): Promise<void> {
+    if (this.saving()) return;
     const settings = this.settingsStore.settings();
     const draft = this.draft();
     if (!settings || !draft) {
@@ -157,18 +161,27 @@ export class ToolsPanel {
     }
     const next: Settings = {
       ...settings,
-      tools: { ...draft.tools, allowedPrograms: parsePrograms(draft.programs) },
+      tools: {
+        ...draft.tools,
+        // Folder actions persist immediately; the draft may still await a status refresh.
+        workspaceFolders: settings.tools.workspaceFolders,
+        allowedPrograms: parsePrograms(draft.programs),
+      },
       agents: draft.agents,
       privacy: { ...settings.privacy, allowCloudAgents: draft.allowCloudAgents },
     };
+    this.savedAt.set(null);
     if (await this.settingsStore.save(next)) {
-      this.draft.set(draftOf(this.settingsStore.settings() ?? next));
-      this.savedAt.set(Date.now());
+      if (JSON.stringify(this.draft()) === JSON.stringify(draft)) {
+        this.draft.set(draftOf(this.settingsStore.settings() ?? next));
+        this.savedAt.set(Date.now());
+      }
       await Promise.all([this.store.loadTools(), this.store.refreshStatus()]);
     }
   }
 
   protected discard(): void {
+    if (this.saving()) return;
     const settings = this.settingsStore.settings();
     if (settings) {
       this.draft.set(draftOf(settings));

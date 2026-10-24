@@ -90,6 +90,11 @@ model: string | null, indexed: number, pending: number, detail: string | null, }
 export type Episode = { id: string, occurredAtMs: number, category: string, level: string, summary: string, };
 
 /**
+ * Exclusive history cursor. The ID breaks ties between equal timestamps.
+ */
+export type EpisodeCursor = { occurredAtMs: number, id: string, };
+
+/**
  * A long-term fact (semantic memory), global or scoped to a project.
  */
 export type Fact = { id: string, content: string, projectId: string | null, 

@@ -1,9 +1,10 @@
+import { BehaviorSubject } from 'rxjs';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import type { Settings } from '@jarvis/shared-types';
 
 import { JarvisApi } from '../../core/ipc/jarvis-api';
-import { summarize } from '../../core/state/agents.store';
+import { AgentsStore, summarize } from '../../core/state/agents.store';
 import { SettingsStore } from '../../core/state/settings.store';
 import { AGENT_STATUS, agentTask, auditEntry, tool } from '../../testing/agents.fixture';
 import { SETTINGS } from '../../testing/settings.fixture';
@@ -33,7 +34,7 @@ describe('AgentsPage', () => {
       saved.push(settings);
       return settings;
     }),
-    addWorkspaceFolder: vi.fn(async () => ({
+    addWorkspaceFolder: vi.fn(async (): Promise<Settings> => ({
       ...SETTINGS,
       tools: { ...SETTINGS.tools, workspaceFolders: ['/work', '/new'] },
     })),
@@ -75,6 +76,25 @@ describe('AgentsPage', () => {
     expect(element.querySelector('.step-title')?.textContent).toContain('list_directory');
     expect(element.textContent).toContain('allowed (read-only)');
     expect(element.querySelector('.notice.danger')?.textContent).toContain('step limit');
+  });
+
+  it('keeps a connection error visible and retries from the page', async () => {
+    api.onApprovals.mockRejectedValueOnce(new Error('Subscription unavailable'));
+    const { fixture, element } = await render();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(element.textContent).toContain('Subscription unavailable');
+    });
+    const store = TestBed.inject(AgentsStore);
+    await store.loadAll();
+    fixture.detectChanges();
+    expect(element.textContent).toContain('Subscription unavailable');
+    button(element, 'Retry connection').click();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(element.textContent).not.toContain('Subscription unavailable');
+    });
+    expect(store.subscriptionError()).toBeNull();
   });
 
   it('starts a task with the goal and limits', async () => {
@@ -146,5 +166,135 @@ describe('AgentsPage', () => {
     button(element, 'Check integrity').click();
     await settle(fixture);
     expect(element.querySelector('.verdict.bad')?.textContent).toContain('e1');
+  });
+
+  it('shows audit loading and failure states and retries without claiming the log is empty', async () => {
+    let reject!: (reason: unknown) => void;
+    api.getAuditLog.mockReturnValueOnce(
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      })
+    );
+    const { fixture, element } = await render();
+    button(element, 'Audit log').click();
+    await settle(fixture);
+    expect(element.textContent).toContain('Loading audit entries');
+    expect(element.textContent).not.toContain('No tool calls yet');
+    reject(new Error('audit unavailable'));
+    await TestBed.inject(AgentsStore).loadAudit();
+    await settle(fixture);
+    expect(element.querySelector('jv-audit-panel [role="alert"]')?.textContent).toContain('audit unavailable');
+    expect(element.textContent).not.toContain('No tool calls yet');
+    button(element, 'Refresh').click();
+    await TestBed.inject(AgentsStore).loadAudit();
+    await settle(fixture);
+    expect(element.querySelector('tbody')?.textContent).toContain('Read a.txt');
+    expect(element.querySelector('jv-audit-panel [role="alert"]')).toBeNull();
+  });
+
+  it('shows integrity progress, removes the previous verdict and retries a failed check', async () => {
+    const { fixture, element } = await render();
+    button(element, 'Audit log').click();
+    await settle(fixture);
+    const store = TestBed.inject(AgentsStore);
+    await store.verifyAudit();
+    await settle(fixture);
+    expect(element.textContent).toContain('Last check:');
+    let reject!: (reason: unknown) => void;
+    api.verifyAuditLog.mockReturnValueOnce(
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      })
+    );
+    button(element, 'Check integrity').click();
+    const pending = store.verifyAudit();
+    await settle(fixture);
+    expect(button(element, 'Check integrity').disabled).toBe(true);
+    expect(button(element, 'Refresh').disabled).toBe(false);
+    expect(element.textContent).toContain('Checking audit integrity');
+    expect(element.textContent).not.toContain('Last check:');
+    reject(new Error('integrity check unavailable'));
+    await pending;
+    await settle(fixture);
+    expect(element.querySelector('jv-audit-panel [role="alert"]')?.textContent).toContain('integrity check unavailable');
+    expect(button(element, 'Check integrity').disabled).toBe(false);
+    button(element, 'Check integrity').click();
+    await store.verifyAudit();
+    await settle(fixture);
+    expect(element.textContent).not.toContain('integrity check unavailable');
+    expect(element.textContent).toContain('Last check:');
+  });
+
+  it('keeps edits made while choosing a folder and saves them with the added folder', async () => {
+    let finish!: (settings: Settings) => void;
+    api.addWorkspaceFolder.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const { fixture, element } = await render();
+    button(element, 'Tools & permissions').click();
+    await settle(fixture);
+    const before = api.addWorkspaceFolder.mock.calls.length;
+    const saveButton = button(element, 'Save');
+    button(element, 'Add folder').click();
+    fixture.detectChanges();
+    expect(button(element, 'Add folder').disabled).toBe(true);
+    expect(saveButton.disabled).toBe(true);
+    const writeFile = [...element.querySelectorAll('label.tool')].find((label) => label.textContent?.includes('write_file'));
+    const checkbox = writeFile?.querySelector('input') as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(saveButton.disabled).toBe(true);
+    finish({ ...SETTINGS, tools: { ...SETTINGS.tools, workspaceFolders: ['/work', '/new'] } });
+    await settle(fixture);
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(element.querySelector('.folders')?.textContent).toContain('/new');
+    });
+    expect(api.addWorkspaceFolder.mock.calls.length - before).toBe(1);
+    expect(element.querySelector('.folders')?.textContent).toContain('/new');
+    expect(checkbox.checked).toBe(true);
+    expect(button(element, 'Save').disabled).toBe(false);
+    button(element, 'Save').click();
+    await settle(fixture);
+    expect(saved.at(-1)?.tools.workspaceFolders).toEqual(['/work', '/new']);
+    expect(saved.at(-1)?.tools.enabled).toContain('write_file');
+  });
+});
+
+describe('Agent task links', () => {
+  it('opens the requested task after loading and when the URL changes', async () => {
+    const params = new BehaviorSubject(convertToParamMap({ task: 'from-chat' }));
+    let loaded!: () => void;
+    const store = {
+      start: vi.fn(),
+      loadAll: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            loaded = resolve;
+          })
+      ),
+      select: vi.fn(),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: AgentsStore, useValue: store },
+        { provide: ActivatedRoute, useValue: { queryParamMap: params } },
+      ],
+    });
+    TestBed.overrideComponent(AgentsPage, { set: { template: '', imports: [] } });
+    const fixture = TestBed.createComponent(AgentsPage);
+    fixture.detectChanges();
+    expect(store.select).not.toHaveBeenCalled();
+    loaded();
+    await fixture.whenStable();
+    expect(store.select).toHaveBeenCalledWith('from-chat');
+    params.next(convertToParamMap({ task: 'another-task' }));
+    expect(store.select).toHaveBeenLastCalledWith('another-task');
+    fixture.destroy();
+    params.next(convertToParamMap({ task: 'after-destroy' }));
+    expect(store.select).toHaveBeenCalledTimes(2);
   });
 });

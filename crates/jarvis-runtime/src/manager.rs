@@ -506,17 +506,7 @@ impl RuntimeManager {
                 "{label} is already downloaded"
             )));
         }
-        if self
-            .downloads
-            .snapshot()
-            .iter()
-            .any(|d| d.label == label && !d.phase.is_finished())
-        {
-            return Err(RuntimeError::InvalidInput(format!(
-                "{label} is already downloading"
-            )));
-        }
-        let handle = self.downloads.begin(DownloadKind::Model, label.clone());
+        let handle = self.downloads.begin_model(label.clone(), dest.clone())?;
         let id = handle.id().to_owned();
         let this = Arc::clone(self);
         tokio::spawn(async move {

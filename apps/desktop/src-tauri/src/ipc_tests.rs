@@ -359,6 +359,56 @@ fn facts_projects_and_search() {
 }
 
 #[test]
+fn history_cursor_roundtrips_equal_timestamps_over_ipc() {
+    use jarvis_core::jarvis_memory::Episode;
+    use tauri::Manager;
+    use uuid::Uuid;
+    let h = harness();
+    let state = h._app.state::<AppState>();
+    let episodes = (1..=3)
+        .map(|id| Episode {
+            id: Uuid::from_u128(id),
+            occurred_at_ms: 10_000,
+            category: "test".into(),
+            level: "info".into(),
+            summary: "history".into(),
+        })
+        .collect();
+    tauri::async_runtime::block_on(state.core().memory().record_episodes(episodes))
+        .expect("episodes");
+    let first = invoke(
+        &h.main,
+        "list_episodes",
+        json!({
+            "limit": 2, "before": { "occurredAtMs": 10_001, "id": Uuid::nil() }
+        }),
+    )
+    .expect("first page");
+    assert_eq!(first.as_array().expect("array").len(), 2);
+    assert_eq!(first[0]["id"], Uuid::from_u128(3).to_string());
+    let second = invoke(
+        &h.main,
+        "list_episodes",
+        json!({
+            "limit": 2, "before": { "occurredAtMs": first[1]["occurredAtMs"], "id": first[1]["id"] }
+        }),
+    )
+    .expect("next page");
+    assert_eq!(second.as_array().expect("array").len(), 1);
+    assert_eq!(second[0]["id"], Uuid::from_u128(1).to_string());
+    assert!(
+        invoke(
+            &h.main,
+            "list_episodes",
+            json!({
+                "before": { "occurredAtMs": 10_000, "id": "invalid" }
+            })
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn clearing_memory_needs_the_confirmation_phrase() {
     let h = harness();
     invoke(&h.main, "save_fact", json!({ "input": {

@@ -236,23 +236,29 @@ impl AuditLog {
         Ok(entry)
     }
 
-    /// Newest first.
+    /// Reverse append order. The cursor is the last entry's public UUID;
+    /// wall-clock timestamps are not monotonic and cannot delimit pages.
     pub async fn list(
         &self,
         limit: u32,
-        before_ms: Option<i64>,
+        before_id: Option<Uuid>,
     ) -> Result<Vec<AuditEntry>, StorageError> {
         self.db
             .call(move |conn| {
+                let boundary = match before_id {
+                    Some(id) => conn.query_row(
+                        "SELECT id FROM audit_log WHERE uid = ?1",
+                        [id.to_string()],
+                        |row| row.get::<_, i64>(0),
+                    )?,
+                    None => i64::MAX,
+                };
                 let mut statement = conn.prepare(&format!(
-                    "SELECT {COLUMNS} FROM audit_log WHERE occurred_at < ?1
+                    "SELECT {COLUMNS} FROM audit_log WHERE id < ?1
                      ORDER BY id DESC LIMIT ?2"
                 ))?;
                 let rows = statement
-                    .query_map(
-                        params![before_ms.unwrap_or(i64::MAX), limit.clamp(1, 1000)],
-                        row_to_entry,
-                    )?
+                    .query_map(params![boundary, limit.clamp(1, 1000)], row_to_entry)?
                     .map(|row| row.map(|(entry, _, _)| entry))
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok::<_, StorageError>(rows)
@@ -348,6 +354,55 @@ mod tests {
         let result = log.verify().await.expect("verify");
         assert!(!result.intact);
         assert_eq!(result.broken_at, Some(second.id));
+    }
+
+    #[tokio::test]
+    async fn pagination_follows_chain_order_despite_equal_or_reversed_clocks() {
+        let db = Database::open_in_memory().expect("db");
+        let log = AuditLog::new(db.clone());
+        let ids = db.call(|conn| {
+            let mut prev = GENESIS.to_owned();
+            let mut ids = Vec::new();
+            for index in 0..253 {
+                let entry = AuditEntry {
+                    id: Uuid::new_v4(),
+                    occurred_at_ms: match index {
+                        0 => i64::MAX,
+                        252 => 1,
+                        _ => 1000,
+                    },
+                    task_id: None,
+                    tool: "test".into(),
+                    action: "test".into(),
+                    risk: RiskLevel::Low,
+                    event: AuditEvent::Allowed,
+                    detail: String::new(),
+                };
+                let hash = entry_hash(&prev, &entry);
+                conn.execute(
+                    &format!("INSERT INTO audit_log ({COLUMNS}) VALUES (?1, ?2, NULL, 'test', 'test', 'low', 'allowed', '', ?3, ?4)"),
+                    params![entry.id.to_string(), entry.occurred_at_ms, prev, hash],
+                )?;
+                prev = hash;
+                ids.push(entry.id);
+            }
+            Ok::<_, StorageError>(ids)
+        }).await.expect("seed");
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = log.list(17, cursor).await.expect("page");
+            if page.is_empty() {
+                break;
+            }
+            cursor = page.last().map(|entry| entry.id);
+            seen.extend(page.into_iter().map(|entry| entry.id));
+            assert!(seen.len() <= ids.len(), "pagination must advance");
+        }
+        assert_eq!(seen, ids.into_iter().rev().collect::<Vec<_>>());
+        assert!(log.verify().await.expect("verify").intact);
+        // A missing boundary must not silently look like the end of the log.
+        assert!(log.list(17, Some(Uuid::new_v4())).await.is_err());
     }
 
     #[tokio::test]

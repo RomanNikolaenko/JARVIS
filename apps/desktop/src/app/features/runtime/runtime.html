@@ -8,8 +8,26 @@
   }
 </header>
 
-@if (store.error(); as error) {
-  <p class="error" role="alert">{{ error.message }}</p>
+@if (store.commandPending()) {
+  <p role="status">Processing a runtime command and updating its status…</p>
+}
+
+@for (failure of store.actionErrors(); track failure.key) {
+  <div class="error" role="alert">
+    <p>{{ failure.label }}: {{ failure.error.message }}</p>
+    <button
+      type="button"
+      class="ghost"
+      (click)="store.dismissError(failure.key)"
+      [attr.aria-label]="'Dismiss error: ' + failure.label">
+      Dismiss
+    </button>
+  </div>
+}
+@if (store.statusError(); as error) {
+  <p class="error" role="status">
+    Runtime status could not be updated: {{ error.message }} Displayed values may be outdated. Retrying automatically.
+  </p>
 }
 
 <div class="layout">
@@ -58,7 +76,9 @@
       <button type="button" (click)="store.checkRelease(backend())" [disabled]="store.checkingRelease()">
         {{ store.checkingRelease() ? 'Checking…' : store.installed() ? 'Check for update' : 'Find build' }}
       </button>
-      <button type="button" class="ghost" (click)="store.selectBinary()">Use existing llama-server…</button>
+      <button type="button" class="ghost" (click)="store.selectBinary()" [disabled]="store.isPending('engine')">
+        Use existing llama-server…
+      </button>
     </div>
     <p class="hint">
       Vulkan is recommended for GPUs with 4 GB or more of dedicated memory. Integrated GPUs are rarely faster than the CPU, and
@@ -100,8 +120,8 @@
           </span>
         </p>
         <div class="row-actions">
-          <button type="button" class="ghost" (click)="store.release.set(null)">Cancel</button>
-          <button type="button" class="primary" (click)="store.install(release)">
+          <button type="button" class="ghost" (click)="store.clearRelease()">Cancel</button>
+          <button type="button" class="primary" (click)="store.install(release)" [disabled]="store.isPending('engine')">
             Download &amp; install ({{ formatBytes(release.sizeBytes) }})
           </button>
         </div>
@@ -254,7 +274,11 @@
         }
         @if (isActive(entry.state)) {
           <div class="row-actions">
-            <button type="button" class="danger" (click)="store.stop(entry.role)">
+            <button
+              type="button"
+              class="danger"
+              (click)="store.stop(entry.role)"
+              [disabled]="store.isPending('server:' + entry.role)">
               <jv-icon name="stop" [size]="15" />
               Stop
             </button>
@@ -272,7 +296,9 @@
 
   <!-- Library -->
   <jv-hud-panel class="library" heading="Model library">
-    <button panelActions type="button" class="ghost small" (click)="store.importModel()">Import GGUF…</button>
+    <button panelActions type="button" class="ghost small" (click)="store.importModel()" [disabled]="store.isPending('import')">
+      Import GGUF…
+    </button>
     @if (models().length) {
       <table class="model-table">
         <thead>
@@ -312,9 +338,21 @@
               <td class="num mono">{{ formatBytes(model.sizeBytes) }}</td>
               <td class="actions-cell">
                 @if (confirmingRemoval() === model.id) {
-                  <button type="button" class="ghost small" (click)="remove(model, false)">Remove from list</button>
+                  <button
+                    type="button"
+                    class="ghost small"
+                    (click)="remove(model, false)"
+                    [disabled]="store.isPending('model:' + model.id)">
+                    Remove from list
+                  </button>
                   @if (model.managed) {
-                    <button type="button" class="danger small" (click)="remove(model, true)">Delete file</button>
+                    <button
+                      type="button"
+                      class="danger small"
+                      (click)="remove(model, true)"
+                      [disabled]="store.isPending('model:' + model.id)">
+                      Delete file
+                    </button>
                   }
                   <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">Cancel</button>
                 } @else {
@@ -332,7 +370,13 @@
                     ">
                     {{ roleOf(model) === 'embeddings' ? 'Start embeddings' : 'Start' }}
                   </button>
-                  <button type="button" class="ghost small" (click)="confirmingRemoval.set(model.id)">Remove</button>
+                  <button
+                    type="button"
+                    class="ghost small"
+                    (click)="confirmingRemoval.set(model.id)"
+                    [disabled]="store.isPending('model:' + model.id)">
+                    Remove
+                  </button>
                 }
               </td>
             </tr>
@@ -355,7 +399,13 @@
             }
           </span>
           @if (download.phase === 'downloading' || download.phase === 'verifying') {
-            <button type="button" class="ghost small" (click)="store.cancelDownload(download.id)">Cancel</button>
+            <button
+              type="button"
+              class="ghost small"
+              (click)="store.cancelDownload(download.id)"
+              [disabled]="store.isPending('download:' + download.id)">
+              Cancel
+            </button>
           }
         </div>
         @if (download.phase === 'downloading' || download.phase === 'verifying') {
@@ -387,8 +437,14 @@
             </div>
             <div class="dim small-text">{{ model.description }} {{ formatBytes(model.sizeBytes) }} · {{ model.license }}</div>
           </div>
-          <button type="button" class="small" (click)="store.downloadCurated(model.id)" [disabled]="isCuratedPresent(model.id)">
-            {{ isCuratedPresent(model.id) ? 'Downloaded' : 'Download' }}
+          <button
+            type="button"
+            class="small"
+            (click)="store.downloadCurated(model.id)"
+            [disabled]="
+              isCuratedPresent(model.id) || store.isPending('curated:' + model.id) || store.isCuratedDownloading(model.id)
+            ">
+            {{ isCuratedPresent(model.id) ? 'Downloaded' : store.isCuratedDownloading(model.id) ? 'Downloading…' : 'Download' }}
           </button>
         </li>
       }
@@ -399,7 +455,7 @@
         <input type="text" formControlName="repo" placeholder="owner/repository" spellcheck="false" />
         <input type="text" formControlName="file" placeholder="model-Q4_K_M.gguf" spellcheck="false" />
         <input type="text" formControlName="revision" placeholder="revision (main)" spellcheck="false" />
-        <button type="submit">Download</button>
+        <button type="submit" [disabled]="store.isPending('custom-download')">Download</button>
       </div>
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
@@ -467,7 +523,15 @@
         @if (settingsSaved() && settingsForm.pristine) {
           <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
         }
-        <button type="submit" class="primary" [disabled]="settingsForm.pristine || settingsForm.invalid">Save</button>
+        @if (store.settingsError(); as error) {
+          <p class="error" role="alert">{{ error.message }}</p>
+        }
+        <button
+          type="submit"
+          class="primary"
+          [disabled]="settingsForm.pristine || settingsForm.invalid || submittingSettings() || store.savingSettings()">
+          {{ submittingSettings() || store.savingSettings() ? 'Saving…' : 'Save' }}
+        </button>
       </div>
     </form>
   </jv-hud-panel>

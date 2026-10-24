@@ -252,12 +252,18 @@
       }
     </div>
 
+    <jv-chat-agent-action
+      [text]="draft()"
+      [model]="agentModel()"
+      [disabled]="store.busy() || store.readOnly()"
+      (busyChange)="agentStarting.set($event)"
+      (started)="onAgentStarted($event)" />
     <footer class="composer">
       <textarea
         rows="3"
         placeholder="Message JARVIS…"
         aria-label="Message"
-        [disabled]="store.readOnly()"
+        [disabled]="store.readOnly() || agentStarting()"
         [value]="draft()"
         [attr.maxlength]="maxLength"
         (input)="onInput($event)"

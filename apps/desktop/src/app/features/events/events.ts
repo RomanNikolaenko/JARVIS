@@ -16,7 +16,7 @@ const LEVEL_RANK: Record<EventLevel, number> = { debug: 0, info: 1, warning: 2, 
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class Events {
-  private readonly store = inject(EventLogStore);
+  protected readonly store = inject(EventLogStore);
 
   protected readonly formatClock = formatClock;
   protected readonly levels: readonly EventLevel[] = ['debug', 'info', 'warning', 'error'];

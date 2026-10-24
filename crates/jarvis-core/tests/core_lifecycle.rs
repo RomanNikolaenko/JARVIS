@@ -355,7 +355,11 @@ async fn system_metrics_initialize_lazily_and_concurrently() {
 struct FakeFactory;
 
 impl ProviderFactory for FakeFactory {
-    fn create(&self, config: &ProviderConfig) -> Result<Arc<dyn AiProvider>, AiError> {
+    fn create(
+        &self,
+        config: &ProviderConfig,
+        _api_key: Option<&str>,
+    ) -> Result<Arc<dyn AiProvider>, AiError> {
         let url = parse_base_url(&config.base_url).map_err(AiError::InvalidRequest)?;
         let locality = classify_locality(&url);
         let kind = if locality == DataLocality::ThirdPartyCloud {
@@ -373,7 +377,9 @@ async fn start_with_factory() -> TestCore {
     let dir = tempfile::tempdir().expect("tempdir");
     let paths = paths_in(&dir);
     let core = JarvisCore::initialize(
-        CoreOptions::new(paths.clone(), "9.9.9").with_provider_factory(Some(Arc::new(FakeFactory))),
+        CoreOptions::new(paths.clone(), "9.9.9")
+            .with_secrets(Arc::new(jarvis_security::InMemorySecretStore::new()))
+            .with_provider_factory(Some(Arc::new(FakeFactory))),
     )
     .await
     .expect("core initializes");
@@ -641,4 +647,188 @@ async fn runtime_settings_are_validated_and_persisted() {
             .code(),
         ErrorCode::Validation
     );
+}
+
+#[tokio::test]
+async fn provider_api_keys_use_the_injected_secret_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = paths_in(&dir);
+    let secrets = Arc::new(jarvis_security::InMemorySecretStore::new());
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths, "9.9.9")
+            .with_provider_factory(None)
+            .with_secrets(secrets),
+    )
+    .await
+    .expect("core");
+
+    let provider_id = "test-cloud";
+    assert!(!core.has_provider_api_key(provider_id).await.unwrap());
+
+    core.set_provider_api_key(provider_id, "sk-test-12345")
+        .await
+        .unwrap();
+    assert!(core.has_provider_api_key(provider_id).await.unwrap());
+
+    core.delete_provider_api_key(provider_id).await.unwrap();
+    assert!(!core.has_provider_api_key(provider_id).await.unwrap());
+}
+
+#[derive(Debug)]
+struct KeyAwareFactory;
+
+#[derive(Debug)]
+struct ThreadCheckedVault(std::thread::ThreadId);
+
+impl jarvis_security::SecretStore for ThreadCheckedVault {
+    fn get_secret(&self, _key: &str) -> Result<Option<String>, jarvis_security::SecretError> {
+        assert_ne!(
+            std::thread::current().id(),
+            self.0,
+            "vault blocked the async executor"
+        );
+        Ok(None)
+    }
+
+    fn set_secret(&self, key: &str, _secret: &str) -> Result<(), jarvis_security::SecretError> {
+        self.get_secret(key).map(|_| ())
+    }
+
+    fn delete_secret(&self, key: &str) -> Result<(), jarvis_security::SecretError> {
+        self.get_secret(key).map(|_| ())
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_vault_operations_run_off_the_async_executor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths_in(&dir), "test")
+            .with_secrets(Arc::new(ThreadCheckedVault(std::thread::current().id())))
+            .with_provider_factory(Some(Arc::new(KeyAwareFactory))),
+    )
+    .await
+    .expect("core initialization reads keys off executor");
+    let config = core
+        .settings()
+        .ai
+        .providers
+        .into_iter()
+        .find(|p| p.enabled)
+        .expect("provider");
+    core.test_provider(config.clone())
+        .await
+        .expect("connection test");
+    core.has_provider_api_key(config.id.as_str())
+        .await
+        .expect("has key");
+    core.set_provider_api_key(config.id.as_str(), "test-key")
+        .await
+        .expect("set and reload");
+    core.delete_provider_api_key(config.id.as_str())
+        .await
+        .expect("delete and reload");
+    core.shutdown().await;
+}
+
+#[derive(Debug)]
+struct UnavailableVault;
+
+impl jarvis_security::SecretStore for UnavailableVault {
+    fn get_secret(&self, _key: &str) -> Result<Option<String>, jarvis_security::SecretError> {
+        Err(jarvis_security::SecretError::Unavailable("locked".into()))
+    }
+    fn set_secret(&self, _key: &str, _secret: &str) -> Result<(), jarvis_security::SecretError> {
+        Err(jarvis_security::SecretError::Unavailable("locked".into()))
+    }
+    fn delete_secret(&self, _key: &str) -> Result<(), jarvis_security::SecretError> {
+        Err(jarvis_security::SecretError::Unavailable("locked".into()))
+    }
+}
+
+#[tokio::test]
+async fn unavailable_vault_keeps_local_servers_usable_and_reports_key_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths_in(&dir), "test")
+            .with_secrets(Arc::new(UnavailableVault))
+            .with_provider_factory(Some(Arc::new(KeyAwareFactory))),
+    )
+    .await
+    .expect("core");
+    let models = core.list_models(false).await;
+    assert!(models.iter().any(|p| p.provider.id.as_str() == "lm-studio"));
+    assert!(
+        core.set_provider_api_key("lm-studio", "test-key")
+            .await
+            .is_err()
+    );
+    let mut settings = core.settings();
+    settings.ai.providers.push(ProviderConfig {
+        id: ProviderId::new("cloud-test"),
+        backend: ProviderBackend::Anthropic,
+        display_name: "Cloud".into(),
+        base_url: "https://example.com/v1".into(),
+        enabled: true,
+    });
+    core.update_settings(settings).await.expect("settings");
+    assert!(
+        !core
+            .list_models(false)
+            .await
+            .iter()
+            .any(|p| p.provider.id.as_str() == "cloud-test")
+    );
+    core.shutdown().await;
+}
+
+impl ProviderFactory for KeyAwareFactory {
+    fn create(
+        &self,
+        config: &ProviderConfig,
+        key: Option<&str>,
+    ) -> Result<Arc<dyn AiProvider>, AiError> {
+        let mut provider = FakeProvider::new(
+            config.id.as_str(),
+            ProviderKind::LocalServer,
+            DataLocality::OnDevice,
+        );
+        // A visible marker lets the test check registry replacement and catalog invalidation.
+        provider.descriptor.display_name = key.unwrap_or("no-key").to_owned();
+        Ok(Arc::new(provider))
+    }
+}
+
+#[tokio::test]
+async fn key_changes_replace_providers_and_invalidate_cached_models() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths_in(&dir), "test")
+            .with_secrets(Arc::new(jarvis_security::InMemorySecretStore::new()))
+            .with_provider_factory(Some(Arc::new(KeyAwareFactory))),
+    )
+    .await
+    .expect("core");
+    for key in [Some("first"), Some("rotated"), None] {
+        // Populate the cache before each change.
+        core.list_models(false).await;
+        if let Some(key) = key {
+            core.set_provider_api_key("lm-studio", key)
+                .await
+                .expect("set");
+        } else {
+            core.delete_provider_api_key("lm-studio")
+                .await
+                .expect("delete");
+        }
+        let models = core.list_models(false).await;
+        let provider = models
+            .iter()
+            .find(|p| p.provider.id.as_str() == "lm-studio")
+            .expect("provider");
+        assert_eq!(provider.provider.display_name, key.unwrap_or("no-key"));
+    }
+    assert!(core.set_provider_api_key("bad id", "key").await.is_err());
+    assert!(core.set_provider_api_key("lm-studio", " ").await.is_err());
+    core.shutdown().await;
 }

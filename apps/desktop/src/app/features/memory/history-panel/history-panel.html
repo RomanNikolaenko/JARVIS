@@ -1,17 +1,31 @@
 <jv-hud-panel heading="Action history">
   <div panelActions class="toolbar">
-    <button type="button" class="ghost small" (click)="store.loadEpisodes()">
+    <button
+      type="button"
+      class="ghost small"
+      [disabled]="store.clearingEpisodes() || !!store.dataOperation()"
+      (click)="store.loadEpisodes()">
       <jv-icon name="refresh" [size]="13" />
       Refresh
     </button>
     @if (confirmClear()) {
       <span class="confirm">
         Delete the whole history?
-        <button type="button" class="danger small" (click)="clear()">Delete</button>
+        <button
+          type="button"
+          class="danger small"
+          [disabled]="store.clearingEpisodes() || !!store.dataOperation()"
+          (click)="clear()">
+          Delete
+        </button>
         <button type="button" class="ghost small" (click)="confirmClear.set(false)">Cancel</button>
       </span>
     } @else {
-      <button type="button" class="ghost small" [disabled]="!store.episodes().length" (click)="confirmClear.set(true)">
+      <button
+        type="button"
+        class="ghost small"
+        [disabled]="!store.episodes().length || store.clearingEpisodes() || !!store.dataOperation()"
+        (click)="confirmClear.set(true)">
         <jv-icon name="trash" [size]="13" />
         Clear
       </button>
@@ -22,6 +36,9 @@
     What JARVIS did: started models, answered, saved or deleted memory. Message text is not kept here. Older entries are removed
     after the retention period set under Data &amp; settings.
   </p>
+  @if (store.loadingEpisodes() || store.clearingEpisodes()) {
+    <p role="status">{{ store.clearingEpisodes() ? 'Deleting history…' : 'Loading history…' }}</p>
+  }
   <ul class="list">
     @for (episode of store.episodes(); track episode.id) {
       <li class="row">
@@ -37,7 +54,13 @@
   </ul>
   @if (store.episodes().length && !store.episodesComplete()) {
     <div class="form-actions">
-      <button type="button" class="ghost" (click)="store.loadEpisodes(true)">Load more</button>
+      <button
+        type="button"
+        class="ghost"
+        [disabled]="store.loadingEpisodes() || store.clearingEpisodes() || !!store.dataOperation()"
+        (click)="store.loadEpisodes(true)">
+        Load more
+      </button>
     </div>
   }
 </jv-hud-panel>

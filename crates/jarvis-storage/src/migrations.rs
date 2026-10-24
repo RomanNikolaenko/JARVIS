@@ -35,10 +35,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "agents",
         sql: include_str!("../migrations/0002_agents.sql"),
     },
+    Migration {
+        version: 3,
+        name: "episode_cursor",
+        sql: include_str!("../migrations/0003_episode_cursor.sql"),
+    },
 ];
 
 /// Schema version this build creates.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// What happened while opening a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +203,35 @@ mod tests {
         }
         assert_eq!(MIGRATIONS.last().map(|m| m.version), Some(SCHEMA_VERSION));
         assert_eq!(checksum("a\r\nb"), checksum("a\nb"));
+    }
+
+    #[test]
+    fn episode_cursor_upgrade_preserves_existing_history_and_creates_index() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.db");
+        let mut conn = Connection::open(&path).expect("database");
+        migrate(&mut conn, Some(&path), &MIGRATIONS[..2]).expect("version 2");
+        conn.execute(
+            "INSERT INTO episodes (uid, occurred_at, category, level, summary) VALUES (?1, 1000, 'test', 'info', 'kept')",
+            ["00000000-0000-0000-0000-000000000001"],
+        ).expect("old history");
+        let report = migrate(&mut conn, Some(&path), MIGRATIONS).expect("upgrade");
+        assert_eq!(report.applied, vec![3]);
+        assert!(report.backup.is_some());
+        let summary: String = conn
+            .query_row("SELECT summary FROM episodes", [], |row| row.get(0))
+            .expect("history");
+        assert_eq!(summary, "kept");
+        let index: String = conn.query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'episodes_by_cursor'", [], |row| row.get(0)
+        ).expect("cursor index");
+        assert_eq!(index, "episodes_by_cursor");
+        assert!(
+            migrate(&mut conn, Some(&path), MIGRATIONS)
+                .expect("reopen")
+                .applied
+                .is_empty()
+        );
     }
 
     #[test]

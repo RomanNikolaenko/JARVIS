@@ -28,6 +28,7 @@ use jarvis_memory::MemoryEngine;
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
 use jarvis_runtime::process::CommandFactory;
 use jarvis_runtime::{RuntimeManager, RuntimeOptions, ServerRole};
+use jarvis_security::{KeyringSecretStore, SecretStore};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -107,6 +108,8 @@ pub struct CoreOptions {
     pub provider_factory: Option<Arc<dyn ProviderFactory>>,
     /// Replaces the `llama-server` command of the local runtime (tests).
     pub runtime_command_factory: Option<CommandFactory>,
+    /// Storage for sensitive credentials like API keys.
+    pub secrets: Option<Arc<dyn SecretStore>>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -128,6 +131,7 @@ impl CoreOptions {
             static_providers: vec![Arc::new(EchoProvider::new())],
             provider_factory: Some(Arc::new(HttpProviderFactory::new())),
             runtime_command_factory: None,
+            secrets: None,
         }
     }
 
@@ -144,6 +148,11 @@ impl CoreOptions {
 
     pub fn with_provider_factory(mut self, factory: Option<Arc<dyn ProviderFactory>>) -> Self {
         self.provider_factory = factory;
+        self
+    }
+
+    pub fn with_secrets(mut self, secrets: Arc<dyn SecretStore>) -> Self {
+        self.secrets = Some(secrets);
         self
     }
 }
@@ -171,6 +180,7 @@ pub struct JarvisCore {
     memory: Arc<MemoryEngine>,
     memory_state: Arc<memory::MemoryState>,
     agents: agents::AgentSystem,
+    secrets: Arc<dyn SecretStore>,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
@@ -185,6 +195,7 @@ impl JarvisCore {
             static_providers,
             provider_factory,
             runtime_command_factory,
+            secrets,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -198,6 +209,8 @@ impl JarvisCore {
             EventCategory::Lifecycle,
             format!("JARVIS core {app_version} starting"),
         );
+
+        let secrets = secrets.unwrap_or_else(|| Arc::new(KeyringSecretStore::default()));
 
         let config = Arc::new(ConfigStore::load(paths.config_file()).await);
         match config.source() {
@@ -243,13 +256,17 @@ impl JarvisCore {
         .await?;
 
         let registry = Arc::new(ProviderRegistry::new());
-        registry.replace_all(build_providers(
-            &static_providers,
-            runtime.providers(),
-            provider_factory.as_deref(),
-            &config.current().ai.providers,
-            &events,
-        ))?;
+        registry.replace_all(
+            build_providers(
+                static_providers.clone(),
+                runtime.providers(),
+                provider_factory.clone(),
+                config.current().ai.providers.clone(),
+                Arc::clone(&secrets),
+                events.clone(),
+            )
+            .await?,
+        )?;
         events.info(
             EventCategory::Ai,
             format!("AI providers: {}", provider_names(&registry)),
@@ -307,9 +324,10 @@ impl JarvisCore {
             catalog,
             runtime,
             chat,
-            memory,
+            memory: Arc::clone(&memory),
             memory_state: Arc::default(),
             agents,
+            secrets: Arc::clone(&secrets),
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
@@ -386,13 +404,17 @@ impl JarvisCore {
     async fn reload_providers(&self) -> Result<(), CoreError> {
         let _guard = self.provider_reload.lock().await;
         let current = self.config.current();
-        self.providers.replace_all(build_providers(
-            &self.static_providers,
-            self.runtime.providers(),
-            self.provider_factory.as_deref(),
-            &current.ai.providers,
-            &self.events,
-        ))?;
+        self.providers.replace_all(
+            build_providers(
+                self.static_providers.clone(),
+                self.runtime.providers(),
+                self.provider_factory.clone(),
+                current.ai.providers.clone(),
+                Arc::clone(&self.secrets),
+                self.events.clone(),
+            )
+            .await?,
+        )?;
         self.catalog.invalidate().await;
         self.events.info(
             EventCategory::Ai,
@@ -503,6 +525,16 @@ impl JarvisCore {
         &self,
         config: ProviderConfig,
     ) -> Result<ProviderTestResult, CoreError> {
+        self.test_provider_with_key(config, None).await
+    }
+
+    /// Connects to a provider configuration using an explicit key (if provided)
+    /// or looking up the stored secret.
+    pub async fn test_provider_with_key(
+        &self,
+        config: ProviderConfig,
+        explicit_key: Option<String>,
+    ) -> Result<ProviderTestResult, CoreError> {
         config.validate().map_err(CoreError::Validation)?;
         let factory = self
             .provider_factory
@@ -511,7 +543,18 @@ impl JarvisCore {
                 provider: config.id.clone(),
                 operation: "connection test",
             })?;
-        let provider = factory.create(&config)?;
+        let api_key = match explicit_key {
+            Some(k) if !k.trim().is_empty() => Some(k),
+            _ => {
+                let secrets = Arc::clone(&self.secrets);
+                let key = provider_secret_key(&config.id);
+                tokio::task::spawn_blocking(move || secrets.get_secret(&key))
+                    .await
+                    .map_err(|err| CoreError::Internal(err.to_string()))?
+                    .map_err(|err| CoreError::Internal(err.to_string()))?
+            }
+        };
+        let provider = factory.create(&config, api_key.as_deref())?;
         let locality = provider.descriptor().locality;
 
         let started = Instant::now();
@@ -541,6 +584,60 @@ impl JarvisCore {
             models,
             error,
         })
+    }
+
+    /// Access to the secret store.
+    pub fn secrets(&self) -> &Arc<dyn SecretStore> {
+        &self.secrets
+    }
+
+    /// Saves an API key for a provider in the secure OS keychain.
+    pub async fn set_provider_api_key(
+        &self,
+        provider_id: &str,
+        api_key: &str,
+    ) -> Result<(), CoreError> {
+        validate_secret_provider_id(provider_id)?;
+        if api_key.trim().is_empty()
+            || api_key.len() > 8192
+            || api_key.chars().any(char::is_control)
+        {
+            return Err(CoreError::Validation(
+                "API key must be nonempty, at most 8192 bytes and contain no control characters"
+                    .into(),
+            ));
+        }
+        let key = provider_secret_key(&jarvis_ai::ProviderId::new(provider_id));
+        let secrets = Arc::clone(&self.secrets);
+        let api_key = api_key.to_owned();
+        tokio::task::spawn_blocking(move || secrets.set_secret(&key, &api_key))
+            .await
+            .map_err(|err| CoreError::Internal(err.to_string()))?
+            .map_err(|err| CoreError::Internal(err.to_string()))?;
+        self.reload_providers().await
+    }
+
+    /// Checks whether an API key is stored for a provider.
+    pub async fn has_provider_api_key(&self, provider_id: &str) -> Result<bool, CoreError> {
+        validate_secret_provider_id(provider_id)?;
+        let key = provider_secret_key(&jarvis_ai::ProviderId::new(provider_id));
+        let secrets = Arc::clone(&self.secrets);
+        tokio::task::spawn_blocking(move || secrets.has_secret(&key))
+            .await
+            .map_err(|err| CoreError::Internal(err.to_string()))?
+            .map_err(|err| CoreError::Internal(err.to_string()))
+    }
+
+    /// Deletes an API key for a provider from the secure OS keychain.
+    pub async fn delete_provider_api_key(&self, provider_id: &str) -> Result<(), CoreError> {
+        validate_secret_provider_id(provider_id)?;
+        let key = provider_secret_key(&jarvis_ai::ProviderId::new(provider_id));
+        let secrets = Arc::clone(&self.secrets);
+        tokio::task::spawn_blocking(move || secrets.delete_secret(&key))
+            .await
+            .map_err(|err| CoreError::Internal(err.to_string()))?
+            .map_err(|err| CoreError::Internal(err.to_string()))?;
+        self.reload_providers().await
     }
 
     /// Runs all component health probes concurrently.
@@ -635,32 +732,69 @@ impl JarvisCore {
 /// Static providers, the embedded runtime's servers (while serving) and the
 /// enabled configured providers, in configuration order. Invalid
 /// configurations are skipped with a warning.
-fn build_providers(
-    static_providers: &[Arc<dyn AiProvider>],
+async fn build_providers(
+    static_providers: Vec<Arc<dyn AiProvider>>,
     runtime: Vec<Arc<dyn AiProvider>>,
-    factory: Option<&dyn ProviderFactory>,
-    configs: &[ProviderConfig],
-    events: &EventBus,
-) -> Vec<Arc<dyn AiProvider>> {
-    let mut providers = static_providers.to_vec();
-    // The embedded runtime comes before configured servers, so automatic
-    // routing (and the choice of embedding model) prefers a model the user
-    // started inside JARVIS.
-    providers.extend(runtime);
-    if let Some(factory) = factory {
-        for config in configs.iter().filter(|c| c.enabled) {
-            match factory.create(config) {
-                Ok(provider) => providers.push(provider),
-                Err(err) => {
-                    events.warning(
-                        EventCategory::Ai,
-                        format!("AI provider \"{}\" skipped: {err}", config.display_name),
-                    );
+    factory: Option<Arc<dyn ProviderFactory>>,
+    configs: Vec<ProviderConfig>,
+    secrets: Arc<dyn SecretStore>,
+    events: EventBus,
+) -> Result<Vec<Arc<dyn AiProvider>>, CoreError> {
+    // Native vault access can wait for OS services or an unlock prompt.
+    tokio::task::spawn_blocking(move || {
+        let mut providers = static_providers;
+        // The embedded runtime comes before configured servers, so automatic
+        // routing (and the choice of embedding model) prefers a model the user
+        // started inside JARVIS.
+        providers.extend(runtime);
+        if let Some(factory) = factory {
+            for config in configs.iter().filter(|c| c.enabled) {
+                let api_key = match secrets.get_secret(&provider_secret_key(&config.id)) {
+                    Ok(key) => key,
+                    Err(err) => {
+                        events.warning(
+                            EventCategory::Ai,
+                            format!(
+                                "AI provider \"{}\": cannot load its API key: {err}",
+                                config.display_name
+                            ),
+                        );
+                        // Unauthenticated local servers must remain usable when
+                        // the OS vault is unavailable. Never silently downgrade a
+                        // cloud provider to an unauthenticated connection.
+                        if config.locality().ok() == Some(DataLocality::ThirdPartyCloud) {
+                            continue;
+                        }
+                        None
+                    }
+                };
+                match factory.create(config, api_key.as_deref()) {
+                    Ok(provider) => providers.push(provider),
+                    Err(err) => {
+                        events.warning(
+                            EventCategory::Ai,
+                            format!("AI provider \"{}\" skipped: {err}", config.display_name),
+                        );
+                    }
                 }
             }
         }
+        providers
+    })
+    .await
+    .map_err(|err| CoreError::Internal(err.to_string()))
+}
+
+/// Key used in the secret store for a provider's API key.
+pub fn provider_secret_key(id: &jarvis_ai::ProviderId) -> String {
+    format!("ai.provider.{}.api_key", id.as_str())
+}
+
+fn validate_secret_provider_id(id: &str) -> Result<(), CoreError> {
+    if !jarvis_ai::is_valid_provider_id(id) {
+        return Err(CoreError::Validation("invalid provider id".into()));
     }
-    providers
+    Ok(())
 }
 
 fn provider_names(registry: &ProviderRegistry) -> String {

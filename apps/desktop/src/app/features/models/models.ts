@@ -22,11 +22,17 @@ import { StatusBadge } from '../../shared/status-badge/status-badge';
 export const DEFAULT_URLS: Record<ProviderBackend, string> = {
   ollama: 'http://127.0.0.1:11434',
   openAiCompatible: 'http://127.0.0.1:1234/v1',
+  openAi: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta',
 };
 
 export const BACKEND_LABELS: Record<ProviderBackend, string> = {
   ollama: 'Ollama',
   openAiCompatible: 'OpenAI-compatible',
+  openAi: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Google Gemini',
 };
 
 export const LOCALITY_LABELS: Record<DataLocality, string> = {
@@ -93,12 +99,15 @@ export class Models {
   /** `null`: form closed; `''`: adding a new provider; otherwise the edited id. */
   protected readonly editingId = signal<string | null>(null);
   protected readonly testing = signal(false);
+  protected readonly saving = signal(false);
+  protected readonly hasStoredKey = signal(false);
   protected readonly testResult = signal<ProviderTestResult | null>(null);
   protected readonly testError = signal<string | null>(null);
   protected readonly routingDraft = signal<ModelRouting | null>(null);
   protected readonly confirmingRemoval = signal<string | null>(null);
 
   protected readonly form = new FormGroup({
+    apiKey: new FormControl('', { nonNullable: true, validators: [Validators.maxLength(8192)] }),
     displayName: new FormControl('', {
       nonNullable: true,
       validators: [Validators.required, Validators.maxLength(64)],
@@ -156,12 +165,14 @@ export class Models {
   // ---- Provider editing ------------------------------------------------
 
   protected startAdd(): void {
+    this.hasStoredKey.set(false);
     this.editingId.set('');
     this.resetTest();
     this.form.reset({ displayName: '', backend: 'ollama', baseUrl: DEFAULT_URLS.ollama });
   }
 
-  protected startEdit(config: ProviderConfig): void {
+  protected async startEdit(config: ProviderConfig): Promise<void> {
+    this.hasStoredKey.set(false);
     this.editingId.set(config.id);
     this.resetTest();
     this.form.reset({
@@ -169,9 +180,16 @@ export class Models {
       backend: config.backend,
       baseUrl: config.baseUrl,
     });
+    try {
+      const present = await this.store.hasApiKey(config.id);
+      if (this.editingId() === config.id) this.hasStoredKey.set(present);
+    } catch (error) {
+      if (this.editingId() === config.id) this.testError.set(IpcError.from(error).message);
+    }
   }
 
   protected cancelEdit(): void {
+    this.form.controls.apiKey.reset();
     this.editingId.set(null);
     this.resetTest();
   }
@@ -193,7 +211,7 @@ export class Models {
     this.testing.set(true);
     this.resetTest();
     try {
-      this.testResult.set(await this.store.testProvider(this.draftConfig(true)));
+      this.testResult.set(await this.store.testProvider(this.draftConfig(true), this.form.controls.apiKey.value || undefined));
     } catch (error) {
       this.testError.set(IpcError.from(error).message);
     } finally {
@@ -202,6 +220,7 @@ export class Models {
   }
 
   protected async saveProvider(): Promise<void> {
+    if (this.saving()) return;
     if (this.form.invalid) {
       this.form.markAllAsTouched();
       return;
@@ -213,9 +232,36 @@ export class Models {
       editing === '' || editing === null
         ? [...current, draft]
         : current.map((p) => (p.id === editing ? { ...draft, enabled: p.enabled } : p));
-    if (await this.store.saveProviders(next)) {
-      this.editingId.set(null);
-      this.resetTest();
+    this.saving.set(true);
+    this.resetTest();
+    try {
+      if (await this.store.saveProviders(next)) {
+        // Retain the saved id on a keychain failure so retrying cannot add a duplicate.
+        this.editingId.set(draft.id);
+        const key = this.form.controls.apiKey.value;
+        if (key) await this.store.setApiKey(draft.id, key);
+        this.cancelEdit();
+      }
+    } catch (error) {
+      this.testError.set(IpcError.from(error).message);
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  protected async deleteKey(): Promise<void> {
+    const id = this.editingId();
+    if (!id || this.saving()) return;
+    this.saving.set(true);
+    this.resetTest();
+    try {
+      await this.store.deleteApiKey(id);
+      this.hasStoredKey.set(false);
+      this.form.controls.apiKey.reset();
+    } catch (error) {
+      this.testError.set(IpcError.from(error).message);
+    } finally {
+      this.saving.set(false);
     }
   }
 

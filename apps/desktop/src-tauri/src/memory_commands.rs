@@ -5,8 +5,8 @@
 //! side; the WebView never passes file paths.
 
 use jarvis_core::jarvis_memory::{
-    Conversation, ConversationDetail, ConversationPatch, Episode, Fact, FactInput, MemoryStatus,
-    Project, ProjectInput, SearchHit, SearchQuery, TransferReport, text,
+    Conversation, ConversationDetail, ConversationPatch, Episode, EpisodeCursor, Fact, FactInput,
+    MemoryStatus, Project, ProjectInput, SearchHit, SearchQuery, TransferReport, text,
 };
 use jarvis_core::{ChatStreamEvent, ChatTurnRequest, CoreError, ErrorPayload, SinkClosed};
 use tauri::ipc::Channel;
@@ -127,12 +127,12 @@ pub async fn delete_project(state: State<'_, AppState>, id: Uuid) -> CommandResu
 pub async fn list_episodes(
     state: State<'_, AppState>,
     limit: Option<u32>,
-    before_ms: Option<i64>,
+    before: Option<EpisodeCursor>,
 ) -> CommandResult<Vec<Episode>> {
     state
         .core()
         .memory()
-        .list_episodes(limit.unwrap_or(100), before_ms)
+        .list_episodes(limit.unwrap_or(100), before)
         .await
         .map_err(payload)
 }
@@ -165,13 +165,15 @@ pub async fn export_memory<R: Runtime>(
     state: State<'_, AppState>,
 ) -> CommandResult<Option<TransferReport>> {
     let today = text::format_date(i64::try_from(unix_millis()).unwrap_or(i64::MAX));
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Export JARVIS memory")
-        .set_file_name(format!("jarvis-memory-{today}.json"))
-        .add_filter("JSON", &["json"])
-        .blocking_save_file();
+    let picked = crate::dialogs::selection(|complete| {
+        app.dialog()
+            .file()
+            .set_title("Export JARVIS memory")
+            .set_file_name(format!("jarvis-memory-{today}.json"))
+            .add_filter("JSON", &["json"])
+            .save_file(complete)
+    })
+    .await?;
     let Some(picked) = picked else {
         return Ok(None);
     };
@@ -188,12 +190,14 @@ pub async fn import_memory<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<TransferReport>> {
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Import JARVIS memory")
-        .add_filter("JARVIS memory export", &["json"])
-        .blocking_pick_file();
+    let picked = crate::dialogs::selection(|complete| {
+        app.dialog()
+            .file()
+            .set_title("Import JARVIS memory")
+            .add_filter("JARVIS memory export", &["json"])
+            .pick_file(complete)
+    })
+    .await?;
     let Some(picked) = picked else {
         return Ok(None);
     };

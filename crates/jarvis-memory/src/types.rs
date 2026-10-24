@@ -250,6 +250,15 @@ pub struct Episode {
     pub summary: String,
 }
 
+/// Exclusive history cursor. The ID breaks ties between equal timestamps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "memory.ts")]
+pub struct EpisodeCursor {
+    pub occurred_at_ms: i64,
+    pub id: Uuid,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "memory.ts")]

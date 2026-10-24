@@ -25,6 +25,7 @@ const DISK_RESERVE: u64 = 256 * 1024 * 1024;
 struct Slot {
     status: DownloadStatus,
     cancel: CancellationToken,
+    destination: Option<PathBuf>,
 }
 
 /// Registry of downloads shown in the UI.
@@ -40,9 +41,34 @@ impl Downloads {
 
     /// Registers a new download and returns its handle.
     pub fn begin(&self, kind: DownloadKind, label: impl Into<String>) -> DownloadHandle {
+        self.register(&mut self.lock(), kind, label.into(), None)
+    }
+
+    /// Atomically reserves the output path, including its partial download file.
+    pub fn begin_model(&self, label: String, destination: PathBuf) -> Result<DownloadHandle> {
+        // Model file names are ASCII; Windows paths are case-insensitive.
+        #[cfg(target_os = "windows")]
+        let destination = PathBuf::from(destination.to_string_lossy().to_lowercase());
+        let mut slots = self.lock();
+        if slots.iter().any(|slot| {
+            slot.destination.as_ref() == Some(&destination) && !slot.status.phase.is_finished()
+        }) {
+            return Err(RuntimeError::InvalidInput(format!(
+                "{label} is already downloading to this file"
+            )));
+        }
+        Ok(self.register(&mut slots, DownloadKind::Model, label, Some(destination)))
+    }
+
+    fn register(
+        &self,
+        slots: &mut Vec<Slot>,
+        kind: DownloadKind,
+        label: String,
+        destination: Option<PathBuf>,
+    ) -> DownloadHandle {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let cancel = CancellationToken::new();
-        let mut slots = self.lock();
         // Drop the oldest finished entries.
         while slots
             .iter()
@@ -58,7 +84,7 @@ impl Downloads {
             status: DownloadStatus {
                 id: id.clone(),
                 kind,
-                label: label.into(),
+                label,
                 received_bytes: 0,
                 total_bytes: None,
                 bytes_per_second: 0,
@@ -67,6 +93,7 @@ impl Downloads {
                 started_at_ms: now_ms(),
             },
             cancel: cancel.clone(),
+            destination,
         });
         DownloadHandle {
             id,
@@ -380,6 +407,71 @@ pub fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_destination_is_reserved_until_worker_finishes() {
+        let downloads = Downloads::default();
+        let path = PathBuf::from("models/model.gguf");
+        let first = downloads
+            .begin_model("Catalog label".into(), path.clone())
+            .expect("first");
+        assert!(
+            downloads
+                .begin_model("Different repository label".into(), path.clone())
+                .is_err()
+        );
+        assert!(downloads.cancel(first.id()));
+        assert!(
+            downloads.begin_model("Retry".into(), path.clone()).is_err(),
+            "worker may still write after cancellation is requested"
+        );
+        first.finish(&Err(RuntimeError::Cancelled));
+        assert!(downloads.begin_model("Retry".into(), path).is_ok());
+        assert!(
+            downloads
+                .begin_model("Independent".into(), PathBuf::from("models/other.gguf"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn concurrent_model_reservations_have_one_winner() {
+        let downloads = Downloads::default();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|i| {
+                let downloads = downloads.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    downloads
+                        .begin_model(format!("request {i}"), PathBuf::from("models/shared.gguf"))
+                        .is_ok()
+                })
+            })
+            .collect();
+        let winners = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("worker"))
+            .filter(|won| *won)
+            .count();
+        assert_eq!(winners, 1);
+        assert_eq!(downloads.snapshot().len(), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_destination_reservations_ignore_case() {
+        let downloads = Downloads::default();
+        downloads
+            .begin_model("First".into(), PathBuf::from("models/Model.GGUF"))
+            .expect("first");
+        assert!(
+            downloads
+                .begin_model("Second".into(), PathBuf::from("models/model.gguf"))
+                .is_err()
+        );
+    }
 
     #[test]
     fn only_https_from_allowed_hosts() {

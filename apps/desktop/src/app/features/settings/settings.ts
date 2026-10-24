@@ -54,6 +54,7 @@ export class SettingsPage {
   }
 
   protected async save(): Promise<void> {
+    if (this.saving()) return;
     const current = this.store.settings();
     if (!current || this.form.invalid) {
       this.form.markAllAsTouched();
@@ -78,9 +79,12 @@ export class SettingsPage {
       logging: { ...current.logging, level: value.logLevel },
     };
 
+    this.savedAt.set(null);
     if (await this.store.save(next)) {
-      this.form.markAsPristine();
-      this.savedAt.set(Date.now());
+      if (JSON.stringify(this.form.getRawValue()) === JSON.stringify(value)) {
+        this.form.markAsPristine();
+        this.savedAt.set(Date.now());
+      }
     }
   }
 

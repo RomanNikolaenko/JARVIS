@@ -16,6 +16,7 @@ import type {
   ConversationPatch,
   CuratedModel,
   Episode,
+  EpisodeCursor,
   Fact,
   FactInput,
   MemoryStatus,
@@ -104,8 +105,20 @@ export class JarvisApi {
   }
 
   /** Connects to an unsaved provider configuration and lists its models. */
-  testAiProvider(config: ProviderConfig): Promise<ProviderTestResult> {
-    return this.bridge.invoke('test_ai_provider', { config });
+  testAiProvider(config: ProviderConfig, apiKey?: string): Promise<ProviderTestResult> {
+    return this.bridge.invoke('test_ai_provider', { config, apiKey });
+  }
+
+  setProviderApiKey(providerId: string, apiKey: string): Promise<void> {
+    return this.bridge.invoke('set_provider_api_key', { providerId, apiKey });
+  }
+
+  hasProviderApiKey(providerId: string): Promise<boolean> {
+    return this.bridge.invoke('has_provider_api_key', { providerId });
+  }
+
+  deleteProviderApiKey(providerId: string): Promise<void> {
+    return this.bridge.invoke('delete_provider_api_key', { providerId });
   }
 
   /**
@@ -227,8 +240,8 @@ export class JarvisApi {
     return this.bridge.invoke('delete_project', { id });
   }
 
-  listEpisodes(limit: number, beforeMs: number | null): Promise<Episode[]> {
-    return this.bridge.invoke('list_episodes', { limit, beforeMs });
+  listEpisodes(limit: number, before: EpisodeCursor | null): Promise<Episode[]> {
+    return this.bridge.invoke('list_episodes', { limit, before });
   }
 
   clearEpisodes(): Promise<number> {
@@ -305,8 +318,8 @@ export class JarvisApi {
     return this.bridge.invoke('resolve_approval', { id, approved });
   }
 
-  getAuditLog(limit: number, beforeMs: number | null): Promise<AuditEntry[]> {
-    return this.bridge.invoke('get_audit_log', { limit, beforeMs });
+  getAuditLog(limit: number, beforeId: string | null): Promise<AuditEntry[]> {
+    return this.bridge.invoke('get_audit_log', { limit, beforeId });
   }
 
   verifyAuditLog(): Promise<AuditVerification> {

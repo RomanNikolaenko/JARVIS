@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::text::estimate_tokens;
 use crate::types::{
-    Conversation, ConversationSummary, Episode, Fact, FactSource, MemoryCounts, MessageRole,
-    MessageStatus, NewMessage, Project, StoredMessage,
+    Conversation, ConversationSummary, Episode, EpisodeCursor, Fact, FactSource, MemoryCounts,
+    MessageRole, MessageStatus, NewMessage, Project, StoredMessage,
 };
 use crate::vector::VectorKind;
 
@@ -695,16 +695,27 @@ pub fn insert_episodes(conn: &Connection, episodes: &[Episode]) -> Result<usize>
 pub fn list_episodes(
     conn: &Connection,
     limit: u32,
-    before_ms: Option<i64>,
+    before: Option<EpisodeCursor>,
 ) -> Result<Vec<Episode>> {
-    let mut statement = conn.prepare(
+    let mut statement = conn.prepare(if before.is_some() {
         "SELECT uid, occurred_at, category, level, summary FROM episodes
-         WHERE occurred_at < ?1 ORDER BY occurred_at DESC, id DESC LIMIT ?2",
-    )?;
-    let rows = statement
-        .query_map(params![before_ms.unwrap_or(i64::MAX), limit], episode_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+         WHERE (occurred_at, uid) < (?1, ?2)
+         ORDER BY occurred_at DESC, uid DESC LIMIT ?3"
+    } else {
+        "SELECT uid, occurred_at, category, level, summary FROM episodes
+         ORDER BY occurred_at DESC, uid DESC LIMIT ?1"
+    })?;
+    let mut rows = match before {
+        Some(cursor) => {
+            statement.query(params![cursor.occurred_at_ms, cursor.id.to_string(), limit])?
+        }
+        None => statement.query([limit])?,
+    };
+    let mut episodes = Vec::new();
+    while let Some(row) = rows.next()? {
+        episodes.push(episode_row(row)?);
+    }
+    Ok(episodes)
 }
 
 pub fn fts_episodes(conn: &Connection, query: &str, limit: u32) -> Result<Vec<Ranked<Episode>>> {

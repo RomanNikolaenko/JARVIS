@@ -70,4 +70,22 @@ describe('Dashboard', () => {
     expect(text).toContain('12%');
     expect(text).toContain('8.0 GB / 16.0 GB');
   });
+
+  it('shows a resource failure without changing the core headline and recovers', async () => {
+    const fixture = TestBed.createComponent(Dashboard);
+    await fixture.whenStable();
+    const store = TestBed.inject(SystemStore);
+    const api = TestBed.inject(JarvisApi);
+    vi.spyOn(api, 'getSystemMetrics').mockRejectedValueOnce(new Error('Sensor unavailable'));
+    await store.refreshMetrics();
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('.resources [role="status"]')?.textContent).toContain('Sensor unavailable');
+    expect(element.querySelector('.resources')?.textContent).not.toContain('12%');
+    expect(element.querySelector('.headline')?.textContent).toContain('Operating with limitations');
+    await store.refreshMetrics();
+    fixture.detectChanges();
+    expect(element.querySelector('.resources [role="status"]')).toBeNull();
+    expect(element.querySelector('.resources')?.textContent).toContain('12%');
+  });
 });

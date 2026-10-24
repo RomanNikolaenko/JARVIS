@@ -1,3 +1,11 @@
+@if (store.dataError(); as error) {
+  <p class="error-text" role="alert">Memory operation failed: {{ error.message }}</p>
+}
+@if (store.dataOperation(); as operation) {
+  <p role="status">
+    {{ operation === 'export' ? 'Exporting memory…' : operation === 'import' ? 'Importing memory…' : 'Deleting memory…' }}
+  </p>
+}
 <div class="columns">
   <jv-hud-panel heading="Database">
     @if (store.status(); as status) {
@@ -166,8 +174,10 @@
         @if (saved() && !dirty()) {
           <span class="saved"><jv-icon name="check" [size]="14" /> Saved</span>
         }
-        <button type="button" class="ghost" [disabled]="!dirty()" (click)="discard()">Discard</button>
-        <button type="button" class="primary" [disabled]="!dirty() || saving()" (click)="save()">Save</button>
+        <button type="button" class="ghost" [disabled]="!dirty() || saving()" (click)="discard()">Discard</button>
+        <button type="button" class="primary" [disabled]="!dirty() || saving()" (click)="save()">
+          {{ saving() ? 'Saving…' : 'Save' }}
+        </button>
       </div>
     </div>
   </jv-hud-panel>

@@ -85,11 +85,11 @@ pub fn resolve_approval(state: State<'_, AppState>, id: Uuid, approved: bool) ->
 pub async fn get_audit_log(
     state: State<'_, AppState>,
     limit: Option<u32>,
-    before_ms: Option<i64>,
+    before_id: Option<Uuid>,
 ) -> CommandResult<Vec<AuditEntry>> {
     Ok(state
         .core()
-        .audit_log(limit.unwrap_or(100), before_ms)
+        .audit_log(limit.unwrap_or(100), before_id)
         .await?)
 }
 
@@ -105,11 +105,13 @@ pub async fn add_workspace_folder<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
 ) -> CommandResult<Option<Settings>> {
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Add a workspace folder for JARVIS tools")
-        .blocking_pick_folder();
+    let picked = crate::dialogs::selection(|complete| {
+        app.dialog()
+            .file()
+            .set_title("Add a workspace folder for JARVIS tools")
+            .pick_folder(complete)
+    })
+    .await?;
     let Some(picked) = picked else {
         return Ok(None);
     };

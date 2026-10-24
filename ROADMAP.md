@@ -25,8 +25,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Model router (per-category selection, capability/privacy/locality aware)
 - ✅ Provider contract test suite (shared by all providers, scripted HTTP server)
 - ✅ Markdown rendering with inert links/images and code highlighting
-- ⬜ Secrets in the OS keychain; API-key authentication
-- ⬜ Cloud providers (OpenAI, Anthropic, Gemini) behind the privacy opt-in
+- ✅ Secrets in the OS keychain; API-key authentication
+- ✅ Cloud providers (OpenAI, Anthropic, Gemini) behind the privacy opt-in
 - ⬜ Verification against real Ollama / LM Studio installations (only protocol
   mocks so far)
 
@@ -96,7 +96,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Process isolation for programs (AppContainer / bubblewrap / Landlock)
 - ⬜ Native tool calling for providers that support it
 - ⬜ Tools from MCP servers and plugins (Phase 7)
-- ⬜ Agents started from chat (today: the Agents screen)
+- ✅ Agents started from chat: composer action uses the selected model and
+  opens the saved task journal; conversation history is not sent
 
 ## Phase 6 — Voice and vision ⬜
 
@@ -116,5 +117,5 @@ release testing, ARM64 builds.
 ## Next iteration
 
 Live verification of Phase 5 on Linux, then Phase 6 (voice and vision).
-Open Phase 2 items:
-keychain-backed API keys and cloud providers.
+Open Phase 2 items: live verification of local and cloud providers, including
+the Linux Secret Service integration.

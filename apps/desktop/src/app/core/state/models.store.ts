@@ -96,8 +96,22 @@ export class ModelsStore {
     return this.options().filter((o) => supportsCategory(category, o.model.capabilities));
   }
 
-  testProvider(config: ProviderConfig): Promise<ProviderTestResult> {
-    return this.api.testAiProvider(config);
+  testProvider(config: ProviderConfig, apiKey?: string): Promise<ProviderTestResult> {
+    return this.api.testAiProvider(config, apiKey);
+  }
+
+  hasApiKey(providerId: string): Promise<boolean> {
+    return this.api.hasProviderApiKey(providerId);
+  }
+
+  async setApiKey(providerId: string, apiKey: string): Promise<void> {
+    await this.api.setProviderApiKey(providerId, apiKey);
+    await this.refresh(true);
+  }
+
+  async deleteApiKey(providerId: string): Promise<void> {
+    await this.api.deleteProviderApiKey(providerId);
+    await this.refresh(true);
   }
 
   /**

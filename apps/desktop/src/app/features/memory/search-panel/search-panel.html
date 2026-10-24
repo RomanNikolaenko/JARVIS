@@ -7,7 +7,7 @@
       aria-label="Search text"
       maxlength="500"
       [value]="text()"
-      (input)="text.set(valueOf($event))"
+      (input)="onText(valueOf($event))"
       (keydown.enter)="search()" />
     @for (kind of kinds; track kind.id) {
       <label class="check">
@@ -15,11 +15,21 @@
         <span>{{ kind.label }}</span>
       </label>
     }
-    <button type="button" class="primary" [disabled]="!text().trim() || !selected().size || store.busy()" (click)="search()">
+    <button
+      type="button"
+      class="primary"
+      [disabled]="!text().trim() || !selected().size || store.searching() || !!store.dataOperation()"
+      (click)="search()">
       <jv-icon name="search" [size]="15" />
       Search
     </button>
   </div>
+  @if (store.searching()) {
+    <p role="status">Searching memory…</p>
+  }
+  @if (store.searchError(); as error) {
+    <p class="error-text" role="alert">{{ error.message }}</p>
+  }
   @if (store.status()?.embedding?.state === 'unavailable') {
     <p class="hint">
       <jv-icon name="warning" [size]="14" />

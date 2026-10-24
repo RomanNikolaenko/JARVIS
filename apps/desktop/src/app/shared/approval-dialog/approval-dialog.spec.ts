@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 
 import { JarvisApi } from '../../core/ipc/jarvis-api';
+import { IpcError } from '../../core/ipc/ipc-error';
 import { AgentsStore } from '../../core/state/agents.store';
 import { approval } from '../../testing/agents.fixture';
 import { ApprovalDialog } from './approval-dialog';
@@ -63,5 +64,54 @@ describe('ApprovalDialog', () => {
     button(element, 'Deny').click();
     await fixture.whenStable();
     expect(api.resolveApproval).toHaveBeenLastCalledWith('a2', false);
+  });
+
+  it('links to the specific task requesting approval', async () => {
+    const { fixture, store, element } = await render();
+    store.approvals.set([approval('a1', 'medium', 'task-from-chat')]);
+    fixture.detectChanges();
+    expect(element.querySelector('a')?.getAttribute('href')).toBe('/agents?task=task-from-chat');
+  });
+
+  it('prevents duplicate decisions and allows retry after a visible failure', async () => {
+    const { fixture, store, element } = await render();
+    store.approvals.set([approval('a1')]);
+    fixture.detectChanges();
+    let reject!: (error: unknown) => void;
+    api.resolveApproval.mockImplementationOnce(() => new Promise((_resolve, fail) => (reject = fail)));
+    button(element, 'Allow once').click();
+    button(element, 'Deny').click();
+    fixture.detectChanges();
+    expect(api.resolveApproval).toHaveBeenCalledTimes(1);
+    expect(button(element, 'Deny').disabled).toBe(true);
+    reject(new IpcError('internal', 'Could not send decision'));
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(element.querySelector('[role="alert"]')?.textContent).toContain('Could not send decision');
+    });
+    expect(store.approvals()).toHaveLength(1);
+    expect(button(element, 'Deny').disabled).toBe(false);
+    button(element, 'Deny').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(api.resolveApproval).toHaveBeenLastCalledWith('a1', false);
+    expect(element.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it('does not show an old decision failure on the next request', async () => {
+    const { fixture, store, element } = await render();
+    store.approvals.set([approval('a1')]);
+    fixture.detectChanges();
+    let reject!: (error: unknown) => void;
+    api.resolveApproval.mockImplementationOnce(() => new Promise((_resolve, fail) => (reject = fail)));
+    button(element, 'Deny').click();
+    store.approvals.set([approval('a2')]);
+    reject(new IpcError('internal', 'Old decision failed'));
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(button(element, 'Deny').disabled).toBe(false);
+    });
+    expect(element.textContent).toContain('medium action a2');
+    expect(element.querySelector('[role="alert"]')).toBeNull();
   });
 });

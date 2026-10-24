@@ -93,7 +93,7 @@ async fn downloads_and_verifies_files() {
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("model.gguf");
     let downloads = Downloads::default();
-    let handle = downloads.begin(DownloadKind::Model, "model");
+    let handle = downloads.begin_model("model".into(), dest.clone()).unwrap();
 
     fetch_verified(&client(), &server.url, &dest, &expected(&data), &handle)
         .await
@@ -103,6 +103,7 @@ async fn downloads_and_verifies_files() {
     let status = &downloads.snapshot()[0];
     assert_eq!(status.phase, DownloadPhase::Completed);
     assert_eq!(status.received_bytes, data.len() as u64);
+    assert!(downloads.begin_model("New transfer".into(), dest).is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -111,7 +112,8 @@ async fn checksum_mismatches_are_rejected_and_cleaned_up() {
     let server = serve(data.clone(), true, false);
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("model.gguf");
-    let handle = Downloads::default().begin(DownloadKind::Model, "model");
+    let downloads = Downloads::default();
+    let handle = downloads.begin_model("model".into(), dest.clone()).unwrap();
     let wrong = Expected {
         sha256: "00".repeat(32),
         size: Some(data.len() as u64),
@@ -129,6 +131,15 @@ async fn checksum_mismatches_are_rejected_and_cleaned_up() {
         !dir.path().join("model.gguf.part").exists(),
         "partial file removed"
     );
+    assert!(downloads.begin_model("Retry".into(), dest.clone()).is_err());
+    handle.finish(&Err(err));
+    assert_eq!(downloads.snapshot()[0].phase, DownloadPhase::Failed);
+
+    let retry = downloads.begin_model("Retry".into(), dest.clone()).unwrap();
+    let result = fetch_verified(&client(), &server.url, &dest, &expected(&data), &retry).await;
+    retry.finish(&result);
+    result.expect("retry with the correct checksum");
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
 }
 
 #[tokio::test(flavor = "multi_thread")]

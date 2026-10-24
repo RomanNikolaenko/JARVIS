@@ -104,6 +104,7 @@ export class RuntimePage {
   protected readonly isActive = isActive;
 
   protected readonly backend = signal<RuntimeBackend>('cpu');
+  private backendChosen = false;
   protected readonly confirmingRemoval = signal<string | null>(null);
   protected readonly now = signal(Date.now());
 
@@ -159,9 +160,12 @@ export class RuntimePage {
     }),
   });
   protected readonly settingsSaved = signal(false);
+  protected readonly submittingSettings = signal(false);
 
   constructor() {
     const destroyRef = inject(DestroyRef);
+    this.store.clearRelease();
+    destroyRef.onDestroy(() => this.store.clearRelease());
     void this.store.loadStatic();
     pollWhileVisible(
       () => {
@@ -172,7 +176,17 @@ export class RuntimePage {
       destroyRef
     );
     // Preselect the recommended backend once hardware is known.
-    effect(() => this.backend.set(this.recommended()));
+    effect(() => {
+      const hardware = this.store.hardware();
+      if (hardware && !this.backendChosen) {
+        this.backendChosen = true;
+        const backend = recommendedBackend(hardware);
+        if (backend !== this.backend()) {
+          this.backend.set(backend);
+          this.store.clearRelease();
+        }
+      }
+    });
     // Mirror stored settings into the form unless the user is editing.
     effect(() => {
       const settings = this.store.settings();
@@ -187,8 +201,9 @@ export class RuntimePage {
   }
 
   protected onBackend(event: Event): void {
+    this.backendChosen = true;
     this.backend.set((event.target as HTMLSelectElement).value as RuntimeBackend);
-    this.store.release.set(null);
+    this.store.clearRelease();
   }
 
   protected uptime(server: ServerState): string {
@@ -197,21 +212,26 @@ export class RuntimePage {
   }
 
   protected canStart(model: LocalModel): boolean {
+    if (this.store.isPending(`server:${roleOf(model)}`) || this.store.isPending(`model:${model.id}`)) return false;
     const server = roleOf(model) === 'embeddings' ? this.store.embeddingServer() : this.store.server();
     return !!this.store.installed() && model.available && !(isActive(server) && server?.modelId === model.id);
   }
 
   protected downloadCustom(): void {
+    if (this.store.isPending('custom-download')) return;
     if (this.customDownload.invalid) {
       this.customDownload.markAllAsTouched();
       return;
     }
     const { repo, file, revision } = this.customDownload.getRawValue();
-    void this.store.downloadModel({ repo: repo.trim(), file: file.trim(), revision: revision.trim() || null }).then(() => {
-      if (!this.store.error()) {
-        this.customDownload.reset();
-      }
-    });
+    void this.store
+      .downloadModel({ repo: repo.trim(), file: file.trim(), revision: revision.trim() || null })
+      .then((succeeded) => {
+        const current = this.customDownload.getRawValue();
+        if (succeeded && current.repo === repo && current.file === file && current.revision === revision) {
+          this.customDownload.reset();
+        }
+      });
   }
 
   protected isCuratedPresent(id: string): boolean {
@@ -224,6 +244,7 @@ export class RuntimePage {
   }
 
   protected async saveSettings(): Promise<void> {
+    if (this.submittingSettings() || this.store.savingSettings()) return;
     if (this.settingsForm.invalid) {
       this.settingsForm.markAllAsTouched();
       return;
@@ -238,9 +259,17 @@ export class RuntimePage {
       autostartEmbeddingModel: value.autostartEmbeddingModel || null,
       startupTimeoutSecs: value.startupTimeoutSecs,
     };
-    if (await this.store.saveSettings(runtime)) {
-      this.settingsForm.markAsPristine();
-      this.settingsSaved.set(true);
+    this.submittingSettings.set(true);
+    this.settingsSaved.set(false);
+    try {
+      if (await this.store.saveSettings(runtime)) {
+        if (JSON.stringify(this.settingsForm.getRawValue()) === JSON.stringify(value)) {
+          this.settingsForm.markAsPristine();
+          this.settingsSaved.set(true);
+        }
+      }
+    } finally {
+      this.submittingSettings.set(false);
     }
   }
 }

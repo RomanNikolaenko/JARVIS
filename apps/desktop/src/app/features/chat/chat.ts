@@ -20,6 +20,7 @@ import { formatTokens } from '../../shared/format';
 import { Icon } from '../../shared/icon/icon';
 import { MarkdownPipe } from '../../shared/markdown/markdown';
 import { ConversationList } from './conversation-list/conversation-list';
+import { ChatAgentAction } from './chat-agent-action';
 
 /** Distance from the bottom (px) within which new content keeps the view pinned. */
 const STICKY_SCROLL_THRESHOLD = 80;
@@ -38,7 +39,7 @@ function withoutReasoning(text: string): string {
 
 @Component({
   selector: 'jv-chat',
-  imports: [ConversationList, Icon, MarkdownPipe, RouterLink],
+  imports: [ConversationList, Icon, MarkdownPipe, RouterLink, ChatAgentAction],
   templateUrl: './chat.html',
   styleUrl: './chat.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -57,6 +58,11 @@ export class Chat {
   protected readonly maxFactLength = MAX_FACT_LENGTH;
   protected readonly formatTokens = formatTokens;
   protected readonly draft = signal('');
+  protected readonly agentStarting = signal(false);
+  protected readonly agentModel = computed(() => {
+    const option = this.store.selected();
+    return option ? { providerId: option.provider.id, model: option.model.id } : null;
+  });
   protected readonly noteOpen = signal(false);
   protected readonly noteDraft = signal('');
   protected readonly noteSaved = signal(false);
@@ -95,7 +101,13 @@ export class Chat {
   });
   protected readonly canSend = computed(() => {
     const text = this.draft().trim();
-    return text.length > 0 && text.length <= MAX_MESSAGE_LENGTH && !this.store.busy() && !this.store.readOnly();
+    return (
+      text.length > 0 &&
+      text.length <= MAX_MESSAGE_LENGTH &&
+      !this.store.busy() &&
+      !this.store.readOnly() &&
+      !this.agentStarting()
+    );
   });
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
   /** Saved conversations can feed facts; temporary ones do not link back. */
@@ -205,6 +217,10 @@ export class Chat {
 
   protected onInput(event: Event): void {
     this.draft.set((event.target as HTMLTextAreaElement).value);
+  }
+
+  protected onAgentStarted(submitted: string): void {
+    if (this.draft() === submitted) this.draft.set('');
   }
 
   protected onKeydown(event: KeyboardEvent): void {

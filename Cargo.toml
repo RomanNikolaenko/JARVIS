@@ -58,6 +58,9 @@ sha2 = "0.10"
 tar = "0.4.44"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
+# Secrets in OS keychain (Windows Credential Manager / Linux Secret Service)
+keyring = "3"
+
 # Local database (bundled SQLite with FTS5)
 rusqlite = { version = "0.40", features = ["bundled"] }
 

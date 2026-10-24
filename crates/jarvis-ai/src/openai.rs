@@ -20,7 +20,6 @@ use crate::{
     FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
 };
 
-#[derive(Debug)]
 pub struct OpenAiCompatibleProvider {
     descriptor: ProviderDescriptor,
     base: Url,
@@ -31,6 +30,15 @@ pub struct OpenAiCompatibleProvider {
     /// Capabilities reported for every model instead of the guess from the
     /// model id (servers that are known to serve one kind of model).
     capabilities: Option<ModelCapabilities>,
+}
+
+impl std::fmt::Debug for OpenAiCompatibleProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiCompatibleProvider")
+            .field("descriptor", &self.descriptor)
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OpenAiCompatibleProvider {

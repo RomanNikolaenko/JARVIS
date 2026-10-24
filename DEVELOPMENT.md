@@ -105,7 +105,14 @@ JARVIS talks to AI servers over HTTP. Configure them on the **Models** screen
   `OLLAMA_HOST=0.0.0.0` on the server to expose it to the LAN.
 - Any other host is treated as **cloud** and receives conversations only if
   *Settings → Privacy → Allow cloud providers* is on.
-- API keys are not supported yet.
+- OpenAI, Anthropic and Gemini can be selected on the Models screen. Enter an
+  API key, test the connection, then save. Keys are stored in Windows Credential
+  Manager or Linux Secret Service, never in `config.toml`. On Linux a running,
+  unlocked Secret Service (for example GNOME Keyring or KWallet) is required.
+- Leave the key blank when editing to retain it, or use **Delete saved API key**.
+  Key changes apply to new requests immediately; in-flight requests retain their
+  existing provider. Connection tests contact the selected endpoint even when
+  cloud chat is disabled, but do not send conversation content.
 - Thinking models (`<think>…</think>`) are shown with a collapsible
   "Reasoning" block.
 - First requests to a model can be slow while the server loads it; the idle
@@ -177,6 +184,23 @@ Tests: `cargo test -p jarvis-security -p jarvis-tools -p jarvis-agent`
 (real files and processes in temporary folders, a scripted model for the
 orchestrator) and `cargo test -p jarvis-core --test agent_tasks` (settings,
 privacy, approvals, protected folders, restarts).
+
+`npm run test:ci` also runs `agent-ipc.integration.spec.ts`: the real Angular
+components, `AgentsStore`, `JarvisApi`, `TauriBridge` and Tauri JavaScript SDK
+exercise chat task creation, event delivery, allow/deny decisions and recovery
+after an IPC failure. Only the native transport is replaced with Tauri's
+`mockIPC`; command names and payloads are asserted. This is not a native WebView
+or ACL test, and the simulated result does not prove that a filesystem tool ran.
+The Rust `agent_tasks` suite separately covers actual policy and tool execution.
+
+For a native smoke check, launch `npm run tauri dev`, select a working model,
+and use a dedicated temporary workspace with a disposable file. Start a task
+from Chat that requests a file change; verify that its task link opens the same
+journal, deny the action and check the file is unchanged. Repeat with approval
+and verify the result, journal and audit log. Connection recovery additionally
+requires controlled transport fault injection; an ordinary successful launch
+does not validate that path. Do not mark native recovery verified from the
+JavaScript transport tests alone.
 
 **Adding a tool:** implement `jarvis_tools::Tool` — `prepare` validates the
 input with `deny_unknown_fields`, resolves paths through the scope and

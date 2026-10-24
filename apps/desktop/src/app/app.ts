@@ -75,11 +75,28 @@ export class App {
     const chat = inject(ChatStore);
 
     void this.system.loadStaticInfo();
-    void inject(EventLogStore).start();
+    const eventLog = inject(EventLogStore);
+    void eventLog.start();
     // Approval requests must reach the user on every screen.
-    void inject(AgentsStore).start();
+    const agents = inject(AgentsStore);
+    void agents.start();
     void this.settings.load().then(() => chat.loadModels());
-    pollWhileVisible(() => this.system.refreshHealth(), HEALTH_POLL_MS, destroyRef);
+    pollWhileVisible(
+      async () => {
+        await this.system.refreshHealth();
+        if (destroyRef.destroyed) return;
+        const error = this.system.connectionError();
+        if (error) {
+          agents.connectionLost(error);
+          eventLog.connectionLost(error);
+        } else {
+          void agents.start();
+          void eventLog.start();
+        }
+      },
+      HEALTH_POLL_MS,
+      destroyRef
+    );
     pollWhileVisible(() => this.now.set(Date.now()), CLOCK_TICK_MS, destroyRef);
   }
 }

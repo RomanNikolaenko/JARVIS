@@ -25,7 +25,7 @@ contextWindow: number | null, capabilities: ModelCapabilities, };
 /**
  * Wire protocol spoken by a configured provider.
  */
-export type ProviderBackend = "ollama" | "openAiCompatible";
+export type ProviderBackend = "ollama" | "openAiCompatible" | "openAi" | "anthropic" | "gemini";
 
 /**
  * A provider endpoint configured by the user.

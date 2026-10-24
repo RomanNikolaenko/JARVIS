@@ -9,7 +9,8 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 > remembers conversations, facts and projects in a local SQLite database,
 > and runs **multi-step agent tasks** with tools (files, programs, system,
 > web, git) behind a Security Policy Engine with approvals and an audit log.
-> Not yet: API keys / cloud providers, voice, vision. See
+> Cloud providers: OpenAI, Anthropic and Gemini with OS-keychain API keys.
+> Not yet: voice and vision input. See
 > [ROADMAP.md](ROADMAP.md).
 
 ## What works today
@@ -32,6 +33,9 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
   is written to a tamper-evident audit log. Pause, resume or cancel any
   task; tasks survive restarts. Tools are not sandboxed — see
   [SECURITY.md](SECURITY.md).
+- Start an agent directly from Chat with **Run as agent**. It uses the draft
+  and selected model, then opens the task journal. Tasks are saved separately
+  from the chat; chat history is not included.
 - Embedded runtime (Runtime screen): install an official llama.cpp build
   (CPU/Vulkan) after explicit approval, import GGUF files or download
   verified models, start/stop a model with memory checks, GPU offload and

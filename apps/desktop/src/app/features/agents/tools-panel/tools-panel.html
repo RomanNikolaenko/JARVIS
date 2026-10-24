@@ -30,7 +30,7 @@
         </ul>
       }
       <div class="toolbar">
-        <button type="button" (click)="addFolder()" [disabled]="store.busy()">
+        <button type="button" (click)="addFolder()" [disabled]="store.busy() || saving()">
           <jv-icon name="plus" [size]="14" />
           Add folder…
         </button>
