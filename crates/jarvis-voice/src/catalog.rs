@@ -149,7 +149,9 @@ fn engine_files(id: &str) -> Option<FileSpec> {
             "rhasspy/piper",
             PIPER_TAG,
             "piper_windows_amd64.zip",
-            PIPER_WINDOWS_SHA256,
+            // GitHub publishes no digest for this 2023 release; computed from
+            // the official archive on 2026-10-21.
+            "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
             22_477_236,
         )),
         (PIPER_ENGINE, "linux", "x86_64") => Some(github(
@@ -164,10 +166,6 @@ fn engine_files(id: &str) -> Option<FileSpec> {
         _ => None,
     }
 }
-
-/// TODO(phase 6): replace with the digest of the official archive before committing.
-const PIPER_WINDOWS_SHA256: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
 
 fn whisper_models() -> Vec<PackageSpec> {
     let model = |id: &'static str,

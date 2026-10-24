@@ -88,6 +88,9 @@ pub struct VoiceEngineOptions {
     pub backend: Option<Arc<dyn VoiceBackend>>,
     /// Replaces how engine programs are started (tests).
     pub launchers: Option<LauncherFactory>,
+    /// Runs the engine's background tasks. Methods may then be called
+    /// from any thread, such as a UI event loop without a Tokio context.
+    pub runtime: tokio::runtime::Handle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +166,7 @@ impl SpeechStream {
 }
 
 struct Inner {
+    runtime: tokio::runtime::Handle,
     backend: Arc<dyn VoiceBackend>,
     store: PackageStore,
     downloads: Downloads,
@@ -217,6 +221,7 @@ impl VoiceEngine {
         let (state, _) = watch::channel(VoiceState::default());
         Self {
             inner: Arc::new(Inner {
+                runtime: options.runtime,
                 backend,
                 store,
                 downloads: Downloads::default(),
@@ -452,7 +457,7 @@ impl VoiceEngine {
             .begin(DownloadKind::Voice, spec.display_name);
         let download_id = handle.id().to_owned();
         let engine = self.clone();
-        tokio::spawn(async move {
+        self.inner.runtime.spawn(async move {
             // Running engines hold their files open (Windows cannot replace them).
             engine.stop_processes().await;
             let result = engine
@@ -614,7 +619,7 @@ impl VoiceEngine {
             }
         });
         let engine = self.clone();
-        tokio::spawn(async move {
+        self.inner.runtime.spawn(async move {
             let result = engine.run_listener(id, mode, &cancel, control_rx).await;
             cancel.cancel();
             engine.release_listener(id);
@@ -679,7 +684,9 @@ impl VoiceEngine {
         let worker = (mode == ListenMode::WakeWord).then(|| {
             let engine = self.clone();
             let cancel = cancel.clone();
-            tokio::spawn(async move { engine.run_wake_worker(phrases_rx, &cancel).await })
+            self.inner
+                .runtime
+                .spawn(async move { engine.run_wake_worker(phrases_rx, &cancel).await })
         });
 
         let started = Instant::now();
@@ -815,7 +822,7 @@ impl VoiceEngine {
         *lock(&self.inner.command_deadline) = Some(deadline);
         self.update(|s| s.awaiting_command = true);
         let engine = self.clone();
-        tokio::spawn(async move {
+        self.inner.runtime.spawn(async move {
             tokio::time::sleep(COMMAND_WINDOW).await;
             let expired = {
                 let mut slot = lock(&engine.inner.command_deadline);
@@ -905,7 +912,7 @@ impl VoiceEngine {
         let (tx, rx) = mpsc::unbounded_channel();
         let engine = self.clone();
         let token = cancel.clone();
-        tokio::spawn(async move {
+        self.inner.runtime.spawn(async move {
             let mut output = None;
             let result = engine.run_speech(rx, &token, &mut output).await;
             if let Some(output) = output.take() {

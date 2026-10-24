@@ -36,6 +36,7 @@ fn setup() -> Option<Setup> {
         adapter: Arc::from(jarvis_platform::current_adapter()),
         backend: Some(Arc::new(fake.clone())),
         launchers: None,
+        runtime: tokio::runtime::Handle::current(),
     });
     let state = engine.subscribe_state();
     let transcripts = engine.subscribe_transcripts();
@@ -303,4 +304,26 @@ async fn push_to_talk_stops_speech_first() {
     assert!(s.fake.lock().cleared >= 1);
     s.engine.stop_listening(false);
     s.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn methods_work_from_threads_without_a_runtime() {
+    // Synchronous Tauri commands run on the UI thread, outside Tokio.
+    let Some(mut s) = setup() else { return };
+    let engine = s.engine.clone();
+    std::thread::spawn(move || {
+        engine.listen().expect("listen");
+        engine.say("Привіт.");
+        engine
+            .install("no-such-package")
+            .expect_err("unknown package");
+    })
+    .join()
+    .expect("no panic outside a runtime");
+    wait_state(&mut s.state, "the microphone", |st| st.mic_open).await;
+    let engine = s.engine.clone();
+    std::thread::spawn(move || engine.stop_listening(false))
+        .join()
+        .expect("no panic");
+    wait_state(&mut s.state, "the microphone to close", |st| !st.mic_open).await;
 }

@@ -25,6 +25,16 @@ fn device_error(err: impl std::fmt::Display) -> VoiceError {
     VoiceError::Device(err.to_string())
 }
 
+/// Whether a stream error ends the stream. Glitches (WASAPI reports one
+/// when capture starts), route changes the stream follows and a refused
+/// real-time priority do not.
+fn is_fatal(err: &cpal::Error) -> bool {
+    !matches!(
+        err.kind(),
+        cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied
+    )
+}
+
 fn device_id(device: &cpal::Device) -> Option<String> {
     device.id().ok().map(|id| id.to_string())
 }
@@ -224,7 +234,11 @@ where
                 }
             },
             move |err| {
-                let _ = errors.try_send(CaptureEvent::Failed(err.to_string()));
+                if is_fatal(&err) {
+                    let _ = errors.try_send(CaptureEvent::Failed(err.to_string()));
+                } else {
+                    tracing::debug!("microphone stream: {err}");
+                }
             },
             None,
         )
@@ -361,10 +375,31 @@ where
                 }
             },
             move |err| {
-                errors.lock().unwrap_or_else(PoisonError::into_inner).failed =
-                    Some(err.to_string());
+                if is_fatal(&err) {
+                    errors.lock().unwrap_or_else(PoisonError::into_inner).failed =
+                        Some(err.to_string());
+                } else {
+                    tracing::debug!("speaker stream: {err}");
+                }
             },
             None,
         )
         .map_err(device_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glitches_do_not_end_a_stream() {
+        assert!(!is_fatal(&cpal::Error::new(cpal::ErrorKind::Xrun)));
+        assert!(!is_fatal(&cpal::Error::new(cpal::ErrorKind::DeviceChanged)));
+        assert!(is_fatal(&cpal::Error::new(
+            cpal::ErrorKind::DeviceNotAvailable
+        )));
+        assert!(is_fatal(&cpal::Error::new(
+            cpal::ErrorKind::StreamInvalidated
+        )));
+    }
 }

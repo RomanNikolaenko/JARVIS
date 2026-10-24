@@ -142,7 +142,8 @@ impl WhisperServer {
             .part("file", part)
             .text("response_format", "json")
             .text("language", language.to_owned())
-            .text("temperature", "0.0");
+            .text("temperature", "0.0")
+            .text("audio_ctx", audio_context(samples.len()).to_string());
         let response = self
             .client
             .post(format!("{}/inference", self.base))
@@ -191,6 +192,19 @@ impl WhisperServer {
 
 /// Whisper marks non-speech as "[BLANK_AUDIO]", "(music)" and similar; such
 /// annotations are not words the user said.
+/// Encoder context for a phrase. Whisper encodes a 30-second window
+/// (1500 frames) by default; sizing it to the phrase plus 4 s of margin made
+/// recognition 3–4 times faster in live tests with almost the same
+/// accuracy (less margin garbled words).
+fn audio_context(samples: usize) -> u32 {
+    const FRAMES_PER_SECOND: f32 = 50.0;
+    const MARGIN_SECS: f32 = 4.0;
+    let seconds = samples as f32 / SAMPLE_RATE as f32;
+    ((seconds + MARGIN_SECS) * FRAMES_PER_SECOND)
+        .ceil()
+        .min(1500.0) as u32
+}
+
 fn clean(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut depth = 0usize;
@@ -208,6 +222,13 @@ fn clean(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_encoder_context_follows_the_phrase() {
+        assert_eq!(audio_context(0), 200);
+        assert_eq!(audio_context(16_000 * 3), 350);
+        assert_eq!(audio_context(16_000 * 60), 1500);
+    }
 
     #[test]
     fn annotations_are_removed() {

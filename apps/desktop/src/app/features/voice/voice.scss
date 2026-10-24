@@ -217,3 +217,14 @@
 .dim {
   color: var(--jv-text-dim);
 }
+
+// Long device names must not stretch the grid.
+.field-row > .field {
+  min-width: 0;
+}
+
+select {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}

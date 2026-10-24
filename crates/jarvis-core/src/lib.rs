@@ -317,6 +317,7 @@ impl JarvisCore {
             adapter: Arc::from(current_adapter()),
             backend: voice_backend,
             launchers: None,
+            runtime: tokio::runtime::Handle::current(),
         });
 
         let catalog = Arc::new(ModelCatalog::default());
