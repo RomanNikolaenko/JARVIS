@@ -268,3 +268,6 @@ The exact paths are shown on the Settings screen.
 | Real llama.cpp build + Qwen2.5 3B: install, start, chat, stop | ✔ b11739 Vulkan, CPU offload; Vulkan on Radeon Vega 8 gives garbled output | ✔ WSL: b11782 CPU build installed through the app, model imported from `/mnt/c`, streamed chat saved and kept after restart |
 | Agents with the real model: tools, policy, verifier, journal, audit | ✔ (approvals allowed and denied, injected delete held) | ✔ WSL: read-only tasks, workspace folder from the GTK dialog, tasks kept after restart; approval dialog not exercised on Linux yet |
 | Real Ollama / LM Studio | not installed on the dev machine | not verified |
+| Voice: packages installed through Settings → Voice (whisper.cpp b5454, Whisper Small, Piper, uk voice), SHA-256 verified | ✔ | not verified live |
+| Voice: speech through the speakers, reply read aloud while it streams, microphone capture (WASAPI), wake word mode on/off with indicator | ✔ (recognition checked on Piper-generated speech; the laptop mic array cancels its own speakers, so the acoustic loop is no test; wake word detection not tried with a live voice) | not verified live |
+| Vision: screenshot and window capture, Qwen3-VL 2B + mmproj answering about the screen | ✔ (b11739 CPU, 70–85 s per screenshot question) | unit tests only (X11, portal) |

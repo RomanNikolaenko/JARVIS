@@ -207,9 +207,9 @@ impl JarvisCore {
         self.events.info(
             EventCategory::Vision,
             format!(
-                "Captured a {} ({}, {}×{})",
-                source_name(source),
+                "Captured {} ({}, {}×{})",
                 info.label,
+                source_name(source),
                 info.width,
                 info.height
             ),

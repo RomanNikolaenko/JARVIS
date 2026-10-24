@@ -117,7 +117,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   separate permission for sending captures to cloud models
 - ✅ UI: microphone button with level meter, voice status, Settings →
   Voice, attachments with previews in the chat
-- ⬜ Live verification with real engines and devices on Windows and Linux
+- ✅ Live check on Windows: verified installs, speech, spoken replies,
+  microphone, wake word mode switch, screenshot and window capture with
+  Qwen3-VL 2B (found and fixed: a crash in synchronous IPC commands,
+  microphone closing on a WASAPI glitch, 20 s recognition per phrase)
+- ⬜ Live check on Linux; wake word with a live voice
 - ⬜ Cloud speech (optional), echo cancellation, a dedicated wake-word model
 - ⬜ Camera on Linux (WebKitGTK media capture is off in Tauri)
 
@@ -133,7 +137,7 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Live verification of Phase 6 with the real engines (whisper.cpp, Piper, a
-vision model) on Windows, then Linux; then Phase 7.
+Live check of Phase 6 on Linux (WSLg audio and the X11/portal capture) and
+the wake word with a live voice; then Phase 7.
 Open Phase 2 items:
 keychain-backed API keys and cloud providers.

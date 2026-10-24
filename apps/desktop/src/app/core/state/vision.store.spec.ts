@@ -43,7 +43,7 @@ describe('VisionStore', () => {
     await store.captureScreen('2', false);
     expect(api['captureScreen']).toHaveBeenCalledWith('2', false);
     expect(store.attachments().map((a) => a.id)).toEqual(['c1', 'c2']);
-    expect(store.take()).toEqual(['c1', 'c2']);
+    expect(store.take().map((a) => a.id)).toEqual(['c1', 'c2']);
     expect(store.attachments()).toEqual([]);
   });
 

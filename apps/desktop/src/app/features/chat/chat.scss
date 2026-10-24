@@ -489,3 +489,16 @@ button.link {
     line-height: 1.4;
   }
 }
+
+.sent-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+
+  img {
+    max-width: 180px;
+    max-height: 110px;
+    border-radius: 4px;
+  }
+}

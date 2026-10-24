@@ -162,6 +162,16 @@
               </div>
             } @else {
               <div class="bubble">
+                @if (entry.images; as images) {
+                  <div class="sent-images">
+                    @for (image of images; track image.id) {
+                      <img
+                        [src]="image.preview"
+                        [alt]="image.label"
+                        [title]="image.label + ' · ' + image.width + '×' + image.height" />
+                    }
+                  </div>
+                }
                 <span class="text">{{ entry.content }}</span>
               </div>
             }

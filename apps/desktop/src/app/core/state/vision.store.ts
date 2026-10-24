@@ -62,10 +62,10 @@ export class VisionStore {
   }
 
   /** Hands the attachments to a message (the core uses each one once). */
-  take(): string[] {
-    const ids = this.attachments().map((a) => a.id);
+  take(): CaptureInfo[] {
+    const taken = [...this.attachments()];
     this.attachments.set([]);
-    return ids;
+    return taken;
   }
 
   private async add(capture: () => Promise<CaptureInfo | null>): Promise<void> {

@@ -14,21 +14,29 @@ fn failed(err: xcap::XCapError) -> VisionError {
     VisionError::Capture(err.to_string())
 }
 
+/// Smaller windows are helpers (tray icons, drag handles), not content.
+const MIN_WINDOW_SIZE: u32 = 64;
+
 fn monitor_name(monitor: &Monitor, index: usize) -> String {
-    monitor
-        .friendly_name()
-        .ok()
-        .or_else(|| monitor.name().ok())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| format!("Display {}", index + 1))
+    let friendly = monitor.friendly_name().ok();
+    display_name(friendly.as_deref(), index)
+}
+
+/// The monitor's own name, unless Windows does not know it ("Unknown
+/// Monitor 65537" without a driver name).
+fn display_name(friendly: Option<&str>, index: usize) -> String {
+    friendly
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.starts_with("Unknown Monitor"))
+        .map_or_else(|| format!("Display {}", index + 1), str::to_owned)
 }
 
 /// Windows that can be captured: visible, not minimized, with a title.
 fn capturable(window: &Window) -> bool {
     !window.is_minimized().unwrap_or(true)
         && window.title().is_ok_and(|title| !title.trim().is_empty())
-        && window.width().unwrap_or(0) > 0
-        && window.height().unwrap_or(0) > 0
+        && window.width().unwrap_or(0) >= MIN_WINDOW_SIZE
+        && window.height().unwrap_or(0) >= MIN_WINDOW_SIZE
 }
 
 #[async_trait]
@@ -136,5 +144,18 @@ impl ScreenCapture for WindowsCapture {
         Err(VisionError::Unsupported(
             "Choose a display or a window from the list".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_name;
+
+    #[test]
+    fn unknown_monitors_get_a_number() {
+        assert_eq!(display_name(Some("DELL U2720Q"), 0), "DELL U2720Q");
+        assert_eq!(display_name(Some("Unknown Monitor 65537"), 0), "Display 1");
+        assert_eq!(display_name(Some("  "), 1), "Display 2");
+        assert_eq!(display_name(None, 2), "Display 3");
     }
 }

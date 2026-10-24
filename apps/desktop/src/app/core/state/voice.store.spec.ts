@@ -1,12 +1,22 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import type { VoiceState, VoiceTranscript } from '@jarvis/shared-types';
+import type { CaptureInfo, VoiceState, VoiceTranscript } from '@jarvis/shared-types';
 
 import { IDLE_VOICE, voiceStatus } from '../../testing/voice.fixture';
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ChatStore } from './chat.store';
 import { VisionStore } from './vision.store';
 import { VoiceStore } from './voice.store';
+
+const CAPTURE: CaptureInfo = {
+  id: 'capture-1',
+  source: 'screen',
+  label: 'Display 1',
+  width: 1568,
+  height: 882,
+  preview: 'data:image/jpeg;base64,AAAA',
+  capturedAtMs: 1,
+};
 
 describe('VoiceStore', () => {
   let onState: (state: VoiceState) => void;
@@ -45,7 +55,7 @@ describe('VoiceStore', () => {
         provideRouter([]),
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
-        { provide: VisionStore, useValue: { take: () => ['capture-1'] } },
+        { provide: VisionStore, useValue: { take: () => [CAPTURE] } },
       ],
     });
     store = TestBed.inject(VoiceStore);
@@ -74,7 +84,7 @@ describe('VoiceStore', () => {
   it('sends spoken requests to the chat and asks for a spoken reply', async () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     onTranscript(transcript('Яка погода?', 'wakeWord'));
-    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledWith('Яка погода?', true, ['capture-1']));
+    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledWith('Яка погода?', true, [CAPTURE]));
     expect(navigate).toHaveBeenCalledWith('/chat');
   });
 
