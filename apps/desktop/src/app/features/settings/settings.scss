@@ -133,3 +133,58 @@
   color: var(--jv-accent);
   text-decoration: none;
 }
+
+.update-line {
+  margin: 0 0 8px;
+  font-size: 13px;
+
+  .dim {
+    color: var(--jv-text-dim);
+  }
+
+  .ok {
+    color: var(--jv-success);
+  }
+
+  .accent {
+    color: var(--jv-accent);
+  }
+
+  .bad {
+    color: var(--jv-danger);
+  }
+}
+
+.update-notes {
+  max-height: 160px;
+  margin: 0 0 8px;
+  overflow: auto;
+  font-size: 12.5px;
+  color: var(--jv-text-muted);
+  white-space: pre-wrap;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.meter {
+  height: 6px;
+  margin: 8px 0;
+  border-radius: 3px;
+  background: var(--jv-surface-2);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--jv-accent), var(--jv-accent-2));
+}
+
+p.bad {
+  margin: 6px 0;
+  font-size: 12.5px;
+  color: var(--jv-danger);
+}

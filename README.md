@@ -74,7 +74,9 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 - Tests: Rust unit + integration + IPC/ACL tests, Angular unit tests.
 - CI for Windows and Linux, including a smoke test of the release build;
   installers (NSIS, MSI, deb, rpm, AppImage) from the Release workflow —
-  see [docs/RELEASE.md](docs/RELEASE.md). Not code-signed yet.
+  see [docs/RELEASE.md](docs/RELEASE.md). Signed updates: JARVIS checks
+  the project's releases (Settings → Updates) and installs a new version
+  only after you confirm. Installers are not Authenticode-signed yet.
 
 ## Quick start
 

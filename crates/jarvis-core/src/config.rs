@@ -46,6 +46,8 @@ pub struct Settings {
     /// Settings → Голос.
     pub voice: VoiceSettings,
     pub privacy: PrivacySettings,
+    /// Application updates (ADR 0014).
+    pub updates: UpdateSettings,
     pub logging: LoggingSettings,
 }
 
@@ -62,6 +64,7 @@ impl Default for Settings {
             agents: AgentsSettings::default(),
             voice: VoiceSettings::default(),
             privacy: PrivacySettings::default(),
+            updates: UpdateSettings::default(),
             logging: LoggingSettings::default(),
         }
     }
@@ -308,6 +311,24 @@ pub enum AssistantLanguage {
 pub struct GeneralSettings {
     /// Language JARVIS speaks and answers in.
     pub assistant_language: AssistantLanguage,
+}
+
+/// Application updates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export_to = "core.ts")]
+pub struct UpdateSettings {
+    /// Look for a new version shortly after start and once a day. Nothing is
+    /// downloaded or installed without the user's confirmation.
+    pub check_automatically: bool,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            check_automatically: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]

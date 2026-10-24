@@ -119,6 +119,74 @@
       }
     </jv-hud-panel>
 
+    <jv-hud-panel heading="Updates" id="updates">
+      @if (updates.status(); as status) {
+        <p class="update-line">
+          JARVIS {{ status.currentVersion }}
+          @switch (status.phase) {
+            @case ('checking') {
+              <span class="dim">· checking…</span>
+            }
+            @case ('upToDate') {
+              <span class="ok">· up to date</span>
+            }
+            @case ('available') {
+              <span class="accent">· version {{ status.available?.version }} is available</span>
+            }
+            @case ('downloading') {
+              <span class="accent">· downloading {{ updates.progressPercent() ?? 0 }} %</span>
+            }
+            @case ('installing') {
+              <span class="accent">· installing, JARVIS restarts…</span>
+            }
+            @case ('failed') {
+              <span class="bad">· {{ status.error }}</span>
+            }
+          }
+        </p>
+        @if (updates.available(); as available) {
+          @if (available.notes) {
+            <p class="update-notes">{{ available.notes }}</p>
+          }
+          @if (confirmingUpdate() === available.version) {
+            <p class="hint">
+              JARVIS stops running agent tasks, plugins and local models, installs version {{ available.version }} and starts
+              again.
+            </p>
+            <div class="update-actions">
+              <button type="button" class="ghost" (click)="confirmingUpdate.set(null)">Not now</button>
+              <button type="button" class="primary" (click)="installUpdate(available.version)">Install and restart</button>
+            </div>
+          } @else {
+            <div class="update-actions">
+              <button type="button" class="primary" (click)="confirmingUpdate.set(available.version)">
+                Install {{ available.version }}
+              </button>
+            </div>
+          }
+        }
+        @if (status.phase === 'downloading') {
+          <div class="meter" aria-label="Download progress">
+            <div class="meter-fill" [style.width.%]="updates.progressPercent() ?? 0"></div>
+          </div>
+        }
+      }
+      @if (updates.error(); as updateError) {
+        <p class="bad" role="alert">{{ updateError.message }}</p>
+      }
+      <div class="update-actions">
+        <button type="button" class="ghost" (click)="updates.check()" [disabled]="updates.busy()">Check now</button>
+      </div>
+      <label class="check">
+        <input type="checkbox" formControlName="checkUpdates" />
+        <span>Check for updates automatically (after start and daily)</span>
+      </label>
+      <p class="hint">
+        Updates come from the project's GitHub releases and are installed only when you confirm. Each file is signed; JARVIS
+        refuses a file whose signature does not match.
+      </p>
+    </jv-hud-panel>
+
     <div class="actions">
       @if (error(); as e) {
         <span class="save-error" role="alert">{{ e.message }}</span>

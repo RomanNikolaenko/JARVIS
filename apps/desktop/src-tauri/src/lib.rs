@@ -12,6 +12,7 @@ mod memory_commands;
 mod plugin_commands;
 mod runtime_commands;
 mod state;
+mod updates;
 mod vision_commands;
 mod voice_commands;
 
@@ -23,6 +24,7 @@ mod ipc_tests;
 use std::error::Error;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use jarvis_core::config::LogLevel;
 use jarvis_core::jarvis_agent::AgentTask;
@@ -147,6 +149,9 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         plugin_commands::set_plugin_secret,
         plugin_commands::clear_plugin_secret,
         plugin_commands::remove_plugin,
+        updates::get_update_status,
+        updates::check_for_update,
+        updates::install_update,
     ])
 }
 
@@ -154,6 +159,7 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
 pub fn run() {
     let result = with_commands(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(setup)
         .build(tauri::generate_context!());
 
@@ -183,8 +189,10 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
     let version = app.package_info().version.to_string();
     tracing::info!(%version, log_dir = %paths.log_dir.display(), "starting JARVIS desktop");
 
-    let core =
-        tauri::async_runtime::block_on(JarvisCore::initialize(CoreOptions::new(paths, version)))?;
+    let core = tauri::async_runtime::block_on(JarvisCore::initialize(CoreOptions::new(
+        paths,
+        version.clone(),
+    )))?;
     logging.set_level(core.settings().logging.level);
 
     spawn_event_forwarder(app.handle().clone(), core.events().subscribe());
@@ -195,6 +203,10 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
     );
     spawn_voice_forwarders(app.handle().clone(), core.voice());
     spawn_plugin_forwarder(app.handle().clone(), core.plugins().clone());
+    let updates = updates::UpdateService::new(&version);
+    updates::spawn_status_forwarder(app.handle().clone(), &updates);
+    updates::spawn_automatic_checks(app.handle().clone(), Arc::clone(&updates));
+    app.manage(updates);
     app.manage(AppState::new(core, Some(logging)));
     Ok(())
 }

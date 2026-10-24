@@ -49,7 +49,7 @@ JARVIS. The review therefore checked that nothing can inject script:
 | --- | --- | --- | --- |
 | 1 | The event log (also written to the log files) recorded a plugin's full command line when it was added; users sometimes pass tokens as arguments. | Low | Fixed: the event names the program and the fingerprint only. |
 | 2 | Development dependencies: Vite 8.3.0 inside `@angular/build` (dev server: cross-origin script execution, file exposure) and `fast-uri` 3.1.8. Not part of the shipped app. | Medium (dev only) | Fixed: npm override to Vite 8.3.4, `fast-uri` 3.1.9; `npm audit` reports 0. |
-| 3 | No installer, update or release pipeline: users would build from source or copy unsigned binaries. | Medium | Partly fixed: installers and a draft-release workflow with checksums. Code signing and signed updates need the owner's keys (open). |
+| 3 | No installer, update or release pipeline: users would build from source or copy unsigned binaries. | Medium | Fixed: installers, a draft-release workflow with checksums, and signed updates bound to the version (ADR 0014). Authenticode signing of the installers needs a certificate (open). |
 | 4 | Rust dependencies were not checked against the RustSec advisory database (needs `cargo-audit`, not installed). | Unknown | Open. |
 | 5 | Plugins and agent programs run with the user's rights (no sandbox). | Accepted risk | Documented in SECURITY.md and on the Plugins screen. |
 

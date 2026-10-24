@@ -98,6 +98,9 @@ const COMMANDS: &[&str] = &[
     "set_plugin_secret",
     "clear_plugin_secret",
     "remove_plugin",
+    "get_update_status",
+    "check_for_update",
+    "install_update",
 ];
 
 fn main() {

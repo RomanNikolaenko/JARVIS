@@ -44,6 +44,7 @@ import type {
   SystemEvent,
   SystemMetrics,
   UiErrorReport,
+  UpdateStatus,
   CaptureInfo,
   McpServerRequest,
   PluginInfo,
@@ -64,6 +65,8 @@ export const SYSTEM_EVENT = 'jarvis://system-event';
 export const AGENT_TASK_EVENT = 'jarvis://agent-task';
 /** Pushed with every pending approval whenever the list changes. */
 export const APPROVALS_EVENT = 'jarvis://approvals';
+/** Pushed with the update status on every change. */
+export const UPDATE_STATUS_EVENT = 'jarvis://update-status';
 /** Pushed with every plugin after any change of one. */
 export const PLUGINS_EVENT = 'jarvis://plugins';
 /** Pushed with the voice engine's state (microphone, listening, speaking). */
@@ -363,6 +366,25 @@ export class JarvisApi {
 
   onSystemEvent(handler: (event: SystemEvent) => void): Promise<UnlistenFn> {
     return this.bridge.listen<SystemEvent>(SYSTEM_EVENT, handler);
+  }
+
+  // ---- Updates ----
+
+  getUpdateStatus(): Promise<UpdateStatus> {
+    return this.bridge.invoke('get_update_status');
+  }
+
+  checkForUpdate(): Promise<UpdateStatus> {
+    return this.bridge.invoke('check_for_update');
+  }
+
+  /** Downloads, verifies and installs the confirmed version; JARVIS restarts. */
+  installUpdate(version: string): Promise<void> {
+    return this.bridge.invoke('install_update', { version });
+  }
+
+  onUpdateStatus(handler: (status: UpdateStatus) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<UpdateStatus>(UPDATE_STATUS_EVENT, handler);
   }
 
   // ---- Plugins ----

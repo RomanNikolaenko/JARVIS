@@ -74,5 +74,6 @@ export const SETTINGS = {
     allowCloudAgents: false,
     shareCapturesWithCloud: false,
   },
+  updates: { checkAutomatically: true },
   logging: { level: 'info' },
 } satisfies Settings;

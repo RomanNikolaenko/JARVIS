@@ -1,7 +1,9 @@
 name: Release
 
-# Builds the installers for a version tag (v0.1.0) and attaches them to a
-# draft GitHub release. Publishing the draft stays a manual step.
+# Builds the signed installers for a version tag (v0.1.0) and attaches them,
+# their signatures and the update feed (latest.json) to a draft GitHub
+# release. Publishing the draft stays a manual step; only published releases
+# reach the in-app updater (ADR 0014).
 on:
   push:
     tags: ['v*']
@@ -41,6 +43,15 @@ jobs:
             echo "::error::Tag $TAG does not match the workspace version $version"
             exit 1
           fi
+      - name: The update signing key is available
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Add the TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD secrets (docs/RELEASE.md)"
+            exit 1
+          fi
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -58,9 +69,12 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
-      - name: Build installers
+      - name: Build signed installers
         working-directory: apps/desktop
-        run: npm run tauri -- build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --config src-tauri/tauri.release.conf.json
       - name: Release smoke test (Windows)
         if: runner.os == 'Windows'
         working-directory: apps/desktop
@@ -73,11 +87,11 @@ jobs:
         with:
           name: installers-${{ runner.os }}
           path: |
-            target/release/bundle/nsis/*.exe
-            target/release/bundle/msi/*.msi
-            target/release/bundle/deb/*.deb
-            target/release/bundle/rpm/*.rpm
-            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/nsis/*-setup.exe*
+            target/release/bundle/msi/*.msi*
+            target/release/bundle/deb/*.deb*
+            target/release/bundle/rpm/*.rpm*
+            target/release/bundle/appimage/*.AppImage*
           if-no-files-found: error
           retention-days: 14
 
@@ -88,10 +102,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: .github/scripts
       - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
+      - name: Update feed
+        run: node .github/scripts/latest-json.mjs dist "$TAG" "${{ github.repository }}"
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt

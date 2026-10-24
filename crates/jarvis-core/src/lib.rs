@@ -15,6 +15,7 @@ mod memory;
 mod plugins;
 pub mod routing;
 mod ui_errors;
+pub mod updates;
 mod vision;
 mod voice;
 
@@ -50,6 +51,7 @@ pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
+pub use updates::{AvailableUpdate, UpdatePhase, UpdateStatus};
 pub use vision::{MAX_ATTACHMENTS, VisionStatus};
 pub use {
     jarvis_agent, jarvis_plugins, jarvis_security, jarvis_tools, jarvis_vision, jarvis_voice,

@@ -94,6 +94,8 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tauri = { version = "2.12", features = [] }
 tauri-build = { version = "2.7", features = [] }
 tauri-plugin-dialog = "2.8"
+# Signed updates (ADR 0014): no system proxy, no legacy zip bundles.
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["rustls-tls"] }
 
 # Testing
 tempfile = "3.20"

@@ -43,6 +43,11 @@
           </button>
         }
       </div>
+      @if (updates.available(); as available) {
+        <a class="update-link" routerLink="/settings" fragment="updates">
+          <jv-icon name="download" [size]="14" /> Update {{ available.version }}
+        </a>
+      }
       <time class="clock">{{ clock() }}</time>
     </header>
 

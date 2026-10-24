@@ -721,7 +721,7 @@ must be granted by a capability; anything not granted is denied. See
 | Unsafe code | `unsafe_code = "forbid"` workspace-wide. |
 | Observability | `tracing` + rotating files; user-facing event log. |
 | UI performance | Animations use `transform`/`opacity` on HTML elements only (compositor), never SVG elements or layout properties; they pause while another window has the focus. The release smoke test fails if the idle dashboard keeps the renderer's main thread busy more than 15 % of the time. |
-| Distribution | Installers built by the Release workflow (NSIS, MSI, deb, rpm, AppImage) with SHA-256 checksums; unsigned and without automatic updates until signing keys exist. |
+| Distribution | Installers built by the Release workflow (NSIS, MSI, deb, rpm, AppImage) with SHA-256 checksums; not Authenticode-signed. Signed updates through `tauri-plugin-updater` and `latest.json` (ADR 0014): checked after start and daily, installed after confirmation, the core is shut down first. |
 
 ## 6. Known limitations
 

@@ -33,8 +33,10 @@ Linux (X11 and Wayland).
   tools go through the same policy; example plugin `text-tools`.
 - **Release**: installers (NSIS, MSI, deb, rpm, AppImage), a draft-release
   workflow with checksums, and a release smoke test.
+- **Updates**: signed automatic updates from GitHub Releases (Settings →
+  Updates), installed only after confirmation.
 
 ### Not included
 
 - Cloud sign-in or sync: all data stays on the computer (ADR 0013).
-- Signed installers and automatic updates (need the owner's keys).
+- Authenticode-signed installers (need a certificate).

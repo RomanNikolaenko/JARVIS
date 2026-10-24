@@ -265,7 +265,9 @@ UI pick it up automatically.
 | Memory database (also agent tasks, audit log) | `…\memory\jarvis.db` in local data | `memory/jarvis.db` in local data |
 | Logs (`jarvis.YYYY-MM-DD.log`) | `%LOCALAPPDATA%\ai.jarvis.desktop\logs\` | `~/.local/share/ai.jarvis.desktop/logs/` |
 
-The exact paths are shown on the Settings screen. `JARVIS_PROFILE_DIR`
+The exact paths are shown on the Settings screen. `JARVIS_UPDATE_ENDPOINT`
+replaces the update feed URL for tests (release builds accept HTTPS only;
+the signature check always applies — see docs/RELEASE.md). `JARVIS_PROFILE_DIR`
 (an absolute path) keeps settings, data and logs in one folder instead —
 used by the release smoke test and for portable use. The WebView cache
 (`EBWebView`) stays in the local data folder; JARVIS keeps no state there.
@@ -321,5 +323,6 @@ used by the release smoke test and for portable use. The WebView cache
 | Plugins: example MCP server (Node.js) added through the Plugins screen, protocol 2026-07-28 negotiated, an agent with Qwen2.5 3B calling `text-tools__word_count` after approval (correct answer, audit entries), changed script stopped until reviewed again, disable and remove (process gone, `plugins.json` empty) | ✔ (the folder dialog path is covered by tests only) | CI only |
 | Release smoke test (`e2e/smoke.mjs`) on the release binary: every screen, echo chat turn, MCP plugin, idle renderer, clean shutdown | ✔ (17/17; UI ready 1.7–2.3 s after start, `jarvis.exe` 45 MB, WebView2 processes about 420 MB in total) | ✔ WSL release build: start-up, still running after 10 s, exit (3/3) |
 | Installers | NSIS/MSI not built locally (the first build downloads NSIS and WiX); built by the Release workflow | ✔ WSL: deb and rpm (11 MB each); depends on `libasound2t64` or `libasound2`, `libwebkit2gtk-4.1-0`, `libgtk-3-0` |
+| Signed updates (`e2e/update-test.mjs`, debug build, real key) | ✔ 5/5: version mismatch refused, changed file refused, signed installer started with `/P /UPDATE /R`, core stopped first | WSL: signed deb and rpm built (`.sig` bound to version 0.1.0); installing through the updater not verified |
 | Idle CPU (release, dashboard, 8 logical cores) | ✔ 2.6 % focused, 1.1 % in the background (was 7.5 %) | not measured |
 | Vision: screenshot and window capture, Qwen3-VL 2B + mmproj answering about the screen | ✔ (b11739 CPU, 70–85 s per screenshot question) | unit tests only (X11, portal) |

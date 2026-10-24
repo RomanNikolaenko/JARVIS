@@ -96,6 +96,9 @@
     "allow-set-plugin-tool",
     "allow-set-plugin-secret",
     "allow-clear-plugin-secret",
-    "allow-remove-plugin"
+    "allow-remove-plugin",
+    "allow-get-update-status",
+    "allow-check-for-update",
+    "allow-install-update"
   ]
 }

@@ -170,16 +170,20 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   another window has the focus (animations pause), under 0.1 % on other
   screens; the smoke test fails if the idle renderer gets busy again
 - ✅ CHANGELOG, release guide
-- ⬜ Signed installers (Authenticode certificate) and signed automatic
-  updates (an update signing key) — need the owner's keys
+- ✅ Signed automatic updates (ADR 0014): `tauri-plugin-updater`, key pair
+  outside the repository, signatures bound to the version, `latest.json`
+  from the Release workflow, check after start and daily (setting), install
+  only after confirmation; end-to-end test with a refused tampered file, a
+  refused version mismatch and a real installer run
+- ⬜ Authenticode-signed Windows installers (needs a certificate)
 - ⬜ RustSec advisory scan (`cargo audit`)
 - ⬜ License for the project
 - ⬜ ARM64 builds; native WebDriver end-to-end tests
 
 ## Next iteration
 
-Finish Phase 8: signing and automatic updates once the keys exist, a
-RustSec scan, a license, then the manual release checklist and v0.1.0.
+Finish Phase 8: the signing secrets in GitHub, a RustSec scan, a license,
+then the manual release checklist and v0.1.0.
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
 voice, third-party MCP servers.
 Open Phase 2 items: live verification of local and cloud providers, including

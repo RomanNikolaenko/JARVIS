@@ -103,5 +103,17 @@
         "bundleMediaFramework": false
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZENkYzM0M2MkIxRkNFNjkKUldScHpoOHJ4ak52YlFKVHRPT0cwMnZDajVRR095MG9nd0lSMjBNL0lRdFQya09hbnY1SWxtcHMK",
+      "endpoints": [
+        "https://github.com/RomanNikolaenko/JARVIS/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -7,6 +7,7 @@ import { EventLogStore } from './core/state/event-log.store';
 import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
 import { SystemStore } from './core/state/system.store';
+import { UpdatesStore } from './core/state/updates.store';
 import { VoiceStore } from './core/state/voice.store';
 import { ApprovalDialog } from './shared/approval-dialog/approval-dialog';
 import { Icon, type IconName } from './shared/icon/icon';
@@ -39,6 +40,7 @@ export class App {
   /** Another window has the focus or JARVIS is minimized: decorative animations pause. */
   protected readonly background = signal(inBackground());
   protected readonly voice = inject(VoiceStore);
+  protected readonly updates = inject(UpdatesStore);
 
   protected readonly nav: readonly NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -90,6 +92,8 @@ export class App {
     void agents.start();
     // The microphone indicator and spoken requests work on every screen.
     void this.voice.start();
+    // A found update is announced on every screen.
+    void this.updates.start();
     void this.settings.load().then(() => chat.loadModels());
     pollWhileVisible(
       async () => {
