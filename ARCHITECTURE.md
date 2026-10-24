@@ -36,6 +36,7 @@ crates with explicit interfaces) instead of services. See
 │ jarvis-runtime → supervised llama.cpp server, GGUF, downloads │
 │ jarvis-voice → audio, VAD, whisper.cpp, Piper, wake word      │
 │ jarvis-vision → screen/window capture, images for models      │
+│ jarvis-plugins → MCP client, plugin approvals and tools       │
 │ jarvis-events→ event bus + system event log                   │
 │ jarvis-platform → OS adapters, hardware, system monitor       │
 └───────────────────────────────────────────────────────────────┘
@@ -69,6 +70,11 @@ crates/
   jarvis-agent/               Task manager (states, limits, persisted journal),
                               orchestrator (planner, executor, verifier,
                               recovery), text protocol for the model
+  jarvis-plugins/             MCP client (stdio, protocol 2026-07-28 and the
+                              legacy handshake), plugin manifests, approvals
+                              bound to fingerprints, keychain secrets,
+                              lifecycle with bounded restarts, MCP tools as
+                              JARVIS tools
   jarvis-voice/               VoiceEngine: audio I/O (cpal), VAD (earshot),
                               managed whisper-server and Piper processes,
                               wake word, sentence splitter, pinned packages
@@ -87,12 +93,14 @@ apps/desktop/
   src/                        Angular UI
     app/core/ipc/             TauriBridge (only user of @tauri-apps/api), JarvisApi
     app/core/state/           signal stores (system, events, settings, models,
-                              runtime, chat, memory, agents, voice, vision)
+                              runtime, chat, memory, agents, voice, vision,
+                              plugins)
     app/core/errors/          global error handler → core log
     app/features/             dashboard, chat (+ conversation list), models,
                               runtime, agents (tasks, tools & permissions, audit
                               log), memory (facts, projects, history, search,
-                              data), events, settings and Settings → Voice (lazy)
+                              data), plugins, events, settings and
+                              Settings → Voice (lazy)
     app/shared/               HUD panel, AI core, icons, status badge, Markdown,
                               approval dialog, formatters
   src-tauri/                  Tauri 2 shell (crate jarvis-desktop)
@@ -100,12 +108,14 @@ apps/desktop/
     build.rs                  app command manifest, Windows manifest
 packages/shared-types/        TypeScript IPC types generated from Rust (ts-rs)
 docs/decisions/               Architecture Decision Records
+examples/plugins/text-tools/  Example plugin: an MCP server in Node.js without
+                              dependencies
 .github/workflows/ci.yml      Windows + Linux CI
 ```
 
-Crates that exist only on the roadmap (`jarvis-sync`) are **not created
-yet**; they
-are added when their phase starts, so the tree never contains empty modules.
+Crates are added when their phase starts, so the tree never contains empty
+modules. There is no `jarvis-sync`: all data stays local
+([ADR 0013](docs/decisions/0013-local-data-only.md)).
 
 ## 4. Components (implemented)
 
@@ -356,6 +366,40 @@ capture button ─▶ ScreenCapture (xcap │ x11rb │ portal) ─▶ JPEG ≤ 
 - A message with images goes to the `vision` route; cloud models get
   images only with `privacy.shareCapturesWithCloud`. The embedded runtime
   passes a model's projector with `--mmproj`.
+
+### 4.3d Plugins and MCP (`jarvis-plugins`, `jarvis-core::plugins`)
+
+See [ADR 0012](docs/decisions/0012-plugins-and-mcp.md).
+
+```
+Plugins screen ─▶ review (program, arguments, folder, variables, secrets,
+                  fingerprint, warnings) ─▶ user confirms ─▶ plugins.json
+start ─▶ fingerprint still the approved one? ─▶ secrets from the keychain
+      ─▶ child process (no console, minimal environment) ─stdio─▶ MCP server
+      ─▶ server/discover (or initialize) ─▶ tools/list
+      ─▶ ToolRegistry group "<id>": <id>__<tool> (enabled tools only)
+agent step ─▶ PluginTool.prepare ─▶ Security Policy Engine (capability
+      pluginTool, risk high by default) ─▶ approval ─▶ tools/call ─▶ <tool_result>
+```
+
+- A plugin is a folder with `jarvis-plugin.json` or an MCP server entered as
+  a command. Nothing is loaded into the JARVIS process.
+- The client negotiates the protocol per server: `server/discover` for
+  2026-07-28, `initialize` for 2025-11-25 and older (a silent server gets
+  both after a few seconds; the first answer wins). It declares no client
+  capabilities, limits messages to 8 MiB, puts a deadline on every
+  request and sends `notifications/cancelled` on cancel or timeout.
+- The fingerprint (SHA-256 of the launch settings, the program, the
+  manifest and every argument that names a file) is approved by the user
+  and checked before every start. A lowered tool risk is bound to a hash of
+  the tool's description and schema.
+- `plugins.json` lives in the protected settings folder; secrets are in the
+  OS keychain as `plugin:<id>:<NAME>`. Status changes are pushed to the UI
+  as `jarvis://plugins`.
+- A server that crashes is restarted at most three times (2, 10, 30 s);
+  calls in flight fail and are never repeated.
+- Plugin tool descriptions are clipped to one line and listed in a separate
+  section of the agent prompt that says they come from third parties.
 
 ### 4.4 `jarvis-events` — event bus
 
@@ -725,6 +769,12 @@ must be granted by a capability; anything not granted is denied. See
   UI to capture only on request; Wayland portals may keep a copy of each
   screenshot; local vision models answer a screenshot in about a minute on
   a CPU. The camera works where the WebView offers one (not WebKitGTK).
+- Plugins: a plugin process runs with the user's rights and is not
+  sandboxed; on Windows, programs a server starts are not stopped with it
+  (no job object yet); only stdio servers, only tools (no resources,
+  prompts, sampling or elicitation); modern servers' tool lists refresh on
+  start and on request (no `subscriptions/listen`); plugin tools are used
+  by agents, not by plain chat.
 - Linux builds are verified in CI only (not on the development machine).
 - No end-to-end (WebDriver) tests yet.
 
@@ -733,10 +783,11 @@ must be granted by a capability; anything not granted is denied. See
 See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
 - `jarvis-security`: process isolation for tools.
-- `jarvis-tools`: native tool calling where providers support it, MCP tools.
+- `jarvis-tools`: native tool calling where providers support it.
+- `jarvis-plugins`: HTTP MCP servers, resources and prompts, sandboxed
+  plugin processes, job objects on Windows.
 - `jarvis-voice`: echo cancellation, optional cloud speech, a dedicated
   wake-word model.
-- `jarvis-sync`: optional Supabase sync with an offline queue.
 
 
 ## Provider credentials

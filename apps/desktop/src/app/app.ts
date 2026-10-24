@@ -42,6 +42,7 @@ export class App {
     { path: '/runtime', label: 'Runtime', icon: 'cpu' },
     { path: '/agents', label: 'Agents', icon: 'agent' },
     { path: '/memory', label: 'Memory', icon: 'brain' },
+    { path: '/plugins', label: 'Plugins', icon: 'plug' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];

@@ -45,6 +45,10 @@ import type {
   SystemMetrics,
   UiErrorReport,
   CaptureInfo,
+  McpServerRequest,
+  PluginInfo,
+  PluginReview,
+  PluginToolUpdate,
   VisionStatus,
   WindowInfo,
   VoiceState,
@@ -60,6 +64,8 @@ export const SYSTEM_EVENT = 'jarvis://system-event';
 export const AGENT_TASK_EVENT = 'jarvis://agent-task';
 /** Pushed with every pending approval whenever the list changes. */
 export const APPROVALS_EVENT = 'jarvis://approvals';
+/** Pushed with every plugin after any change of one. */
+export const PLUGINS_EVENT = 'jarvis://plugins';
 /** Pushed with the voice engine's state (microphone, listening, speaking). */
 export const VOICE_STATE_EVENT = 'jarvis://voice-state';
 /** Pushed with every recognized spoken request. */
@@ -357,6 +363,68 @@ export class JarvisApi {
 
   onSystemEvent(handler: (event: SystemEvent) => void): Promise<UnlistenFn> {
     return this.bridge.listen<SystemEvent>(SYSTEM_EVENT, handler);
+  }
+
+  // ---- Plugins ----
+
+  listPlugins(): Promise<PluginInfo[]> {
+    return this.bridge.invoke('list_plugins');
+  }
+
+  getPluginLogs(id: string): Promise<string[]> {
+    return this.bridge.invoke('get_plugin_logs', { id });
+  }
+
+  /** Opens a folder dialog in the core; `null` when the user cancelled. Saves nothing. */
+  pickPluginFolder(): Promise<PluginReview | null> {
+    return this.bridge.invoke('pick_plugin_folder');
+  }
+
+  /** Checks an MCP server the user entered. Saves nothing. */
+  reviewMcpServer(request: McpServerRequest): Promise<PluginReview> {
+    return this.bridge.invoke('review_mcp_server', { request });
+  }
+
+  reviewInstalledPlugin(id: string): Promise<PluginReview> {
+    return this.bridge.invoke('review_installed_plugin', { id });
+  }
+
+  /** Saves and starts the plugin of a review the user confirmed. */
+  installPlugin(reviewId: string): Promise<PluginInfo> {
+    return this.bridge.invoke('install_plugin', { reviewId });
+  }
+
+  setPluginEnabled(id: string, enabled: boolean): Promise<PluginInfo> {
+    return this.bridge.invoke('set_plugin_enabled', { id, enabled });
+  }
+
+  restartPlugin(id: string): Promise<PluginInfo> {
+    return this.bridge.invoke('restart_plugin', { id });
+  }
+
+  refreshPluginTools(id: string): Promise<PluginInfo> {
+    return this.bridge.invoke('refresh_plugin_tools', { id });
+  }
+
+  setPluginTool(update: PluginToolUpdate): Promise<PluginInfo> {
+    return this.bridge.invoke('set_plugin_tool', { update });
+  }
+
+  /** Stores a secret in the OS keychain; it is never read back. */
+  setPluginSecret(id: string, name: string, value: string): Promise<PluginInfo> {
+    return this.bridge.invoke('set_plugin_secret', { id, name, value });
+  }
+
+  clearPluginSecret(id: string, name: string): Promise<PluginInfo> {
+    return this.bridge.invoke('clear_plugin_secret', { id, name });
+  }
+
+  removePlugin(id: string): Promise<void> {
+    return this.bridge.invoke('remove_plugin', { id });
+  }
+
+  onPlugins(handler: (plugins: PluginInfo[]) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<PluginInfo[]>(PLUGINS_EVENT, handler);
   }
 
   // ---- Vision ----

@@ -2339,6 +2339,7 @@ dependencies = [
  "jarvis-events",
  "jarvis-memory",
  "jarvis-platform",
+ "jarvis-plugins",
  "jarvis-runtime",
  "jarvis-security",
  "jarvis-storage",

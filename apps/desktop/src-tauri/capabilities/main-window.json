@@ -83,6 +83,19 @@
     "allow-attach-image-file",
     "allow-attach-photo",
     "allow-discard-capture",
-    "allow-attach-projector"
+    "allow-attach-projector",
+    "allow-list-plugins",
+    "allow-get-plugin-logs",
+    "allow-pick-plugin-folder",
+    "allow-review-mcp-server",
+    "allow-review-installed-plugin",
+    "allow-install-plugin",
+    "allow-set-plugin-enabled",
+    "allow-restart-plugin",
+    "allow-refresh-plugin-tools",
+    "allow-set-plugin-tool",
+    "allow-set-plugin-secret",
+    "allow-clear-plugin-secret",
+    "allow-remove-plugin"
   ]
 }

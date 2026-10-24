@@ -62,7 +62,7 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
           @if (approval.risk === 'high') {
             <p class="warning">
               <jv-icon name="warning" [size]="14" />
-              This action can change or delete data or run programs. Allow it only if you expected it.
+              This action can change or delete data, run programs or let a plugin act. Allow it only if you expected it.
             </p>
           }
           <footer>

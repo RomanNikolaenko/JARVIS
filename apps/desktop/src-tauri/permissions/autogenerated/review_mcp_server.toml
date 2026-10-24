@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-review-mcp-server"
+description = "Enables the review_mcp_server command without any pre-configured scope."
+commands.allow = ["review_mcp_server"]
+
+[[permission]]
+identifier = "deny-review-mcp-server"
+description = "Denies the review_mcp_server command without any pre-configured scope."
+commands.deny = ["review_mcp_server"]

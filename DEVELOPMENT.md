@@ -209,6 +209,23 @@ effects; `run` does the work, respects `ctx.cancel` and the limits — and
 register it in `ToolRegistry::builtin`. The policy, approvals, audit log and
 UI pick it up automatically.
 
+### Plugins and MCP
+
+- `jarvis-plugins` contains the MCP client (`mcp.rs`), server processes
+  (`process.rs`), the tool adapter (`tool.rs`), manifests, the store
+  (`<config>/plugins.json`) and the `PluginManager`.
+- `cargo test -p jarvis-plugins` runs unit tests and `tests/servers.rs`:
+  that test binary has its own `main` (`harness = false`) because it
+  re-runs itself as a fake MCP server (`JARVIS_FAKE_MCP=<mode>`) for modern,
+  legacy, silent, oversized and crashing servers, and drives the manager
+  end to end (review, install, policy, risk reset, restarts, fingerprint
+  changes, keychain secrets).
+- Try a real plugin: Plugins → **Choose a plugin folder…** →
+  `examples/plugins/text-tools` (needs Node.js). Or **Add an MCP server**
+  with program `node` and the absolute path of `server.mjs` as argument.
+- Third-party MCP servers (for example `npx -y @modelcontextprotocol/server-…`)
+  download code when they start; review them like any other program.
+
 ### Voice and vision
 
 - `jarvis-voice` runs two external engines as child processes:
@@ -294,4 +311,5 @@ The exact paths are shown on the Settings screen.
 | Real Ollama / LM Studio | not installed on the dev machine | not verified |
 | Voice: packages installed through Settings → Voice (whisper.cpp b5454, Whisper Small, Piper, uk voice), SHA-256 verified | ✔ | not verified live |
 | Voice: speech through the speakers, reply read aloud while it streams, microphone capture (WASAPI), wake word mode on/off with indicator | ✔ (recognition checked on Piper-generated speech; the laptop mic array cancels its own speakers, so the acoustic loop is no test; wake word detection not tried with a live voice) | not verified live |
+| Plugins: example MCP server (Node.js) added through the Plugins screen, protocol 2026-07-28 negotiated, an agent with Qwen2.5 3B calling `text-tools__word_count` after approval (correct answer, audit entries), changed script stopped until reviewed again, disable and remove (process gone, `plugins.json` empty) | ✔ (the folder dialog path is covered by tests only) | CI only |
 | Vision: screenshot and window capture, Qwen3-VL 2B + mmproj answering about the screen | ✔ (b11739 CPU, 70–85 s per screenshot question) | unit tests only (X11, portal) |

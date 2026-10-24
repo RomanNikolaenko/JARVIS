@@ -9,6 +9,7 @@ mod commands;
 mod dialogs;
 mod logging;
 mod memory_commands;
+mod plugin_commands;
 mod runtime_commands;
 mod state;
 mod vision_commands;
@@ -23,6 +24,7 @@ use std::error::Error;
 
 use jarvis_core::config::LogLevel;
 use jarvis_core::jarvis_agent::AgentTask;
+use jarvis_core::jarvis_plugins::PluginManager;
 use jarvis_core::jarvis_security::PendingApproval;
 use jarvis_core::jarvis_voice::VoiceEngine;
 use jarvis_core::{AppPaths, CoreOptions, JarvisCore};
@@ -46,6 +48,8 @@ pub const VOICE_STATE_EVENT: &str = "jarvis://voice-state";
 pub const VOICE_TRANSCRIPT_EVENT: &str = "jarvis://voice-transcript";
 /// Event with the microphone level (0–1) while it is open.
 pub const VOICE_LEVEL_EVENT: &str = "jarvis://voice-level";
+/// Payload: `PluginInfo[]` after any change of a plugin.
+pub const PLUGINS_EVENT: &str = "jarvis://plugins";
 
 /// Registers all IPC commands. Shared by the application and the IPC tests.
 pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
@@ -128,6 +132,19 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vision_commands::attach_photo,
         vision_commands::discard_capture,
         runtime_commands::attach_projector,
+        plugin_commands::list_plugins,
+        plugin_commands::get_plugin_logs,
+        plugin_commands::pick_plugin_folder,
+        plugin_commands::review_mcp_server,
+        plugin_commands::review_installed_plugin,
+        plugin_commands::install_plugin,
+        plugin_commands::set_plugin_enabled,
+        plugin_commands::restart_plugin,
+        plugin_commands::refresh_plugin_tools,
+        plugin_commands::set_plugin_tool,
+        plugin_commands::set_plugin_secret,
+        plugin_commands::clear_plugin_secret,
+        plugin_commands::remove_plugin,
     ])
 }
 
@@ -175,6 +192,7 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
         core.subscribe_approvals(),
     );
     spawn_voice_forwarders(app.handle().clone(), core.voice());
+    spawn_plugin_forwarder(app.handle().clone(), core.plugins().clone());
     app.manage(AppState::new(core, Some(logging)));
     Ok(())
 }
@@ -272,6 +290,19 @@ fn spawn_voice_forwarders<R: Runtime>(app: AppHandle<R>, voice: &VoiceEngine) {
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// Sends the plugin list to the main window after every change.
+fn spawn_plugin_forwarder<R: Runtime>(app: AppHandle<R>, plugins: PluginManager) {
+    let mut changes = plugins.subscribe();
+    tauri::async_runtime::spawn(async move {
+        // A lagging receiver still gets the latest list.
+        while let Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) = changes.recv().await {
+            if let Err(err) = app.emit_to(MAIN_WINDOW, PLUGINS_EVENT, plugins.list()) {
+                tracing::debug!("cannot forward plugins: {err}");
             }
         }
     });

@@ -24,4 +24,8 @@ risk: RiskLevel,
 /**
  * Running it twice does the same as once (reads).
  */
-idempotent: boolean, };
+idempotent: boolean, 
+/**
+ * Name of the plugin that provides the tool; `None` for built-in tools.
+ */
+plugin?: string, };

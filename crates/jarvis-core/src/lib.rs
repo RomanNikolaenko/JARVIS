@@ -12,6 +12,7 @@ pub mod config;
 pub mod error;
 pub mod health;
 mod memory;
+mod plugins;
 pub mod routing;
 mod ui_errors;
 mod vision;
@@ -50,7 +51,9 @@ pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
 pub use vision::{MAX_ATTACHMENTS, VisionStatus};
-pub use {jarvis_agent, jarvis_security, jarvis_tools, jarvis_vision, jarvis_voice};
+pub use {
+    jarvis_agent, jarvis_plugins, jarvis_security, jarvis_tools, jarvis_vision, jarvis_voice,
+};
 
 /// Filesystem locations used by JARVIS. Resolved by the host application
 /// (e.g. via Tauri's path resolver) and passed in, so the core never guesses.
@@ -208,6 +211,7 @@ pub struct JarvisCore {
     voice: VoiceEngine,
     capture: Arc<dyn ScreenCapture>,
     captures: vision::CaptureStore,
+    plugins: jarvis_plugins::PluginManager,
     ui_error_limiter: ui_errors::RateLimiter,
 }
 
@@ -337,6 +341,8 @@ impl JarvisCore {
             runtime: tokio::runtime::Handle::current(),
         });
 
+        let plugins = plugins::open(&paths, &app_version, &agents, &secrets, &events).await?;
+
         let catalog = Arc::new(ModelCatalog::default());
         let chat = ChatService::new(
             Arc::clone(&registry),
@@ -374,6 +380,7 @@ impl JarvisCore {
             voice,
             capture: screen_capture.unwrap_or_else(jarvis_vision::system_capture),
             captures: vision::CaptureStore::default(),
+            plugins,
             ui_error_limiter: ui_errors::RateLimiter::new(
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
@@ -386,6 +393,8 @@ impl JarvisCore {
         Self::spawn_voice_events(&core);
         // Wake word mode the user enabled before opens the microphone again.
         voice::apply_settings(&core.voice, &core.config.current());
+        // Plugins the user approved and left enabled.
+        core.plugins.start_enabled();
         Ok(core)
     }
 
@@ -776,6 +785,7 @@ impl JarvisCore {
             .info(EventCategory::Lifecycle, "JARVIS core shutting down");
         // Running agent tasks pause and can be resumed after a restart.
         self.agents.manager.shutdown().await;
+        self.plugins.shutdown().await;
         self.chat.cancel_all();
         self.voice.shutdown().await;
         self.runtime.shutdown().await;

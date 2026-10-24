@@ -5,6 +5,7 @@
 //! Agent tasks and the audit log live in the memory database. If it cannot
 //! be opened they are kept in memory only, and the status says so.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -137,8 +138,12 @@ impl AgentSystem {
             paths.data_dir.clone(),
             paths.log_dir.clone(),
         ];
-        let settings: SettingsSource =
-            Arc::new(move || agent_settings(&config.current(), &protected));
+        // Tools of running plugins are registered only while the user has
+        // them turned on.
+        let registry = Arc::clone(&tools);
+        let settings: SettingsSource = Arc::new(move || {
+            agent_settings(&config.current(), &protected, &registry.group_tool_names())
+        });
         let manager = AgentManager::new(AgentEnvironment {
             store: TaskStore::new(db),
             tools: Arc::clone(&tools),
@@ -172,6 +177,7 @@ impl AgentSystem {
 pub(crate) fn agent_settings(
     settings: &Settings,
     protected: &[PathBuf],
+    plugin_tools: &BTreeSet<String>,
 ) -> jarvis_agent::AgentSettings {
     let tools = &settings.tools;
     let scope = FileScope::new(
@@ -191,7 +197,7 @@ pub(crate) fn agent_settings(
         .collect();
     jarvis_agent::AgentSettings {
         policy: SecurityPolicy::new(PolicyConfig {
-            enabled_tools: tools.enabled.iter().cloned().collect(),
+            enabled_tools: tools.enabled.iter().chain(plugin_tools).cloned().collect(),
             scope,
             allowed_programs,
             allow_network: tools.allow_network,
@@ -311,7 +317,7 @@ impl JarvisCore {
         let enabled = self.config.current().tools.enabled;
         self.agents()
             .tools
-            .specs()
+            .builtin_specs()
             .into_iter()
             .map(|spec| ToolInfo {
                 enabled: enabled.contains(&spec.name),

@@ -85,6 +85,19 @@ const COMMANDS: &[&str] = &[
     "attach_photo",
     "discard_capture",
     "attach_projector",
+    "list_plugins",
+    "get_plugin_logs",
+    "pick_plugin_folder",
+    "review_mcp_server",
+    "review_installed_plugin",
+    "install_plugin",
+    "set_plugin_enabled",
+    "restart_plugin",
+    "refresh_plugin_tools",
+    "set_plugin_tool",
+    "set_plugin_secret",
+    "clear_plugin_secret",
+    "remove_plugin",
 ];
 
 fn main() {

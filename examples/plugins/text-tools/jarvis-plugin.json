@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "text-tools",
+  "name": "Text tools",
+  "version": "1.0.0",
+  "description": "Counts words and makes slugs. An example plugin without dependencies.",
+  "author": "JARVIS",
+  "server": {
+    "command": "node",
+    "args": ["server.mjs"]
+  }
+}

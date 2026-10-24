@@ -11,6 +11,7 @@ use jarvis_core::jarvis_memory::{
     Conversation, ConversationDetail, ConversationPatch, Episode, EpisodeCursor, Fact, FactInput,
     MemoryStatus, Project, ProjectInput, SearchHit, SearchQuery, TransferReport,
 };
+use jarvis_core::jarvis_plugins::{McpServerRequest, PluginInfo, PluginReview, PluginToolUpdate};
 use jarvis_core::jarvis_security::{AuditEntry, AuditVerification, PendingApproval};
 use jarvis_core::jarvis_vision::{CaptureInfo, WindowInfo};
 use jarvis_core::jarvis_voice::{VoiceState, VoiceStatus, VoiceTranscript};
@@ -85,5 +86,9 @@ fn export_typescript_bindings() {
         VisionStatus,
         CaptureInfo,
         WindowInfo,
+        PluginInfo,
+        PluginReview,
+        McpServerRequest,
+        PluginToolUpdate,
     );
 }

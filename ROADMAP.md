@@ -95,7 +95,7 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Cloud models for agents behind a separate permission
 - ⬜ Process isolation for programs (AppContainer / bubblewrap / Landlock)
 - ⬜ Native tool calling for providers that support it
-- ⬜ Tools from MCP servers and plugins (Phase 7)
+- ✅ Tools from MCP servers and plugins (Phase 7)
 - ✅ Agents started from chat: composer action uses the selected model and
   opens the saved task journal; conversation history is not sent
 
@@ -126,10 +126,32 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Cloud speech (optional), echo cancellation, a dedicated wake-word model
 - ⬜ Camera on Linux (WebKitGTK media capture is off in Tauri)
 
-## Phase 7 — Sync and extensions ⬜
+## Phase 7 — Extensions 🟡
 
-Optional Supabase auth/sync (offline queue, conflict resolution, encryption,
-per-category opt-in), plugin API, MCP integration.
+All data stays on the user's computer: cloud sign-in and sync (Supabase)
+were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
+
+- ✅ Plugin API: a plugin is an MCP server with a `jarvis-plugin.json`
+  manifest, or any MCP server entered as a command
+  ([ADR 0012](docs/decisions/0012-plugins-and-mcp.md))
+- ✅ `jarvis-plugins`: MCP client for stdio servers, protocol 2026-07-28
+  (`server/discover`, `_meta`, `input_required`) with fallback to the
+  `initialize` handshake of 2025-11-25 and older; message size limits,
+  deadlines, cancellation
+- ✅ Consent: review before the first start, fingerprint of the program and
+  its files checked before every start, warnings for launchers like `npx`;
+  secrets in the OS keychain; bounded automatic restarts
+- ✅ Plugin tools in the agent registry behind the Security Policy Engine:
+  high risk by default, per-tool on/off and risk, risk reset when a tool's
+  definition changes, never repeated automatically
+- ✅ Plugins screen; example plugin `examples/plugins/text-tools`
+- ✅ Live check on Windows: the example server through the Plugins screen,
+  an agent (Qwen2.5 3B) calling a plugin tool after approval, a changed
+  script stopped until reviewed again, disable and remove
+- ⬜ HTTP (remote) MCP servers, resources and prompts, `subscriptions/listen`
+- ⬜ Sandboxed plugin processes; job objects on Windows
+- ⬜ Interoperability check with third-party MCP servers (needs downloads)
+- ⬜ Live check on Linux
 
 ## Phase 8 — Production readiness ⬜
 
@@ -138,7 +160,7 @@ release testing, ARM64 builds.
 
 ## Next iteration
 
-Live check of Phase 6 on Linux (WSLg audio and the X11/portal capture) and
-the wake word with a live voice; then Phase 7.
+Phase 8 (production readiness). Open items: live checks on Linux (Phases 6
+and 7), the wake word with a live voice, third-party MCP servers.
 Open Phase 2 items: live verification of local and cloud providers, including
 the Linux Secret Service integration.

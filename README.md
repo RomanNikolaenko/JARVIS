@@ -3,7 +3,7 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 6 — Voice and vision.** JARVIS chats with local models
+> **Status: Phase 7 — Extensions.** JARVIS chats with local models
 > served by **Ollama**, any **OpenAI-compatible** server (LM Studio,
 > llama.cpp server, vLLM, …) or its own **embedded llama.cpp runtime**,
 > remembers conversations, facts and projects in a local SQLite database,
@@ -12,14 +12,15 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 > Cloud providers: OpenAI, Anthropic and Gemini with OS-keychain API keys.
 > It listens and speaks (whisper.cpp, Piper, wake word «Джарвіс») and looks
 > at screenshots, windows and photos with vision models — all on your
-> computer. See
+> computer. Plugins add tools through the Model Context Protocol (MCP).
+> All data stays on your computer. See
 > [ROADMAP.md](ROADMAP.md).
 
 ## What works today
 
 - Desktop app (Tauri 2 + Angular 22) with a dark HUD-style UI:
   Dashboard, Chat (history, Markdown, code highlighting, stop), Models,
-  Runtime, Agents, Memory, Event log, Settings.
+  Runtime, Agents, Memory, Plugins, Event log, Settings.
 - Local AI: Ollama and OpenAI-compatible servers, auto-detected on their
   default ports; add servers on the Models screen with a connection test.
 - Model routing per task (general, reasoning, coding, vision, embeddings,
@@ -54,6 +55,13 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
   the embedded runtime with Qwen3-VL / Gemma 3). Captures happen only when
   you ask, you see them before sending, and they reach cloud models only
   with a separate privacy switch.
+- Plugins (Plugins screen): add an MCP server or a plugin folder
+  (`jarvis-plugin.json`); JARVIS shows exactly what it will run and a
+  fingerprint of the files, starts it only after you confirm, and stops it
+  if anything changes. Agents can use its tools; each call asks first until
+  you lower a tool's risk. API keys of plugins live in the OS keychain.
+  Plugins are not sandboxed — add only ones you trust. Example:
+  [examples/plugins/text-tools](examples/plugins/text-tools).
 - Rust core (`jarvis-core`) independent of the UI shell:
   - health check of all core components with timeouts;
   - settings in `config.toml` with validation, atomic writes and safe recovery;
@@ -102,7 +110,9 @@ Full instructions (Linux packages, tests, release builds, troubleshooting):
 ```
 apps/desktop/          Angular UI (src/) and Tauri shell (src-tauri/)
 crates/                Rust domain crates (core, ai, runtime, storage, memory,
-                       security, tools, agent, events, platform)
+                       security, tools, agent, plugins, voice, vision,
+                       events, platform)
+examples/plugins/      Example plugin (MCP server)
 packages/shared-types/ Generated TypeScript IPC types
 docs/decisions/        ADRs
 ```
