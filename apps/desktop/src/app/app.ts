@@ -27,12 +27,17 @@ const CLOCK_TICK_MS = 10_000;
   templateUrl: './app.html',
   styleUrl: './app.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { '[class.jv-reduced-motion]': 'reducedMotion()' },
+  host: {
+    '[class.jv-reduced-motion]': 'reducedMotion()',
+    '[class.jv-background]': 'background()',
+  },
 })
 export class App {
   private readonly system = inject(SystemStore);
   private readonly settings = inject(SettingsStore);
   private readonly now = signal(Date.now());
+  /** Another window has the focus or JARVIS is minimized: decorative animations pause. */
+  protected readonly background = signal(inBackground());
   protected readonly voice = inject(VoiceStore);
 
   protected readonly nav: readonly NavItem[] = [
@@ -103,5 +108,19 @@ export class App {
       destroyRef
     );
     pollWhileVisible(() => this.now.set(Date.now()), CLOCK_TICK_MS, destroyRef);
+
+    const updateBackground = () => this.background.set(inBackground());
+    window.addEventListener('focus', updateBackground);
+    window.addEventListener('blur', updateBackground);
+    document.addEventListener('visibilitychange', updateBackground);
+    destroyRef.onDestroy(() => {
+      window.removeEventListener('focus', updateBackground);
+      window.removeEventListener('blur', updateBackground);
+      document.removeEventListener('visibilitychange', updateBackground);
+    });
   }
+}
+
+function inBackground(): boolean {
+  return document.visibilityState === 'hidden' || !document.hasFocus();
 }

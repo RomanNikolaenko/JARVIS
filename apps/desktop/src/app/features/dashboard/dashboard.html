@@ -44,7 +44,7 @@
           <span class="mono">{{ formatPercent(m.cpuUsagePercent) }}</span>
         </div>
         <div class="meter-track">
-          <div class="meter-fill" [style.width]="meterWidth(m.cpuUsagePercent)"></div>
+          <div class="meter-fill" [style.transform]="meterScale(m.cpuUsagePercent)"></div>
         </div>
       </div>
       <div class="meter">
@@ -53,7 +53,7 @@
           <span class="mono">{{ formatBytes(m.memoryUsedBytes) }} / {{ formatBytes(m.memoryTotalBytes) }}</span>
         </div>
         <div class="meter-track">
-          <div class="meter-fill" [style.width]="meterWidth(memoryPercent())"></div>
+          <div class="meter-fill" [style.transform]="meterScale(memoryPercent())"></div>
         </div>
       </div>
       <dl class="facts">

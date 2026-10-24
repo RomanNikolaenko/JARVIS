@@ -3,7 +3,7 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 7 — Extensions.** JARVIS chats with local models
+> **Status: Phase 8 — Production readiness.** JARVIS chats with local models
 > served by **Ollama**, any **OpenAI-compatible** server (LM Studio,
 > llama.cpp server, vLLM, …) or its own **embedded llama.cpp runtime**,
 > remembers conversations, facts and projects in a local SQLite database,
@@ -72,7 +72,9 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 - Typed IPC: Rust types → generated TypeScript (`packages/shared-types`),
   structured error codes, deny-by-default command permissions.
 - Tests: Rust unit + integration + IPC/ACL tests, Angular unit tests.
-- CI for Windows and Linux.
+- CI for Windows and Linux, including a smoke test of the release build;
+  installers (NSIS, MSI, deb, rpm, AppImage) from the Release workflow —
+  see [docs/RELEASE.md](docs/RELEASE.md). Not code-signed yet.
 
 ## Quick start
 
@@ -103,6 +105,9 @@ Full instructions (Linux packages, tests, release builds, troubleshooting):
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Setup, build, test, debug on Windows/Linux |
 | [SECURITY.md](SECURITY.md) | Threat model, implemented controls, reporting |
 | [ROADMAP.md](ROADMAP.md) | Phases and current progress |
+| [CHANGELOG.md](CHANGELOG.md) | Changes per version |
+| [docs/RELEASE.md](docs/RELEASE.md) | Installers, release workflow, smoke test, release checklist |
+| [docs/security-review-2026-10.md](docs/security-review-2026-10.md) | Security review of the first release |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Workflow and quality gates |
 
 ## Repository layout

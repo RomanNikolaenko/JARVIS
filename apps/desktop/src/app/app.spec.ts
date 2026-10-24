@@ -25,6 +25,28 @@ describe('App shell', () => {
     expect(links).toEqual(['Dashboard', 'Chat', 'Models', 'Runtime', 'Agents', 'Memory', 'Plugins', 'Event log', 'Settings']);
   });
 
+  it('pauses decorative animations while another window has the focus', async () => {
+    const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      const fixture = TestBed.createComponent(App);
+      await fixture.whenStable();
+      const host = fixture.nativeElement as HTMLElement;
+      expect(host.classList).not.toContain('jv-background');
+
+      focused.mockReturnValue(false);
+      window.dispatchEvent(new Event('blur'));
+      fixture.detectChanges();
+      expect(host.classList).toContain('jv-background');
+
+      focused.mockReturnValue(true);
+      window.dispatchEvent(new Event('focus'));
+      fixture.detectChanges();
+      expect(host.classList).not.toContain('jv-background');
+    } finally {
+      focused.mockRestore();
+    }
+  });
+
   it('shows an offline banner when the core is unreachable', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();

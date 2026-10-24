@@ -72,11 +72,16 @@ already-running requests retain their original provider. A locked or unavailable
 vault is reported as an error. Connection tests contact the selected endpoint
 without sending conversation content, including when cloud chat is disabled.
 
+The latest review: [docs/security-review-2026-10.md](docs/security-review-2026-10.md).
+
 ## Planned controls (not implemented yet)
 
 - Sandboxing of plugin processes (AppContainer / bubblewrap / Landlock).
 - Encryption of the memory database at rest with a key in the OS keychain.
-- Signed installers and updates (Phase 8).
+- Signed installers and signed automatic updates (need an Authenticode
+  certificate and an update signing key; until then releases ship with
+  SHA-256 checksums).
+- A RustSec advisory scan of the Rust dependencies in CI.
 
 Process isolation/sandboxing of tools and plugins is **not** implemented;
 do not assume it exists. A plugin process can do anything the user can. Tools run with the user's rights: the policy limits what they are

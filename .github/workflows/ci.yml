@@ -98,7 +98,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev libasound2-dev
+            librsvg2-dev libxdo-dev libssl-dev libasound2-dev xvfb
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
@@ -112,6 +112,17 @@ jobs:
       - name: Build release binary (frontend + Tauri, no installer)
         working-directory: apps/desktop
         run: npm run tauri -- build --no-bundle
+      # Starts the release binary with a fresh profile: every screen, a chat
+      # turn, an MCP plugin, start-up time and memory, a clean shutdown
+      # (Linux: start-up and shutdown only, WebKitGTK has no DevTools).
+      - name: Release smoke test (Windows)
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        run: node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugins/text-tools/server.mjs
+      - name: Release smoke test (Linux)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: xvfb-run -a node e2e/smoke.mjs ../../target/release/jarvis
       - uses: actions/upload-artifact@v7
         with:
           name: jarvis-${{ runner.os }}

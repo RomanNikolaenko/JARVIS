@@ -21,6 +21,8 @@ mod bindings;
 mod ipc_tests;
 
 use std::error::Error;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 use jarvis_core::config::LogLevel;
 use jarvis_core::jarvis_agent::AgentTask;
@@ -197,15 +199,32 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Settings roam with the user profile; data (later: databases, models) and
-/// logs stay on this machine.
+/// Keeps settings, data and logs in one folder instead of the user profile
+/// (release tests, portable use). Must be an absolute path.
+pub const PROFILE_DIR_ENV: &str = "JARVIS_PROFILE_DIR";
+
+/// Settings roam with the user profile; data (databases, models) and logs
+/// stay on this machine. `JARVIS_PROFILE_DIR` replaces all three.
 fn resolve_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, tauri::Error> {
+    // Logging starts later with these paths; the log folder is reported then.
+    if let Some(profile) = profile_dir(std::env::var_os(PROFILE_DIR_ENV)) {
+        return Ok(AppPaths {
+            config_dir: profile.join("config"),
+            data_dir: profile.join("data"),
+            log_dir: profile.join("logs"),
+        });
+    }
     let resolver = app.path();
     Ok(AppPaths {
         config_dir: resolver.app_config_dir()?,
         data_dir: resolver.app_local_data_dir()?,
         log_dir: resolver.app_log_dir()?,
     })
+}
+
+/// The profile folder from `JARVIS_PROFILE_DIR`, if it is an absolute path.
+fn profile_dir(value: Option<OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|dir| dir.is_absolute())
 }
 
 /// Forwards agent task changes and pending approvals to the main window.
@@ -325,4 +344,21 @@ fn spawn_event_forwarder<R: Runtime>(app: AppHandle<R>, mut subscription: EventS
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_absolute_profile_folders_are_used() {
+        let absolute = std::env::temp_dir().join("jarvis-profile");
+        assert_eq!(
+            profile_dir(Some(absolute.clone().into_os_string())),
+            Some(absolute)
+        );
+        assert_eq!(profile_dir(Some(OsString::from("relative/profile"))), None);
+        assert_eq!(profile_dir(Some(OsString::new())), None);
+        assert_eq!(profile_dir(None), None);
+    }
 }

@@ -1061,10 +1061,13 @@ impl PluginManager {
             state.runtime(&record.id).secrets_set = secrets_set;
         }
         self.inner.save().await?;
+        // Arguments are left out: users sometimes pass tokens there, and the
+        // event log is also written to the log files.
+        let fingerprint = record.approved_fingerprint.as_deref().unwrap_or_default();
         self.inner.options.events.info(
             EventCategory::Plugins,
             format!(
-                "Plugin {} {} ({} {})",
+                "Plugin {} {}: runs {}, fingerprint {}…",
                 record.name,
                 if replaced.is_some() {
                     "approved again"
@@ -1072,7 +1075,7 @@ impl PluginManager {
                     "added"
                 },
                 record.launch.program,
-                record.launch.args.join(" ")
+                fingerprint.get(..16).unwrap_or(fingerprint)
             ),
         );
         self.inner.changed();

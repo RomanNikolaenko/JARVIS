@@ -424,7 +424,8 @@ notification instead of blocking publishers.
 ### 4.6 Application layer (`apps/desktop/src-tauri`)
 
 - **Startup:** resolve paths (config: roaming config dir; data: *local* data
-  dir — large files must not roam; logs: OS log dir) → init logging → init core
+  dir — large files must not roam; logs: OS log dir; `JARVIS_PROFILE_DIR`
+  replaces all three for tests and portable use) → init logging → init core
   → apply configured log level → start event forwarder → manage `AppState`.
 - **IPC commands** are thin adapters (`commands.rs`). Async commands return
   `Result<T, ErrorPayload>`.
@@ -719,6 +720,8 @@ must be granted by a capability; anything not granted is denied. See
 | Errors | `thiserror` enums → stable `ErrorCode`; no `unwrap`/`expect` outside tests (clippy-enforced). |
 | Unsafe code | `unsafe_code = "forbid"` workspace-wide. |
 | Observability | `tracing` + rotating files; user-facing event log. |
+| UI performance | Animations use `transform`/`opacity` on HTML elements only (compositor), never SVG elements or layout properties; they pause while another window has the focus. The release smoke test fails if the idle dashboard keeps the renderer's main thread busy more than 15 % of the time. |
+| Distribution | Installers built by the Release workflow (NSIS, MSI, deb, rpm, AppImage) with SHA-256 checksums; unsigned and without automatic updates until signing keys exist. |
 
 ## 6. Known limitations
 

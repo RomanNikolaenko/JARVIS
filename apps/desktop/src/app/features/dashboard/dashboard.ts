@@ -98,7 +98,8 @@ export class Dashboard {
     pollWhileVisible(() => this.system.refreshMetrics(), METRICS_POLL_MS, inject(DestroyRef));
   }
 
-  protected meterWidth(percent: number | null | undefined): string {
-    return `${Math.min(100, Math.max(0, percent ?? 0))}%`;
+  /** Meters scale instead of changing width: no layout on every frame. */
+  protected meterScale(percent: number | null | undefined): string {
+    return `scaleX(${Math.min(100, Math.max(0, percent ?? 0)) / 100})`;
   }
 }

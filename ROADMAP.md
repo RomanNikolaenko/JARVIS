@@ -153,14 +153,34 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ⬜ Interoperability check with third-party MCP servers (needs downloads)
 - ⬜ Live check on Linux
 
-## Phase 8 — Production readiness ⬜
+## Phase 8 — Production readiness 🟡
 
-Performance work, security review, signed installers, auto-updates, E2E tests,
-release testing, ARM64 builds.
+- ✅ Security review ([docs/security-review-2026-10.md](docs/security-review-2026-10.md)):
+  IPC surface, CSP and rendering of model output, downloads, secrets, plugin
+  event log fixed (no command arguments), development dependencies patched
+  (`npm audit`: 0)
+- ✅ Installers: NSIS (current user, no administrator rights) and MSI on
+  Windows; deb, rpm and AppImage on Linux (ALSA dependency declared)
+- ✅ Release workflow: installers on Windows and Ubuntu 22.04, release smoke
+  test, draft GitHub release with `SHA256SUMS.txt` ([docs/RELEASE.md](docs/RELEASE.md))
+- ✅ Release smoke test (`apps/desktop/e2e/smoke.mjs`) against the release
+  binary with a temporary profile (`JARVIS_PROFILE_DIR`), in CI on every push
+- ✅ Performance: the idle dashboard used 7.5 % of all CPU cores (animated
+  SVG and meter widths repainted on every frame); now 2.6 %, 1.1 % while
+  another window has the focus (animations pause), under 0.1 % on other
+  screens; the smoke test fails if the idle renderer gets busy again
+- ✅ CHANGELOG, release guide
+- ⬜ Signed installers (Authenticode certificate) and signed automatic
+  updates (an update signing key) — need the owner's keys
+- ⬜ RustSec advisory scan (`cargo audit`)
+- ⬜ License for the project
+- ⬜ ARM64 builds; native WebDriver end-to-end tests
 
 ## Next iteration
 
-Phase 8 (production readiness). Open items: live checks on Linux (Phases 6
-and 7), the wake word with a live voice, third-party MCP servers.
+Finish Phase 8: signing and automatic updates once the keys exist, a
+RustSec scan, a license, then the manual release checklist and v0.1.0.
+Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
+voice, third-party MCP servers.
 Open Phase 2 items: live verification of local and cloud providers, including
 the Linux Secret Service integration.
