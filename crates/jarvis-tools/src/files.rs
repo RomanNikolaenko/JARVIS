@@ -57,6 +57,7 @@ fn spec(
         capabilities: capabilities.to_vec(),
         risk,
         idempotent,
+        plugin: None,
     }
 }
 

@@ -2423,6 +2423,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "jarvis-plugins"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "jarvis-events",
+ "jarvis-platform",
+ "jarvis-security",
+ "jarvis-tools",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "jarvis-runtime"
 version = "0.1.0"
 dependencies = [

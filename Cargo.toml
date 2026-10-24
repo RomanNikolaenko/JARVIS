@@ -10,6 +10,7 @@ members = [
     "crates/jarvis-security",
     "crates/jarvis-tools",
     "crates/jarvis-agent",
+    "crates/jarvis-plugins",
     "crates/jarvis-voice",
     "crates/jarvis-vision",
     "crates/jarvis-core",
@@ -29,6 +30,7 @@ jarvis-ai = { path = "crates/jarvis-ai" }
 jarvis-core = { path = "crates/jarvis-core" }
 jarvis-events = { path = "crates/jarvis-events" }
 jarvis-platform = { path = "crates/jarvis-platform" }
+jarvis-plugins = { path = "crates/jarvis-plugins" }
 jarvis-memory = { path = "crates/jarvis-memory" }
 jarvis-runtime = { path = "crates/jarvis-runtime" }
 jarvis-security = { path = "crates/jarvis-security" }

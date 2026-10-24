@@ -42,6 +42,7 @@ fn spec(
         capabilities: vec![capability],
         risk,
         idempotent,
+        plugin: None,
     }
 }
 
