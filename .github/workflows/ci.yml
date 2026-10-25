@@ -135,6 +135,16 @@ jobs:
       # Starts the release binary with a fresh profile: every screen, a chat
       # turn, an MCP plugin, start-up time and memory, a clean shutdown
       # (Linux: start-up and shutdown only, WebKitGTK has no DevTools).
+      # The runner is elevated, so WebView2 ignores the debugging port from
+      # the environment; a machine policy sets it (docs/RELEASE.md).
+      - name: WebView2 debugging port for the smoke test (runner only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'jarvis.exe' -Value '--remote-debugging-port=9333' -PropertyType String -Force | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value 'JARVIS_SMOKE_DEVTOOLS_PORT=9333'
       - name: Release smoke test (Windows)
         if: runner.os == 'Windows'
         working-directory: apps/desktop

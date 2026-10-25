@@ -79,6 +79,19 @@ model, an MCP server added on the Plugins screen, no console errors, start-up
 time and memory, and a clean shutdown. On Linux (run under `xvfb-run`) it
 checks start-up, that the app stays up, and exit.
 
+The DevTools port reaches WebView2 through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`.
+Since WebView2 Runtime 150, an **elevated** app ignores that variable (and
+HKCU policies) by design, so a user-level setting cannot open a debugging
+port into an administrator's process. Run the test from a normal
+(non-elevated) shell. GitHub's Windows runners are elevated, so the workflows
+write the machine policy
+`HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments`
+(value `jarvis.exe` = `--remote-debugging-port=9333`) on the throwaway
+runner and pass the port in `JARVIS_SMOKE_DEVTOOLS_PORT`. JARVIS itself has
+no switch that opens the port. When the endpoint does not answer, the test
+reports the WebView2 processes, their arguments and ports, the runtime
+version, the policies and elevation.
+
 ## Update test (manual, Windows, needs the key)
 
 `apps/desktop/e2e/update-test.mjs` signs a stand-in installer with the real

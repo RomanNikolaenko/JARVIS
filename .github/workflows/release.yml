@@ -75,6 +75,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri -- build --config src-tauri/tauri.release.conf.json
+      # The runner is elevated, so WebView2 ignores the debugging port from
+      # the environment; a machine policy sets it (docs/RELEASE.md).
+      - name: WebView2 debugging port for the smoke test (runner only)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'jarvis.exe' -Value '--remote-debugging-port=9333' -PropertyType String -Force | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value 'JARVIS_SMOKE_DEVTOOLS_PORT=9333'
       - name: Release smoke test (Windows)
         if: runner.os == 'Windows'
         working-directory: apps/desktop

@@ -13,6 +13,11 @@
 //
 // The profile (JARVIS_PROFILE_DIR) is a new temporary folder, so the user's
 // real settings and data are never touched.
+//
+// The DevTools port comes from WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, which
+// WebView2 150+ ignores when the app runs elevated (as on GitHub's Windows
+// runners). There the workflow sets the port as a machine policy and passes
+// it in JARVIS_SMOKE_DEVTOOLS_PORT (docs/RELEASE.md).
 
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -120,8 +125,10 @@ $elevated = ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.
 "user $($identity.Name), elevated: $($elevated), session $((Get-Process -Id $PID).SessionId)"
 $webviews = @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'")
 "webview processes: $($webviews.Count)"
-$webviews | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object {
-  "browser process $($_.ProcessId) (parent $($_.ParentProcessId)): $($_.CommandLine)"
+$webviews | Where-Object { $_.CommandLine -match '--webview-exe-name=jarvis.exe' -and $_.CommandLine -notmatch '--type=' } | ForEach-Object {
+  $switch = [regex]::Match($_.CommandLine, '--remote-debugging-port=\d+').Value
+  "JARVIS browser process $($_.ProcessId), debugging switch: $(if ($switch) { $switch } else { 'none' })"
+  "  $($_.CommandLine)"
 }
 Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
   Where-Object { $_.OwningProcess -in $webviews.ProcessId } |
@@ -132,7 +139,8 @@ foreach ($key in 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017
   $version = (Get-ItemProperty $key -ErrorAction SilentlyContinue).pv
   if ($version) { "WebView2 runtime $version ($($key))" }
 }
-foreach ($key in 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2', 'HKCU:\SOFTWARE\Policies\Microsoft\Edge\WebView2',
+foreach ($key in 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments',
+                 'HKCU:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments',
                  'HKLM:\SOFTWARE\Policies\Microsoft\Edge') {
   if (Test-Path $key) { "policy $($key): " + ((Get-ItemProperty $key | Out-String) -replace '\s+', ' ') }
 }
@@ -354,7 +362,7 @@ async function windowsChecks(page, profile, pid, started) {
 async function main() {
   // The long form of the path: CI runners hand out 8.3 temp paths.
   const profile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-smoke-')));
-  const port = await freePort();
+  const port = Number(process.env.JARVIS_SMOKE_DEVTOOLS_PORT) || (await freePort());
   const env = { ...process.env, JARVIS_PROFILE_DIR: profile };
   if (process.platform === 'win32') {
     env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${port}`;

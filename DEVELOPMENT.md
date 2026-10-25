@@ -277,7 +277,8 @@ replaces the update feed URL for tests (release builds accept HTTPS only;
 the signature check always applies — see docs/RELEASE.md). `JARVIS_PROFILE_DIR`
 (an absolute path) keeps settings, data and logs in one folder instead —
 used by the release smoke test and for portable use. The WebView cache
-(`EBWebView`) stays in the local data folder; JARVIS keeps no state there.
+(`EBWebView`) stays in the local data folder; JARVIS keeps no state there
+(the smoke test moves it into its profile with `WEBVIEW2_USER_DATA_FOLDER`).
 
 ## Debugging
 
