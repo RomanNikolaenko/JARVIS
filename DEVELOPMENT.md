@@ -234,6 +234,12 @@ UI pick it up automatically.
   connects JARVIS's MCP client to any server: the negotiated protocol, its
   tools, and one call. Checked with the official reference servers
   (`server-everything`, `server-filesystem` 2.0.1).
+- `cargo run -p jarvis-ai --example provider-probe -- <ollama|openai-compatible> <base url> [--model <id>] [--embed-model <id>]`
+  talks to a real model server through JARVIS's provider code: health,
+  models and capabilities, a streamed reply, the output limit, cancellation
+  in the middle of a reply (a request right after it must not wait), and
+  embeddings. Ollama can serve local GGUF files without a download:
+  `ollama create <name> -f Modelfile` with `FROM <path to .gguf>`.
 - Try a real plugin: Plugins → **Choose a plugin folder…** →
   `examples/plugins/text-tools` (needs Node.js). Or **Add an MCP server**
   with program `node` and the absolute path of `server.mjs` as argument.
@@ -328,7 +334,7 @@ used by the release smoke test and for portable use. The WebView cache
 | Runtime screen: hardware detection, llama.cpp release lookup (no install) | ✔ | ✔ WSL |
 | Real llama.cpp build + Qwen2.5 3B: install, start, chat, stop | ✔ b11739 Vulkan, CPU offload; Vulkan on Radeon Vega 8 gives garbled output | ✔ WSL: b11782 CPU build installed through the app, model imported from `/mnt/c`, streamed chat saved and kept after restart |
 | Agents with the real model: tools, policy, verifier, journal, audit | ✔ (approvals allowed and denied, injected delete held) | ✔ WSL: read-only tasks, workspace folder from the GTK dialog, tasks kept after restart; approval dialog not exercised on Linux yet |
-| Real Ollama / LM Studio | not installed on the dev machine | not verified |
+| Real Ollama and an OpenAI-compatible server (`provider-probe` and the app: models, chat, Stop, memory embeddings, semantic search) | ✔ Ollama 0.40.11 (CPU, Qwen2.5 3B and BGE-M3 from local GGUF) and llama.cpp server b11739 on the LM Studio port; the LM Studio app itself not installed | not verified |
 | Voice: packages installed through Settings → Voice (whisper.cpp b5454, Whisper Small, Piper, uk voice), SHA-256 verified | ✔ | not verified live |
 | Voice: speech through the speakers, reply read aloud while it streams, microphone capture (WASAPI), wake word mode on/off with indicator | ✔ (recognition checked on Piper-generated speech; the laptop mic array cancels its own speakers, so the acoustic loop is no test; wake word detection not tried with a live voice) | not verified live |
 | Plugins: example MCP server (Node.js) added through the Plugins screen, protocol 2026-07-28 negotiated, an agent with Qwen2.5 3B calling `text-tools__word_count` after approval (correct answer, audit entries), changed script stopped until reviewed again, disable and remove (process gone, `plugins.json` empty) | ✔ (the folder dialog path is covered by tests only) | CI only |

@@ -27,8 +27,9 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Markdown rendering with inert links/images and code highlighting
 - ✅ Secrets in the OS keychain; API-key authentication
 - ✅ Cloud providers (OpenAI, Anthropic, Gemini) behind the privacy opt-in
-- ⬜ Verification against real Ollama / LM Studio installations (only protocol
-  mocks so far)
+- ✅ Verification against real servers (Phase 9): Ollama 0.40.11 and the
+  llama.cpp server (the OpenAI-compatible protocol LM Studio speaks); the LM
+  Studio app itself is not installed on the dev machine
 
 ## Phase 3 — Embedded runtime 🟡
 
@@ -203,13 +204,37 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   and shortcuts checked, the smoke test against the installed program,
   uninstall removes the program and keeps user data (rpm not tested)
 - ⬜ Native WebDriver end-to-end tests (the CDP smoke test covers Windows)
+- ✅ v0.1.0 tagged; the Release workflow built, signed and install-tested the
+  installers for all four targets and created the draft release (publishing
+  it is the owner's step)
+
+## Phase 9 — Real local AI 🟡
+
+Not part of the original plan: chosen after Phase 8 to close the gap in the
+release criterion "connects to an external local AI", which was checked
+against protocol mocks only.
+
+- ✅ `provider-probe` example: health, models and capabilities, a streamed
+  reply with the time to the first token, the output limit, cancellation in
+  the middle of a reply, embeddings — through JARVIS's own provider code
+- ✅ Ollama 0.40.11 (official Windows build, CPU; Qwen2.5 3B and BGE-M3
+  imported from local GGUF files): every probe check, capabilities from
+  `/api/show` (context 32768, tools, embedding), 1024-dimension embeddings
+- ✅ llama.cpp server b11739 on the LM Studio port (OpenAI-compatible): every
+  probe check; token usage now requested (`stream_options.include_usage`)
+- ✅ Through the app (fresh profile): both providers on the Models data, a
+  chat turn with each, Stop in the middle of a reply (the next turn answered
+  in 1.8 s), memory picking Ollama's BGE-M3 automatically, semantic search
+  finding the conversation
+- ⬜ LM Studio app itself; context window and tool support of
+  OpenAI-compatible servers (no discovery API)
+- ⬜ Native tool calling for agents (Ollama and OpenAI-compatible tools APIs,
+  text protocol kept as the fallback)
 
 ## Next iteration
 
-Finish Phase 8: the manual release checklist and v0.1.0 (the license is
-chosen, the update signing secrets are in GitHub, the RustSec scan runs in
-CI).
+Phase 9: native tool calling for agents, checked live with Ollama and the
+llama.cpp server.
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
-voice, third-party MCP servers.
-Open Phase 2 items: live verification of local and cloud providers, including
-the Linux Secret Service integration.
+voice, third-party MCP servers, the Linux Secret Service integration, cloud
+providers with real keys.

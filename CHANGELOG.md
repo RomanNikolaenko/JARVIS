@@ -2,6 +2,23 @@
 
 All notable changes to JARVIS. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- `provider-probe` example for checking real model servers through
+  JARVIS's provider code (models, streaming, cancellation, embeddings).
+
+### Fixed
+
+- Token usage from OpenAI-compatible servers (LM Studio, llama.cpp, vLLM):
+  it is now requested with the streamed reply.
+
+### Verified
+
+- Ollama 0.40.11 and the llama.cpp server (OpenAI-compatible) live, through
+  the provider code and the app: chat, Stop, embeddings for memory.
+
 ## [0.1.0] — 2026-10-25
 
 The first version: a local-first desktop assistant for Windows 10/11 and

@@ -115,10 +115,13 @@ impl AiProvider for OpenAiCompatibleProvider {
         let url = self.url("chat/completions")?;
 
         let messages: Vec<Value> = request.messages.iter().map(message_json).collect();
+        // Token counts arrive in a last chunk only when asked for (OpenAI,
+        // llama.cpp, LM Studio, vLLM and Ollama's /v1 all understand it).
         let mut body = json!({
             "model": request.model,
             "messages": messages,
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
         if let Some(temperature) = request.options.temperature {
             body["temperature"] = json!(temperature);

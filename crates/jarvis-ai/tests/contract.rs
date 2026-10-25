@@ -155,6 +155,7 @@ const OPENAI: Backend = Backend {
     assert_options: |body| {
         assert_eq!(body["temperature"], json!(0.5));
         assert_eq!(body["max_tokens"], json!(64));
+        assert_eq!(body["stream_options"], json!({ "include_usage": true }));
     },
     assert_image_message: |message| {
         assert_eq!(
