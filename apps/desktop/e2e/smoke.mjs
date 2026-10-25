@@ -240,9 +240,11 @@ const PAGE_HELPERS = `
 `;
 
 async function windowsChecks(page, profile, pid, started) {
-  await page.evaluate(PAGE_HELPERS);
   await until('the app shell', () => page.evaluate(`document.querySelectorAll('.nav-link').length > 5`));
   metrics.uiReadyMs = Date.now() - started;
+  // Only now: the DevTools target can appear before the app's document
+  // replaces the initial one, which would drop helpers added earlier.
+  await page.evaluate(PAGE_HELPERS);
   const status = await until('a core status', () =>
     page.evaluate(`(() => {
       const text = document.querySelector('jv-status-badge')?.textContent.trim() ?? '';
