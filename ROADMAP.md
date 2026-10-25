@@ -173,7 +173,10 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ Release workflow: installers on Windows and Ubuntu 22.04, release smoke
   test, draft GitHub release with `SHA256SUMS.txt` ([docs/RELEASE.md](docs/RELEASE.md))
 - ✅ Release smoke test (`apps/desktop/e2e/smoke.mjs`) against the release
-  binary with a temporary profile (`JARVIS_PROFILE_DIR`), in CI on every push
+  binary with a temporary profile (`JARVIS_PROFILE_DIR`), in CI on every push;
+  GitHub's Windows runners are elevated, where WebView2 150+ ignores the
+  debugging port from the environment, so the workflows set it as a machine
+  policy; WebView2 diagnostics as annotations when the endpoint is missing
 - ✅ Performance: the idle dashboard used 7.5 % of all CPU cores (animated
   SVG and meter widths repainted on every frame); now 2.6 %, 1.1 % while
   another window has the focus (animations pause), under 0.1 % on other
@@ -189,16 +192,16 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11); `cargo audit` and
   `npm audit` in CI on every push
 - ⬜ License for the project
-- 🟡 ARM64 builds (Windows 11 ARM and Linux) added to CI and the Release
-  workflow, with the release smoke test and `aarch64` update feed entries;
-  waiting for the first CI run
+- ✅ ARM64 builds (Windows 11 ARM and Linux) in CI and the Release workflow,
+  with the release smoke test (CI green on all four desktop targets, run
+  40177361213) and `aarch64` update feed entries
 - ⬜ Voice on ARM64 (pinned whisper.cpp and Piper packages for ARM64)
 - ⬜ Native WebDriver end-to-end tests (the CDP smoke test covers Windows)
 
 ## Next iteration
 
-Finish Phase 8: the signing secrets in GitHub, a RustSec scan, a license,
-then the manual release checklist and v0.1.0.
+Finish Phase 8: a license, then the manual release checklist and v0.1.0
+(the update signing secrets are in GitHub, the RustSec scan runs in CI).
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
 voice, third-party MCP servers.
 Open Phase 2 items: live verification of local and cloud providers, including

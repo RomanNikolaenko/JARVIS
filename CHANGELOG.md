@@ -31,8 +31,8 @@ Linux (X11 and Wayland).
 - **Plugins and MCP**: plugins are MCP servers (protocol 2026-07-28 and the
   older handshake) reviewed and fingerprinted before every start; their
   tools go through the same policy; example plugin `text-tools`.
-- **Release**: installers (NSIS, MSI, deb, rpm, AppImage), a draft-release
-  workflow with checksums, and a release smoke test.
+- **Release**: installers (NSIS, MSI, deb, rpm, AppImage) for x64 and
+  ARM64, a draft-release workflow with checksums, and a release smoke test.
 - **Updates**: signed automatic updates from GitHub Releases (Settings →
   Updates), installed only after confirmation.
 
