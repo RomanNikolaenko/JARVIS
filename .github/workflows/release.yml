@@ -128,8 +128,20 @@ jobs:
           sparse-checkout: .github/scripts
       - uses: actions/download-artifact@v7
         with:
-          path: dist
+          path: artifacts
           merge-multiple: true
+      # The artifacts keep the bundler's folders (nsis/, msi/, deb/, ...);
+      # the feed, the checksums and the release take the files side by side.
+      - name: Collect the files
+        run: |
+          mkdir dist
+          find artifacts -type f -exec mv -n -t dist {} +
+          left=$(find artifacts -type f | wc -l)
+          if [ "$left" -ne 0 ]; then
+            echo "::error::$left files share a name with another installer"
+            exit 1
+          fi
+          ls -l dist
       - name: Update feed
         run: node .github/scripts/latest-json.mjs dist "$TAG" "${{ github.repository }}"
       - name: Checksums
