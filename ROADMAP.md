@@ -204,9 +204,11 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   and shortcuts checked, the smoke test against the installed program,
   uninstall removes the program and keeps user data (rpm not tested)
 - ⬜ Native WebDriver end-to-end tests (the CDP smoke test covers Windows)
-- ✅ v0.1.0 tagged; the Release workflow built, signed and install-tested the
-  installers for all four targets and created the draft release (publishing
-  it is the owner's step)
+- ✅ v0.1.0 published (2026-10-25); the Release workflow built, signed and
+  install-tested the installers for all four targets
+- ✅ v0.1.1: the installer shows the JARVIS icon and moves on to the finish
+  page by itself; the first version installed copies of 0.1.0 can update to
+  through the update button
 - ✅ After the first real install: an update button in the top bar (like
   Astra Browser's); the window opens maximized and a restored window never
   exceeds the screen's work area; the ARM64 installer refuses x64 PCs (one
