@@ -23,6 +23,7 @@ describe('UpdatesStore', () => {
   let store: UpdatesStore;
 
   beforeEach(() => {
+    localStorage.removeItem('jarvis.update-seen');
     api = {
       onUpdateStatus: vi.fn(async (handler: (status: UpdateStatus) => void) => {
         pushed = handler;
@@ -61,5 +62,37 @@ describe('UpdatesStore', () => {
     api['checkForUpdate'].mockRejectedValueOnce({ code: 'unavailable', message: 'offline' });
     await store.check();
     expect(store.error()?.message).toBe('offline');
+  });
+
+  it('installs the found version with one call and checks again after a failed attempt', async () => {
+    await store.start();
+    await store.update();
+    expect(api['installUpdate']).not.toHaveBeenCalled();
+
+    await store.check();
+    await store.update();
+    expect(api['installUpdate']).toHaveBeenLastCalledWith('0.2.0');
+
+    // The download failed: the core dropped it, so the retry checks first.
+    pushed?.(status({ phase: 'failed', available: { version: '0.2.0', notes: null, date: null }, error: 'bad signature' }));
+    expect(store.retryVersion()).toBe('0.2.0');
+    api['checkForUpdate'].mockClear();
+    await store.update();
+    expect(api['checkForUpdate']).toHaveBeenCalledTimes(1);
+    expect(api['installUpdate']).toHaveBeenCalledTimes(2);
+  });
+
+  afterEach(() => localStorage.removeItem('jarvis.update-seen'));
+
+  it('draws attention to a new version until it was looked at', async () => {
+    await store.start();
+    await store.check();
+    expect(store.attention()).toBe(true);
+    store.markSeen();
+    expect(store.attention()).toBe(false);
+    expect(localStorage.getItem('jarvis.update-seen')).toBe('0.2.0');
+
+    pushed?.(status({ phase: 'available', available: { version: '0.3.0', notes: null, date: null } }));
+    expect(store.attention()).toBe(true);
   });
 });

@@ -76,8 +76,9 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
   the installers with a smoke test of the installed program;
   installers (NSIS, MSI, deb, rpm, AppImage) from the Release workflow —
   see [docs/RELEASE.md](docs/RELEASE.md). Signed updates: JARVIS checks
-  the project's releases (Settings → Updates) and installs a new version
-  only after you confirm. Installers are not Authenticode-signed yet.
+  the project's releases; the update button in the top bar shows a new
+  version and installs it when you click it (details in Settings →
+  Updates). Installers are not Authenticode-signed yet.
 
 ## Quick start
 

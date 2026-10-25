@@ -6,6 +6,9 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Added
 
+- An update button in the top bar: it shows the running version, offers a
+  new one with a pulsing dot, downloads, verifies and installs it on one
+  click with progress, and offers a retry after a failed download.
 - `provider-probe` example for checking real model servers through
   JARVIS's provider code (models, streaming, cancellation, embeddings).
 

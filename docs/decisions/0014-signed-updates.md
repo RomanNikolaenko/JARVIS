@@ -40,6 +40,12 @@ check is the only regular request JARVIS makes on its own.
   user confirms. Before installing, JARVIS stops agent tasks, plugins and
   local models (Windows: the installer closes the app and starts it again;
   Linux: the package is installed, then JARVIS restarts).
+- **The update button.** The top bar always shows one: the running version
+  (a click checks again), "Update to X" when a newer version is found (a
+  pulsing dot until the user hovers or focuses it), the download progress,
+  and "Retry update" after a refused or failed download. Clicking "Update to
+  X" is the confirmation; its tooltip says what stops and that JARVIS
+  restarts. Settings → Updates keeps the notes and a two-step install.
 - **Tests.** `JARVIS_UPDATE_ENDPOINT` replaces the feed URL (the signature
   check stays). Release builds accept only HTTPS endpoints; a debug build
   can use a local HTTP server for an end-to-end test.
@@ -53,5 +59,5 @@ check is the only regular request JARVIS makes on its own.
   warnings on the first install); the updater does not need Authenticode.
 - deb and rpm updates need administrator rights (the plugin asks through
   `pkexec`); the AppImage replaces itself.
-- Users who turn automatic checks off update manually (Settings → Updates →
-  Check now, or a new installer).
+- Users who turn automatic checks off update manually (the update button
+  or Settings → Updates → Check now, or a new installer).

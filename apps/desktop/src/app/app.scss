@@ -184,16 +184,7 @@
   font-size: 12px;
 }
 
-.update-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.topbar-update {
   margin-left: auto;
   margin-right: 16px;
-  padding: 2px 10px;
-  border: 1px solid var(--jv-accent);
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--jv-accent);
-  text-decoration: none;
 }

@@ -148,7 +148,7 @@ impl UpdateService {
         {
             state.core().events().info(
                 EventCategory::Lifecycle,
-                format!("JARVIS {version} is available (Settings → Updates)"),
+                format!("JARVIS {version} is available (the update button in the top bar)"),
             );
         }
         Ok(self.status())

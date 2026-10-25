@@ -12,6 +12,7 @@ import { VoiceStore } from './core/state/voice.store';
 import { ApprovalDialog } from './shared/approval-dialog/approval-dialog';
 import { Icon, type IconName } from './shared/icon/icon';
 import { StatusBadge } from './shared/status-badge/status-badge';
+import { UpdateButton } from './shared/update-button/update-button';
 
 interface NavItem {
   readonly path: string;
@@ -24,7 +25,7 @@ const CLOCK_TICK_MS = 10_000;
 
 @Component({
   selector: 'jv-root',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, StatusBadge, ApprovalDialog],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, Icon, StatusBadge, ApprovalDialog, UpdateButton],
   templateUrl: './app.html',
   styleUrl: './app.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
