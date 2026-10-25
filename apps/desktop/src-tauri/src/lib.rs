@@ -15,6 +15,7 @@ mod state;
 mod updates;
 mod vision_commands;
 mod voice_commands;
+mod window;
 
 #[cfg(test)]
 mod bindings;
@@ -184,6 +185,10 @@ pub fn run() {
 }
 
 fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
+    // First, so the window appears at once while the core starts.
+    if let Some(main) = app.get_webview_window(MAIN_WINDOW) {
+        window::open_main_window(&main);
+    }
     let paths = resolve_paths(app.handle())?;
     let logging = logging::init(&paths.log_dir, LogLevel::default())?;
     let version = app.package_info().version.to_string();

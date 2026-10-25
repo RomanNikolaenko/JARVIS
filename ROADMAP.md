@@ -207,6 +207,11 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ v0.1.0 tagged; the Release workflow built, signed and install-tested the
   installers for all four targets and created the draft release (publishing
   it is the owner's step)
+- ✅ After the first real install: an update button in the top bar (like
+  Astra Browser's); the window opens maximized and a restored window never
+  exceeds the screen's work area; the ARM64 installer refuses x64 PCs (one
+  had installed a program that could not start); "Which file do I need?" in
+  the release notes
 
 ## Phase 9 — Real local AI 🟡
 

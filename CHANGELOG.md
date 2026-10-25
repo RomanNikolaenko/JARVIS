@@ -11,8 +11,19 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   click with progress, and offers a retry after a failed download.
 - `provider-probe` example for checking real model servers through
   JARVIS's provider code (models, streaming, cancellation, embeddings).
+- Release notes start with "Which file do I need?" for each kind of
+  computer.
+
+### Changed
+
+- JARVIS opens maximized. A restored window is never larger than the work
+  area of its monitor (the screen without the taskbar): it was taller than
+  small or scaled screens before.
 
 ### Fixed
+
+- The Windows ARM64 installer refuses to install on other processors and
+  names the right file; it used to install a program an x64 PC cannot start.
 
 - Token usage from OpenAI-compatible servers (LM Studio, llama.cpp, vLLM):
   it is now requested with the streamed reply.

@@ -20,6 +20,7 @@
         "minWidth": 1024,
         "minHeight": 640,
         "center": true,
+        "visible": false,
         "backgroundColor": "#0a0e13"
       }
     ],
@@ -86,7 +87,8 @@
         "silent": true
       },
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
       },
       "wix": {
         "language": "en-US"

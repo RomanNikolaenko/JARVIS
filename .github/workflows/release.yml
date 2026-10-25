@@ -147,11 +147,13 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      # "Which file do I need?" first, then the generated list of changes.
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          notes=$(sed "s/{version}/${TAG#v}/g" .github/scripts/release-notes.md)
           gh release create "$TAG" dist/* \
             --repo "${{ github.repository }}" \
-            --draft --generate-notes \
+            --draft --generate-notes --notes "$notes" \
             --title "JARVIS ${TAG#v}"
