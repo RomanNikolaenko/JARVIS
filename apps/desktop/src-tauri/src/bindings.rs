@@ -11,13 +11,14 @@ use jarvis_core::jarvis_memory::{
     Conversation, ConversationDetail, ConversationPatch, Episode, EpisodeCursor, Fact, FactInput,
     MemoryStatus, Project, ProjectInput, SearchHit, SearchQuery, TransferReport,
 };
+use jarvis_core::jarvis_plugins::{McpServerRequest, PluginInfo, PluginReview, PluginToolUpdate};
 use jarvis_core::jarvis_security::{AuditEntry, AuditVerification, PendingApproval};
 use jarvis_core::jarvis_vision::{CaptureInfo, WindowInfo};
 use jarvis_core::jarvis_voice::{VoiceState, VoiceStatus, VoiceTranscript};
 use jarvis_core::{
     AgentStartRequest, AgentStatus, AppInfo, ChatStreamEvent, ChatTurnRequest, ErrorPayload,
     HealthReport, ProviderModels, ProviderTestResult, RouteResolution, Settings, ToolInfo,
-    UiErrorReport, VisionStatus,
+    UiErrorReport, UpdateStatus, VisionStatus,
 };
 use jarvis_events::SystemEvent;
 use jarvis_platform::{HardwareInfo, PlatformInfo, SystemMetrics};
@@ -85,5 +86,10 @@ fn export_typescript_bindings() {
         VisionStatus,
         CaptureInfo,
         WindowInfo,
+        PluginInfo,
+        PluginReview,
+        McpServerRequest,
+        PluginToolUpdate,
+        UpdateStatus,
     );
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restart-plugin"
+description = "Enables the restart_plugin command without any pre-configured scope."
+commands.allow = ["restart_plugin"]
+
+[[permission]]
+identifier = "deny-restart-plugin"
+description = "Denies the restart_plugin command without any pre-configured scope."
+commands.deny = ["restart_plugin"]

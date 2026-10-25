@@ -1,0 +1,346 @@
+<header class="page-header">
+  <h1 class="title">Plugins</h1>
+  <p class="subtitle">
+    Plugins are MCP servers that JARVIS starts on this computer. Agents can use their tools; every call goes through the security
+    policy and asks you first unless you lower a tool's risk.
+  </p>
+</header>
+
+<div class="notice" role="note">
+  <jv-icon name="shield" [size]="16" />
+  <span>
+    A plugin is a program that runs with your user rights: it can read your files and use the network on its own. JARVIS does not
+    sandbox it. Add only plugins you trust.
+  </span>
+</div>
+
+@if (store.error(); as error) {
+  <div class="notice error" role="alert"><jv-icon name="warning" [size]="16" /> {{ error.message }}</div>
+}
+
+@if (store.review(); as review) {
+  <jv-hud-panel class="review" [heading]="review.replaces ? 'Review the changed plugin' : 'Review the plugin'">
+    <p class="review-name">
+      <strong>{{ review.name }}</strong>
+      @if (review.version) {
+        <span class="dim">v{{ review.version }}</span>
+      }
+      @if (review.author) {
+        <span class="dim">· {{ review.author }}</span>
+      }
+    </p>
+    @if (review.description) {
+      <p class="description">{{ review.description }}</p>
+    }
+    <dl class="facts">
+      @if (review.folder) {
+        <div>
+          <dt>Folder</dt>
+          <dd class="mono">{{ review.folder }}</dd>
+        </div>
+      }
+      <div>
+        <dt>Runs</dt>
+        <dd class="mono">{{ review.launch.resolvedProgram ?? review.launch.program }}</dd>
+      </div>
+      <div>
+        <dt>Arguments</dt>
+        <dd class="mono">{{ review.launch.args.length ? review.launch.args.join(' ') : 'none' }}</dd>
+      </div>
+      <div>
+        <dt>Working folder</dt>
+        <dd class="mono">{{ review.launch.cwd }}</dd>
+      </div>
+      <div>
+        <dt>Variables</dt>
+        <dd class="mono">{{ review.launch.envNames.length ? review.launch.envNames.join(', ') : 'none' }}</dd>
+      </div>
+      <div>
+        <dt>Secrets</dt>
+        <dd>
+          @for (secret of review.secrets; track secret.name) {
+            <span class="mono">{{ secret.name }}</span>
+            @if (secret.description) {
+              <span class="dim">— {{ secret.description }}</span>
+            }
+            <br />
+          } @empty {
+            none
+          }
+        </dd>
+      </div>
+      <div>
+        <dt>Fingerprint</dt>
+        <dd class="mono" [title]="review.fingerprint">{{ shortFingerprint(review.fingerprint) }}…</dd>
+      </div>
+    </dl>
+    @for (warning of review.warnings; track $index) {
+      <p class="warning"><jv-icon name="warning" [size]="14" /> {{ warning }}</p>
+    }
+    <p class="hint">
+      Checking reads the program and its files, which takes a few seconds for large programs. JARVIS remembers this fingerprint.
+      If the program, its files or these settings change, the plugin stops until you review it again.
+    </p>
+    <div class="actions">
+      <button type="button" class="ghost" (click)="store.cancelReview()">Cancel</button>
+      <button type="button" class="primary" [disabled]="store.isPending('install')" (click)="confirm()">
+        {{ store.isPending('install') ? 'Checking…' : review.replaces ? 'Approve and start' : 'Add and start' }}
+      </button>
+    </div>
+  </jv-hud-panel>
+}
+
+<jv-hud-panel heading="Add a plugin" class="add">
+  <div class="actions start">
+    <button type="button" [disabled]="store.isPending('review')" (click)="store.pickFolder()">
+      <jv-icon name="folder" [size]="16" /> {{ store.isPending('review') ? 'Checking the plugin…' : 'Choose a plugin folder…' }}
+    </button>
+    <button type="button" class="ghost" (click)="showServerForm.set(!showServerForm())">
+      <jv-icon name="plus" [size]="16" /> Add an MCP server
+    </button>
+  </div>
+  <p class="hint">
+    A plugin folder holds <span class="mono">jarvis-plugin.json</span>. An MCP server is any program that speaks the Model Context
+    Protocol over standard input and output, for example <span class="mono">node server.js</span>.
+  </p>
+
+  @if (showServerForm()) {
+    <form class="server-form" [formGroup]="serverForm" (ngSubmit)="reviewServer()">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input formControlName="name" placeholder="My server" />
+        </label>
+        <label class="field">
+          <span class="field-label">Program</span>
+          <input formControlName="program" class="mono" placeholder="node, or C:\Tools\server.exe" />
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Arguments, one per line</span>
+          <textarea formControlName="args" class="mono" rows="3"></textarea>
+        </label>
+        <label class="field">
+          <span class="field-label">Environment variables, NAME=value per line</span>
+          <textarea formControlName="env" class="mono" rows="3"></textarea>
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Working folder (optional)</span>
+          <input formControlName="cwd" class="mono" />
+        </label>
+        <label class="field">
+          <span class="field-label">Secret variables (names; values go to the keychain later)</span>
+          <input formControlName="secrets" class="mono" placeholder="API_KEY" />
+        </label>
+      </div>
+      @if (formError(); as error) {
+        <p class="field-error">{{ error }}</p>
+      }
+      <div class="actions">
+        <button type="submit" class="primary" [disabled]="store.isPending('review')">
+          {{ store.isPending('review') ? 'Checking…' : 'Review' }}
+        </button>
+      </div>
+    </form>
+  }
+</jv-hud-panel>
+
+@if (!store.loaded()) {
+  <p class="placeholder">Loading plugins…</p>
+} @else {
+  @for (plugin of store.plugins(); track plugin.id) {
+    <jv-hud-panel class="plugin" [heading]="plugin.name">
+      <span panelActions class="status" [class]="statusClass(plugin.status)">{{ statusLabel(plugin.status) }}</span>
+
+      @if (plugin.description) {
+        <p class="description">{{ plugin.description }}</p>
+      }
+      <dl class="facts">
+        <div>
+          <dt>Runs</dt>
+          <dd class="mono">{{ plugin.launch.resolvedProgram ?? plugin.launch.program }} {{ plugin.launch.args.join(' ') }}</dd>
+        </div>
+        @if (plugin.folder) {
+          <div>
+            <dt>Folder</dt>
+            <dd class="mono">{{ plugin.folder }}</dd>
+          </div>
+        }
+        @if (plugin.server; as server) {
+          <div>
+            <dt>Server</dt>
+            <dd>
+              {{ server.title ?? server.name }} {{ server.version }} <span class="dim">· MCP {{ server.protocolVersion }}</span>
+            </dd>
+          </div>
+        }
+        <div>
+          <dt>Fingerprint</dt>
+          <dd class="mono" [title]="plugin.fingerprint ?? ''">{{ shortFingerprint(plugin.fingerprint) }}…</dd>
+        </div>
+      </dl>
+
+      @switch (plugin.status.state) {
+        @case ('needsApproval') {
+          @if (plugin.status.state === 'needsApproval') {
+            <p class="warning"><jv-icon name="warning" [size]="14" /> {{ plugin.status.reason }}</p>
+          }
+          <button type="button" [disabled]="store.isPending('plugin:' + plugin.id)" (click)="store.reviewInstalled(plugin.id)">
+            {{ store.isPending('plugin:' + plugin.id) ? 'Checking…' : 'Review again' }}
+          </button>
+        }
+        @case ('failed') {
+          @if (plugin.status.state === 'failed') {
+            <pre class="error-text">{{ plugin.status.error }}</pre>
+          }
+        }
+      }
+      @for (warning of plugin.warnings; track $index) {
+        <p class="warning"><jv-icon name="warning" [size]="14" /> {{ warning }}</p>
+      }
+
+      @if (plugin.secrets.length) {
+        <h3 class="section">Secrets</h3>
+        @for (secret of plugin.secrets; track secret.name) {
+          <div class="secret">
+            <span class="mono">{{ secret.name }}</span>
+            <span [class.ok]="secret.set" class="dim">{{ secret.set ? 'stored in the keychain' : 'not set' }}</span>
+            <input
+              type="password"
+              autocomplete="off"
+              [attr.aria-label]="'Value of ' + secret.name"
+              [value]="secretDrafts()[secretKey(plugin, secret.name)] ?? ''"
+              (input)="typeSecret(secretKey(plugin, secret.name), $any($event.target).value)" />
+            <button
+              type="button"
+              class="small"
+              [disabled]="!secretDrafts()[secretKey(plugin, secret.name)] || store.isPending('plugin:' + plugin.id)"
+              (click)="saveSecret(plugin, secret.name)">
+              Save
+            </button>
+            @if (secret.set) {
+              <button type="button" class="ghost small" (click)="store.clearSecret(plugin.id, secret.name)">Clear</button>
+            }
+          </div>
+          @if (secret.description) {
+            <p class="hint">{{ secret.description }}</p>
+          }
+        }
+      }
+
+      @if (plugin.tools.length) {
+        <h3 class="section">Tools</h3>
+        <table class="tools">
+          <thead>
+            <tr>
+              <th>On</th>
+              <th>Tool</th>
+              <th>Risk</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (tool of plugin.tools; track tool.name) {
+              <tr>
+                <td>
+                  <input
+                    type="checkbox"
+                    [checked]="tool.enabled"
+                    [attr.aria-label]="'Use ' + tool.title"
+                    [disabled]="store.isPending('plugin:' + plugin.id)"
+                    (change)="toggleTool(plugin, tool, $any($event.target).checked)" />
+                </td>
+                <td>
+                  <div class="tool-title">
+                    {{ tool.title }} <span class="mono dim">{{ tool.id }}</span>
+                    @for (hint of hintLabels(tool.hints); track hint) {
+                      <span class="hint-badge" title="What the plugin says about this tool">{{ hint }}</span>
+                    }
+                  </div>
+                  @if (tool.description) {
+                    <div class="tool-description">{{ tool.description }}</div>
+                  }
+                  @if (tool.riskReset) {
+                    <div class="warning small-text">The tool changed since you lowered its risk, so each call asks again.</div>
+                  }
+                </td>
+                <td>
+                  <select
+                    [attr.aria-label]="'Risk of ' + tool.title"
+                    [disabled]="store.isPending('plugin:' + plugin.id)"
+                    (change)="setRisk(plugin, tool, $any($event.target).value)">
+                    @for (risk of risks; track risk) {
+                      <option [value]="risk" [selected]="risk === tool.risk">
+                        {{ risk === 'high' ? 'High — always ask' : risk === 'medium' ? 'Medium' : 'Low' }}
+                      </option>
+                    }
+                  </select>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        <p class="hint">
+          Medium and low risk follow the auto-approve switches in Settings → Tools. JARVIS never repeats a plugin call on its own.
+        </p>
+      }
+      @for (problem of plugin.toolProblems; track $index) {
+        <p class="hint">{{ problem }}</p>
+      }
+
+      <details class="logs" (toggle)="toggleLogs(plugin.id, $any($event.target).open)">
+        <summary>Server output</summary>
+        @if (openLogs().has(plugin.id)) {
+          <pre>{{ (store.logs()[plugin.id] ?? []).join('\n') || 'No output yet.' }}</pre>
+        }
+      </details>
+
+      <div class="actions">
+        @if (plugin.enabled) {
+          <button
+            type="button"
+            class="ghost"
+            [disabled]="store.isPending('plugin:' + plugin.id)"
+            (click)="store.setEnabled(plugin.id, false)">
+            Disable
+          </button>
+          <button
+            type="button"
+            class="ghost"
+            [disabled]="store.isPending('plugin:' + plugin.id)"
+            (click)="store.restart(plugin.id)">
+            <jv-icon name="refresh" [size]="14" /> Restart
+          </button>
+          @if (plugin.status.state === 'running') {
+            <button
+              type="button"
+              class="ghost"
+              [disabled]="store.isPending('plugin:' + plugin.id)"
+              (click)="store.refreshTools(plugin.id)">
+              Refresh tools
+            </button>
+          }
+        } @else {
+          <button type="button" [disabled]="store.isPending('plugin:' + plugin.id)" (click)="store.setEnabled(plugin.id, true)">
+            Enable
+          </button>
+        }
+        @if (confirmingRemoval() === plugin.id) {
+          <span class="confirm">Remove the plugin, its settings and secrets? Its folder stays.</span>
+          <button type="button" class="ghost" (click)="confirmingRemoval.set(null)">Keep</button>
+          <button type="button" class="danger" [disabled]="store.isPending('plugin:' + plugin.id)" (click)="remove(plugin.id)">
+            <jv-icon name="trash" [size]="14" /> Remove
+          </button>
+        } @else {
+          <button type="button" class="ghost" (click)="confirmingRemoval.set(plugin.id)">
+            <jv-icon name="trash" [size]="14" /> Remove
+          </button>
+        }
+      </div>
+    </jv-hud-panel>
+  } @empty {
+    <p class="placeholder">No plugins yet.</p>
+  }
+}

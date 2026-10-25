@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-review-installed-plugin"
+description = "Enables the review_installed_plugin command without any pre-configured scope."
+commands.allow = ["review_installed_plugin"]
+
+[[permission]]
+identifier = "deny-review-installed-plugin"
+description = "Denies the review_installed_plugin command without any pre-configured scope."
+commands.deny = ["review_installed_plugin"]

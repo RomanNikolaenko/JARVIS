@@ -27,6 +27,9 @@ pub enum Capability {
     NetFetch,
     /// Open a URL in the user's browser.
     OpenExternal,
+    /// Call a tool of a plugin (an MCP server started by JARVIS). What the
+    /// plugin does is outside JARVIS's control.
+    PluginTool,
 }
 
 /// How much harm a call could do if it is wrong or was induced by injected

@@ -9,8 +9,10 @@ mod commands;
 mod dialogs;
 mod logging;
 mod memory_commands;
+mod plugin_commands;
 mod runtime_commands;
 mod state;
+mod updates;
 mod vision_commands;
 mod voice_commands;
 
@@ -20,9 +22,13 @@ mod bindings;
 mod ipc_tests;
 
 use std::error::Error;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use jarvis_core::config::LogLevel;
 use jarvis_core::jarvis_agent::AgentTask;
+use jarvis_core::jarvis_plugins::PluginManager;
 use jarvis_core::jarvis_security::PendingApproval;
 use jarvis_core::jarvis_voice::VoiceEngine;
 use jarvis_core::{AppPaths, CoreOptions, JarvisCore};
@@ -46,6 +52,8 @@ pub const VOICE_STATE_EVENT: &str = "jarvis://voice-state";
 pub const VOICE_TRANSCRIPT_EVENT: &str = "jarvis://voice-transcript";
 /// Event with the microphone level (0–1) while it is open.
 pub const VOICE_LEVEL_EVENT: &str = "jarvis://voice-level";
+/// Payload: `PluginInfo[]` after any change of a plugin.
+pub const PLUGINS_EVENT: &str = "jarvis://plugins";
 
 /// Registers all IPC commands. Shared by the application and the IPC tests.
 pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
@@ -128,6 +136,22 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         vision_commands::attach_photo,
         vision_commands::discard_capture,
         runtime_commands::attach_projector,
+        plugin_commands::list_plugins,
+        plugin_commands::get_plugin_logs,
+        plugin_commands::pick_plugin_folder,
+        plugin_commands::review_mcp_server,
+        plugin_commands::review_installed_plugin,
+        plugin_commands::install_plugin,
+        plugin_commands::set_plugin_enabled,
+        plugin_commands::restart_plugin,
+        plugin_commands::refresh_plugin_tools,
+        plugin_commands::set_plugin_tool,
+        plugin_commands::set_plugin_secret,
+        plugin_commands::clear_plugin_secret,
+        plugin_commands::remove_plugin,
+        updates::get_update_status,
+        updates::check_for_update,
+        updates::install_update,
     ])
 }
 
@@ -135,6 +159,7 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
 pub fn run() {
     let result = with_commands(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(setup)
         .build(tauri::generate_context!());
 
@@ -164,8 +189,10 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
     let version = app.package_info().version.to_string();
     tracing::info!(%version, log_dir = %paths.log_dir.display(), "starting JARVIS desktop");
 
-    let core =
-        tauri::async_runtime::block_on(JarvisCore::initialize(CoreOptions::new(paths, version)))?;
+    let core = tauri::async_runtime::block_on(JarvisCore::initialize(CoreOptions::new(
+        paths,
+        version.clone(),
+    )))?;
     logging.set_level(core.settings().logging.level);
 
     spawn_event_forwarder(app.handle().clone(), core.events().subscribe());
@@ -175,19 +202,41 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
         core.subscribe_approvals(),
     );
     spawn_voice_forwarders(app.handle().clone(), core.voice());
+    spawn_plugin_forwarder(app.handle().clone(), core.plugins().clone());
+    let updates = updates::UpdateService::new(&version);
+    updates::spawn_status_forwarder(app.handle().clone(), &updates);
+    updates::spawn_automatic_checks(app.handle().clone(), Arc::clone(&updates));
+    app.manage(updates);
     app.manage(AppState::new(core, Some(logging)));
     Ok(())
 }
 
-/// Settings roam with the user profile; data (later: databases, models) and
-/// logs stay on this machine.
+/// Keeps settings, data and logs in one folder instead of the user profile
+/// (release tests, portable use). Must be an absolute path.
+pub const PROFILE_DIR_ENV: &str = "JARVIS_PROFILE_DIR";
+
+/// Settings roam with the user profile; data (databases, models) and logs
+/// stay on this machine. `JARVIS_PROFILE_DIR` replaces all three.
 fn resolve_paths<R: Runtime>(app: &AppHandle<R>) -> Result<AppPaths, tauri::Error> {
+    // Logging starts later with these paths; the log folder is reported then.
+    if let Some(profile) = profile_dir(std::env::var_os(PROFILE_DIR_ENV)) {
+        return Ok(AppPaths {
+            config_dir: profile.join("config"),
+            data_dir: profile.join("data"),
+            log_dir: profile.join("logs"),
+        });
+    }
     let resolver = app.path();
     Ok(AppPaths {
         config_dir: resolver.app_config_dir()?,
         data_dir: resolver.app_local_data_dir()?,
         log_dir: resolver.app_log_dir()?,
     })
+}
+
+/// The profile folder from `JARVIS_PROFILE_DIR`, if it is an absolute path.
+fn profile_dir(value: Option<OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|dir| dir.is_absolute())
 }
 
 /// Forwards agent task changes and pending approvals to the main window.
@@ -277,6 +326,19 @@ fn spawn_voice_forwarders<R: Runtime>(app: AppHandle<R>, voice: &VoiceEngine) {
     });
 }
 
+/// Sends the plugin list to the main window after every change.
+fn spawn_plugin_forwarder<R: Runtime>(app: AppHandle<R>, plugins: PluginManager) {
+    let mut changes = plugins.subscribe();
+    tauri::async_runtime::spawn(async move {
+        // A lagging receiver still gets the latest list.
+        while let Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) = changes.recv().await {
+            if let Err(err) = app.emit_to(MAIN_WINDOW, PLUGINS_EVENT, plugins.list()) {
+                tracing::debug!("cannot forward plugins: {err}");
+            }
+        }
+    });
+}
+
 /// Forwards core events to the main window only.
 fn spawn_event_forwarder<R: Runtime>(app: AppHandle<R>, mut subscription: EventSubscription) {
     tauri::async_runtime::spawn(async move {
@@ -294,4 +356,21 @@ fn spawn_event_forwarder<R: Runtime>(app: AppHandle<R>, mut subscription: EventS
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_absolute_profile_folders_are_used() {
+        let absolute = std::env::temp_dir().join("jarvis-profile");
+        assert_eq!(
+            profile_dir(Some(absolute.clone().into_os_string())),
+            Some(absolute)
+        );
+        assert_eq!(profile_dir(Some(OsString::from("relative/profile"))), None);
+        assert_eq!(profile_dir(Some(OsString::new())), None);
+        assert_eq!(profile_dir(None), None);
+    }
 }

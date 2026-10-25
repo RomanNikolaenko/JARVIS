@@ -217,6 +217,7 @@ impl RunCommand {
             capabilities: vec![Capability::ProcessSpawn],
             risk: RiskLevel::High,
             idempotent: false,
+            plugin: None,
         })
     }
 }

@@ -33,6 +33,8 @@ export class Events {
     'platform',
     'ui',
     'voice',
+    'vision',
+    'plugins',
   ];
 
   protected readonly minLevel = signal<EventLevel>('info');

@@ -17,5 +17,8 @@ earlier one instead of editing it.
 | [0009](0009-local-memory.md) | Local memory: SQLite storage, Memory Engine and Context Manager | Accepted |
 | [0010](0010-tools-and-agents.md) | Tools and agents behind a Security Policy Engine | Accepted |
 | [0011](0011-voice-and-vision.md) | Voice and vision on the user's computer | Accepted |
+| [0012](0012-plugins-and-mcp.md) | Plugins as MCP servers behind the Security Policy Engine | Accepted |
+| [0013](0013-local-data-only.md) | All data stays on the user's computer; no cloud sync | Accepted |
+| [0014](0014-signed-updates.md) | Signed automatic updates from GitHub Releases | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.

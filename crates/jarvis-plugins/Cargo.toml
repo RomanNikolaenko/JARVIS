@@ -1,0 +1,37 @@
+[package]
+name = "jarvis-plugins"
+description = "JARVIS plugins: an MCP client for stdio servers, plugin manifests, approvals and lifecycle, and the adapter that turns MCP tools into JARVIS tools."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+jarvis-events.workspace = true
+jarvis-platform.workspace = true
+jarvis-security.workspace = true
+jarvis-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+# The test binary doubles as a fake MCP server, so libtest must not write to
+# its stdout: the file has its own `main`.
+[[test]]
+name = "servers"
+harness = false
+
+[lints]
+workspace = true

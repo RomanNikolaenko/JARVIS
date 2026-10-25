@@ -175,6 +175,14 @@ a:focus-visible {
   transition-duration: 0.01ms !important;
 }
 
+// While another window has the focus (or JARVIS is minimized), decorative
+// animations pause: drawing them would only keep the CPU and GPU busy.
+.jv-background *,
+.jv-background *::before,
+.jv-background *::after {
+  animation-play-state: paused !important;
+}
+
 // Rendered Markdown (chat answers). Lives here because [innerHTML] content is
 // not reached by emulated component styles.
 .jv-markdown {

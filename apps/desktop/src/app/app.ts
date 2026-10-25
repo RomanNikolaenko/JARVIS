@@ -7,6 +7,7 @@ import { EventLogStore } from './core/state/event-log.store';
 import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
 import { SystemStore } from './core/state/system.store';
+import { UpdatesStore } from './core/state/updates.store';
 import { VoiceStore } from './core/state/voice.store';
 import { ApprovalDialog } from './shared/approval-dialog/approval-dialog';
 import { Icon, type IconName } from './shared/icon/icon';
@@ -27,13 +28,19 @@ const CLOCK_TICK_MS = 10_000;
   templateUrl: './app.html',
   styleUrl: './app.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { '[class.jv-reduced-motion]': 'reducedMotion()' },
+  host: {
+    '[class.jv-reduced-motion]': 'reducedMotion()',
+    '[class.jv-background]': 'background()',
+  },
 })
 export class App {
   private readonly system = inject(SystemStore);
   private readonly settings = inject(SettingsStore);
   private readonly now = signal(Date.now());
+  /** Another window has the focus or JARVIS is minimized: decorative animations pause. */
+  protected readonly background = signal(inBackground());
   protected readonly voice = inject(VoiceStore);
+  protected readonly updates = inject(UpdatesStore);
 
   protected readonly nav: readonly NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -42,6 +49,7 @@ export class App {
     { path: '/runtime', label: 'Runtime', icon: 'cpu' },
     { path: '/agents', label: 'Agents', icon: 'agent' },
     { path: '/memory', label: 'Memory', icon: 'brain' },
+    { path: '/plugins', label: 'Plugins', icon: 'plug' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ];
@@ -84,6 +92,8 @@ export class App {
     void agents.start();
     // The microphone indicator and spoken requests work on every screen.
     void this.voice.start();
+    // A found update is announced on every screen.
+    void this.updates.start();
     void this.settings.load().then(() => chat.loadModels());
     pollWhileVisible(
       async () => {
@@ -103,5 +113,19 @@ export class App {
       destroyRef
     );
     pollWhileVisible(() => this.now.set(Date.now()), CLOCK_TICK_MS, destroyRef);
+
+    const updateBackground = () => this.background.set(inBackground());
+    window.addEventListener('focus', updateBackground);
+    window.addEventListener('blur', updateBackground);
+    document.addEventListener('visibilitychange', updateBackground);
+    destroyRef.onDestroy(() => {
+      window.removeEventListener('focus', updateBackground);
+      window.removeEventListener('blur', updateBackground);
+      document.removeEventListener('visibilitychange', updateBackground);
+    });
   }
+}
+
+function inBackground(): boolean {
+  return document.visibilityState === 'hidden' || !document.hasFocus();
 }

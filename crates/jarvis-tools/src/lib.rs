@@ -6,8 +6,8 @@
 //! decides on that description; only then [`Tool::run`] executes the
 //! prepared call. Tools re-check paths right before using them.
 //!
-//! Tools run with the user's rights; there is no sandbox. The registry is
-//! open for tools from other sources (MCP servers, plugins) later: they
+//! Tools run with the user's rights; there is no sandbox. Tools from
+//! plugins (MCP servers) join the registry in groups at run time; they
 //! implement the same trait and are subject to the same policy.
 
 mod command;
@@ -17,8 +17,8 @@ mod system;
 mod util;
 mod web;
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -49,6 +49,10 @@ pub struct ToolSpec {
     pub risk: RiskLevel,
     /// Running it twice does the same as once (reads).
     pub idempotent: bool,
+    /// Name of the plugin that provides the tool; `None` for built-in tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugin: Option<String>,
 }
 
 /// A validated call, ready for the policy and then for [`Tool::run`].
@@ -159,11 +163,16 @@ pub trait Tool: Send + Sync + std::fmt::Debug {
     async fn run(&self, call: &PreparedCall, ctx: &ToolContext) -> Result<ToolOutput, ToolError>;
 }
 
-/// The tools JARVIS knows, by name.
-#[derive(Debug, Default, Clone)]
+/// The tools JARVIS knows, by name: built-in tools, fixed at start, and
+/// groups of tools added and replaced at run time (one group per plugin).
+#[derive(Debug, Default)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Arc<dyn Tool>>,
+    groups: RwLock<ToolGroups>,
 }
+
+/// Tools by group, then by name.
+type ToolGroups = BTreeMap<String, BTreeMap<String, Arc<dyn Tool>>>;
 
 impl ToolRegistry {
     /// All built-in tools.
@@ -187,11 +196,67 @@ impl ToolRegistry {
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(name).cloned()
+        if let Some(tool) = self.tools.get(name) {
+            return Some(Arc::clone(tool));
+        }
+        self.groups()
+            .values()
+            .find_map(|group| group.get(name).cloned())
     }
 
+    /// Built-in tools, then the tools of every group.
     pub fn specs(&self) -> Vec<ToolSpec> {
+        let mut specs = self.builtin_specs();
+        specs.extend(
+            self.groups()
+                .values()
+                .flat_map(|group| group.values().map(|t| t.spec().clone())),
+        );
+        specs
+    }
+
+    pub fn builtin_specs(&self) -> Vec<ToolSpec> {
         self.tools.values().map(|t| t.spec().clone()).collect()
+    }
+
+    /// Names of the tools in groups (all of them are turned on: a group
+    /// holds only the tools the user enabled).
+    pub fn group_tool_names(&self) -> BTreeSet<String> {
+        self.groups()
+            .values()
+            .flat_map(|group| group.keys().cloned())
+            .collect()
+    }
+
+    /// Replaces the tools of a group. Fails, changing nothing, when a name
+    /// is used by a built-in tool, by another group or twice.
+    pub fn set_group(&self, group: &str, tools: Vec<Arc<dyn Tool>>) -> Result<(), String> {
+        let mut groups = self.groups.write().unwrap_or_else(PoisonError::into_inner);
+        let mut named = BTreeMap::new();
+        for tool in tools {
+            let name = tool.spec().name.clone();
+            let taken = self.tools.contains_key(&name)
+                || groups
+                    .iter()
+                    .any(|(other, tools)| other != group && tools.contains_key(&name));
+            if taken || named.contains_key(&name) {
+                return Err(format!("the tool name \"{name}\" is already used"));
+            }
+            named.insert(name, tool);
+        }
+        groups.insert(group.to_owned(), named);
+        Ok(())
+    }
+
+    pub fn remove_group(&self, group: &str) {
+        self.groups
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(group);
+    }
+
+    fn groups(&self) -> std::sync::RwLockReadGuard<'_, ToolGroups> {
+        self.groups.read().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

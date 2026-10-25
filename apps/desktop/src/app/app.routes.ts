@@ -33,6 +33,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/memory/memory').then((m) => m.MemoryPage),
   },
   {
+    path: 'plugins',
+    title: 'Plugins · JARVIS',
+    loadComponent: () => import('./features/plugins/plugins').then((m) => m.PluginsPage),
+  },
+  {
     path: 'events',
     title: 'Event log · JARVIS',
     loadComponent: () => import('./features/events/events').then((m) => m.Events),

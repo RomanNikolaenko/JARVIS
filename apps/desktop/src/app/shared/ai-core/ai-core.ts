@@ -4,8 +4,13 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 export type CoreState = 'idle' | 'thinking' | 'speaking' | 'degraded' | 'offline';
 
 /**
- * Animated JARVIS core. Animation is pure CSS (transform/opacity only, GPU
- * friendly) and is disabled for reduced motion.
+ * Animated JARVIS core, disabled for reduced motion.
+ *
+ * Every moving part is an HTML element animated with `transform` and
+ * `opacity` only, so the browser runs the animation on the compositor.
+ * Rotating SVG elements (even an outer `<svg>`) recalculates styles on the
+ * main thread on every frame instead: measured at about half a CPU core
+ * while the dashboard was idle.
  */
 @Component({
   selector: 'jv-ai-core',
@@ -17,26 +22,23 @@ export type CoreState = 'idle' | 'thinking' | 'speaking' | 'degraded' | 'offline
     '[attr.aria-label]': '"JARVIS core: " + state()',
   },
   template: `
-    <svg viewBox="0 0 200 200" class="core-svg">
-      <defs>
-        <radialGradient id="jv-core-glow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="var(--core-hot)" />
-          <stop offset="40%" stop-color="var(--core-color)" stop-opacity="0.8" />
-          <stop offset="100%" stop-color="var(--core-color)" stop-opacity="0" />
-        </radialGradient>
-      </defs>
-      <g class="ring ring-outer">
+    <div class="ring ring-outer">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
         <circle cx="100" cy="100" r="92" stroke-dasharray="120 24 40 24" />
-      </g>
-      <g class="ring ring-mid">
+      </svg>
+    </div>
+    <div class="ring ring-mid">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
         <circle cx="100" cy="100" r="74" stroke-dasharray="6 8" />
-      </g>
-      <g class="ring ring-inner">
+      </svg>
+    </div>
+    <div class="ring ring-inner">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
         <circle cx="100" cy="100" r="56" stroke-dasharray="70 18" />
-      </g>
-      <circle class="halo" cx="100" cy="100" r="46" fill="url(#jv-core-glow)" />
-      <circle class="nucleus" cx="100" cy="100" r="16" />
-    </svg>
+      </svg>
+    </div>
+    <div class="halo"></div>
+    <div class="nucleus"></div>
   `,
   styles: `
     :host {
@@ -44,6 +46,7 @@ export type CoreState = 'idle' | 'thinking' | 'speaking' | 'degraded' | 'offline
       --core-hot: #e0fbff;
       --spin: 28s;
       --pulse: 4s;
+      position: relative;
       display: inline-block;
       width: var(--core-size);
       height: var(--core-size);
@@ -66,13 +69,21 @@ export type CoreState = 'idle' | 'thinking' | 'speaking' | 'degraded' | 'offline
       --core-color: var(--jv-text-dim);
       --core-hot: #9fb0c0;
     }
-    .core-svg {
+    .ring,
+    .halo,
+    .nucleus {
+      position: absolute;
+      border-radius: 50%;
+    }
+    .ring {
+      inset: 0;
+      will-change: transform;
+    }
+    .ring svg {
+      display: block;
       width: 100%;
       height: 100%;
       overflow: visible;
-    }
-    .ring {
-      transform-origin: 100px 100px;
     }
     .ring circle {
       fill: none;
@@ -99,13 +110,23 @@ export type CoreState = 'idle' | 'thinking' | 'speaking' | 'degraded' | 'offline
     .ring-inner {
       animation: spin calc(var(--spin) * 0.7) linear infinite;
     }
+    /* r = 46 of 200 */
     .halo {
-      transform-origin: 100px 100px;
+      inset: 27%;
+      background: radial-gradient(
+        circle closest-side,
+        var(--core-hot) 0%,
+        color-mix(in srgb, var(--core-color) 80%, transparent) 40%,
+        transparent 100%
+      );
+      will-change: transform, opacity;
       animation: pulse var(--pulse) ease-in-out infinite;
     }
+    /* r = 16 of 200 */
     .nucleus {
-      fill: var(--core-hot);
-      filter: drop-shadow(0 0 8px var(--core-color));
+      inset: 42%;
+      background: var(--core-hot);
+      box-shadow: 0 0 8px var(--core-color);
     }
     :host(.state-offline) .ring,
     :host(.state-offline) .halo {

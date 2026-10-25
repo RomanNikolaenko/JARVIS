@@ -1,6 +1,7 @@
 use jarvis_agent::AgentError;
 use jarvis_ai::AiError;
 use jarvis_memory::{MemoryError, StorageError};
+use jarvis_plugins::{McpError, PluginError};
 use jarvis_runtime::RuntimeError;
 use jarvis_vision::VisionError;
 use jarvis_voice::VoiceError;
@@ -101,6 +102,9 @@ pub enum CoreError {
     #[error(transparent)]
     Vision(#[from] VisionError),
 
+    #[error(transparent)]
+    Plugin(#[from] PluginError),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -193,6 +197,17 @@ impl CoreError {
                 VisionError::InvalidImage(_) => ErrorCode::Validation,
                 VisionError::Capture(_) => ErrorCode::Unavailable,
                 VisionError::Io { .. } => ErrorCode::Io,
+            },
+            Self::Plugin(err) => match err {
+                PluginError::Invalid(_) => ErrorCode::Validation,
+                PluginError::NotFound(_) => ErrorCode::NotFound,
+                PluginError::NeedsApproval(_) => ErrorCode::PermissionDenied,
+                PluginError::Mcp(McpError::Unsupported(_)) => ErrorCode::Unsupported,
+                PluginError::Mcp(McpError::TimedOut(_)) => ErrorCode::Timeout,
+                PluginError::Mcp(McpError::Cancelled) => ErrorCode::Cancelled,
+                PluginError::Mcp(_) => ErrorCode::Unavailable,
+                PluginError::Store(_) | PluginError::Io { .. } => ErrorCode::Io,
+                PluginError::Secret(_) => ErrorCode::Internal,
             },
         }
     }

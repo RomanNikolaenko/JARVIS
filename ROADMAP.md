@@ -95,7 +95,7 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Cloud models for agents behind a separate permission
 - ⬜ Process isolation for programs (AppContainer / bubblewrap / Landlock)
 - ⬜ Native tool calling for providers that support it
-- ⬜ Tools from MCP servers and plugins (Phase 7)
+- ✅ Tools from MCP servers and plugins (Phase 7)
 - ✅ Agents started from chat: composer action uses the selected model and
   opens the saved task journal; conversation history is not sent
 
@@ -126,19 +126,80 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Cloud speech (optional), echo cancellation, a dedicated wake-word model
 - ⬜ Camera on Linux (WebKitGTK media capture is off in Tauri)
 
-## Phase 7 — Sync and extensions ⬜
+## Phase 7 — Extensions 🟡
 
-Optional Supabase auth/sync (offline queue, conflict resolution, encryption,
-per-category opt-in), plugin API, MCP integration.
+All data stays on the user's computer: cloud sign-in and sync (Supabase)
+were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 
-## Phase 8 — Production readiness ⬜
+- ✅ Plugin API: a plugin is an MCP server with a `jarvis-plugin.json`
+  manifest, or any MCP server entered as a command
+  ([ADR 0012](docs/decisions/0012-plugins-and-mcp.md))
+- ✅ `jarvis-plugins`: MCP client for stdio servers, protocol 2026-07-28
+  (`server/discover`, `_meta`, `input_required`) with fallback to the
+  `initialize` handshake of 2025-11-25 and older; message size limits,
+  deadlines, cancellation
+- ✅ Consent: review before the first start, fingerprint of the program and
+  its files checked before every start, warnings for launchers like `npx`;
+  secrets in the OS keychain; bounded automatic restarts
+- ✅ Plugin tools in the agent registry behind the Security Policy Engine:
+  high risk by default, per-tool on/off and risk, risk reset when a tool's
+  definition changes, never repeated automatically
+- ✅ Plugins screen; example plugin `examples/plugins/text-tools`
+- ✅ Live check on Windows: the example server through the Plugins screen,
+  an agent (Qwen2.5 3B) calling a plugin tool after approval, a changed
+  script stopped until reviewed again, disable and remove
+- ✅ Tool list changes of modern servers through `subscriptions/listen`
+  (checked with `server-everything`'s `trigger-list-changed`)
+- ⬜ HTTP (remote) MCP servers, resources and prompts
+- ✅ Stopping a plugin stops what its server started: process group with
+  `SIGTERM` → `SIGKILL` on Unix, process tree of a stuck server on Windows
+- ⬜ Sandboxed plugin processes; job objects on Windows (programs left
+  behind by a server that exited on its own)
+- ✅ Interoperability with the official reference servers
+  (`@modelcontextprotocol/server-everything` and `server-filesystem` 2.0.1,
+  protocol 2026-07-28): tools listed and called, images and resource links
+  summarized, structured results, elicitation refused clearly, the server
+  gets only the minimal environment; `mcp-probe` example for plugin authors
+- ⬜ Live check on Linux
 
-Performance work, security review, signed installers, auto-updates, E2E tests,
-release testing, ARM64 builds.
+## Phase 8 — Production readiness 🟡
+
+- ✅ Security review ([docs/security-review-2026-10.md](docs/security-review-2026-10.md)):
+  IPC surface, CSP and rendering of model output, downloads, secrets, plugin
+  event log fixed (no command arguments), development dependencies patched
+  (`npm audit`: 0)
+- ✅ Installers: NSIS (current user, no administrator rights) and MSI on
+  Windows; deb, rpm and AppImage on Linux (ALSA dependency declared)
+- ✅ Release workflow: installers on Windows and Ubuntu 22.04, release smoke
+  test, draft GitHub release with `SHA256SUMS.txt` ([docs/RELEASE.md](docs/RELEASE.md))
+- ✅ Release smoke test (`apps/desktop/e2e/smoke.mjs`) against the release
+  binary with a temporary profile (`JARVIS_PROFILE_DIR`), in CI on every push
+- ✅ Performance: the idle dashboard used 7.5 % of all CPU cores (animated
+  SVG and meter widths repainted on every frame); now 2.6 %, 1.1 % while
+  another window has the focus (animations pause), under 0.1 % on other
+  screens; the smoke test fails if the idle renderer gets busy again
+- ✅ CHANGELOG, release guide
+- ✅ Signed automatic updates (ADR 0014): `tauri-plugin-updater`, key pair
+  outside the repository, signatures bound to the version, `latest.json`
+  from the Release workflow, check after start and daily (setting), install
+  only after confirmation; end-to-end test with a refused tampered file, a
+  refused version mismatch and a real installer run
+- ⬜ Authenticode-signed Windows installers (needs a certificate)
+- ✅ RustSec scan: 6 advisories in the TLS stack fixed (`rustls` 0.23.46,
+  `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11); `cargo audit` and
+  `npm audit` in CI on every push
+- ⬜ License for the project
+- 🟡 ARM64 builds (Windows 11 ARM and Linux) added to CI and the Release
+  workflow, with the release smoke test and `aarch64` update feed entries;
+  waiting for the first CI run
+- ⬜ Voice on ARM64 (pinned whisper.cpp and Piper packages for ARM64)
+- ⬜ Native WebDriver end-to-end tests (the CDP smoke test covers Windows)
 
 ## Next iteration
 
-Live check of Phase 6 on Linux (WSLg audio and the X11/portal capture) and
-the wake word with a live voice; then Phase 7.
+Finish Phase 8: the signing secrets in GitHub, a RustSec scan, a license,
+then the manual release checklist and v0.1.0.
+Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
+voice, third-party MCP servers.
 Open Phase 2 items: live verification of local and cloud providers, including
 the Linux Secret Service integration.

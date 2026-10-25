@@ -5,6 +5,7 @@ import type { AssistantLanguage, LogLevel, Settings } from '@jarvis/shared-types
 
 import { SettingsStore } from '../../core/state/settings.store';
 import { SystemStore } from '../../core/state/system.store';
+import { UpdatesStore } from '../../core/state/updates.store';
 import { HudPanel } from '../../shared/hud-panel/hud-panel';
 import { Icon } from '../../shared/icon/icon';
 
@@ -19,6 +20,9 @@ export class SettingsPage {
   private readonly store = inject(SettingsStore);
 
   protected readonly appInfo = inject(SystemStore).appInfo;
+  protected readonly updates = inject(UpdatesStore);
+  /** The version the user is asked to confirm before installing. */
+  protected readonly confirmingUpdate = signal<string | null>(null);
   protected readonly saving = this.store.saving;
   protected readonly error = this.store.error;
   protected readonly savedAt = signal<number | null>(null);
@@ -40,11 +44,13 @@ export class SettingsPage {
     allowCloudAgents: new FormControl(false, { nonNullable: true }),
     shareCapturesWithCloud: new FormControl(false, { nonNullable: true }),
     logLevel: new FormControl<LogLevel>('info', { nonNullable: true }),
+    checkUpdates: new FormControl(true, { nonNullable: true }),
   });
 
   protected readonly loaded = computed(() => this.store.settings() !== null);
 
   constructor() {
+    void this.updates.start();
     // Mirror stored settings into the form unless the user is editing.
     effect(() => {
       const settings = this.store.settings();
@@ -78,6 +84,7 @@ export class SettingsPage {
         allowCloudAgents: value.allowCloudAgents,
         shareCapturesWithCloud: value.shareCapturesWithCloud,
       },
+      updates: { ...current.updates, checkAutomatically: value.checkUpdates },
       logging: { ...current.logging, level: value.logLevel },
     };
 
@@ -88,6 +95,11 @@ export class SettingsPage {
         this.savedAt.set(Date.now());
       }
     }
+  }
+
+  protected async installUpdate(version: string): Promise<void> {
+    this.confirmingUpdate.set(null);
+    await this.updates.install(version);
   }
 
   protected discard(): void {
@@ -110,5 +122,6 @@ function toFormValue(settings: Settings) {
     allowCloudAgents: settings.privacy.allowCloudAgents,
     shareCapturesWithCloud: settings.privacy.shareCapturesWithCloud,
     logLevel: settings.logging.level,
+    checkUpdates: settings.updates.checkAutomatically,
   };
 }

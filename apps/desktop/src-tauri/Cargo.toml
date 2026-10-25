@@ -21,8 +21,11 @@ jarvis-events.workspace = true
 jarvis-platform.workspace = true
 jarvis-runtime.workspace = true
 serde.workspace = true
+# Plugin configuration is embedded by tauri::generate_context!.
+serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
+tauri-plugin-updater.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 tracing-appender.workspace = true
@@ -30,7 +33,6 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tauri = { workspace = true, features = ["test"] }
 tempfile.workspace = true
 ts-rs.workspace = true

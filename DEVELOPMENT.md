@@ -59,8 +59,12 @@ npm run lint:styles    # or: npx stylelint "src/**/*.scss" --fix
 # release binary without installers
 npm run tauri -- build --no-bundle
 
-# installers (NSIS/MSI on Windows; deb/rpm/AppImage on Linux)
+# installers (NSIS/MSI on Windows; deb/rpm/AppImage on Linux). The first
+# Windows run downloads the NSIS and WiX tools; AppImage downloads linuxdeploy.
 npm run tauri build
+
+# smoke test of a built binary (fresh temporary profile; see docs/RELEASE.md)
+node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugins/text-tools/server.mjs
 ```
 
 ```bash
@@ -209,6 +213,30 @@ effects; `run` does the work, respects `ctx.cancel` and the limits — and
 register it in `ToolRegistry::builtin`. The policy, approvals, audit log and
 UI pick it up automatically.
 
+### Plugins and MCP
+
+- `jarvis-plugins` contains the MCP client (`mcp.rs`), server processes
+  (`process.rs`), the tool adapter (`tool.rs`), manifests, the store
+  (`<config>/plugins.json`) and the `PluginManager`.
+- Stopping a server stops what it started: on Unix the server leads its
+  own process group (`SIGTERM`, then `SIGKILL`), on Windows a stuck server
+  is killed with its process tree (`taskkill /T /F`).
+- `cargo test -p jarvis-plugins` runs unit tests and `tests/servers.rs`:
+  that test binary has its own `main` (`harness = false`) because it
+  re-runs itself as a fake MCP server (`JARVIS_FAKE_MCP=<mode>`) for modern,
+  legacy, silent, oversized and crashing servers, and drives the manager
+  end to end (review, install, policy, risk reset, restarts, fingerprint
+  changes, keychain secrets).
+- `cargo run -p jarvis-plugins --example mcp-probe -- [--call <tool> <json>] -- <program> [args]`
+  connects JARVIS's MCP client to any server: the negotiated protocol, its
+  tools, and one call. Checked with the official reference servers
+  (`server-everything`, `server-filesystem` 2.0.1).
+- Try a real plugin: Plugins → **Choose a plugin folder…** →
+  `examples/plugins/text-tools` (needs Node.js). Or **Add an MCP server**
+  with program `node` and the absolute path of `server.mjs` as argument.
+- Third-party MCP servers (for example `npx -y @modelcontextprotocol/server-…`)
+  download code when they start; review them like any other program.
+
 ### Voice and vision
 
 - `jarvis-voice` runs two external engines as child processes:
@@ -244,7 +272,12 @@ UI pick it up automatically.
 | Memory database (also agent tasks, audit log) | `…\memory\jarvis.db` in local data | `memory/jarvis.db` in local data |
 | Logs (`jarvis.YYYY-MM-DD.log`) | `%LOCALAPPDATA%\ai.jarvis.desktop\logs\` | `~/.local/share/ai.jarvis.desktop/logs/` |
 
-The exact paths are shown on the Settings screen.
+The exact paths are shown on the Settings screen. `JARVIS_UPDATE_ENDPOINT`
+replaces the update feed URL for tests (release builds accept HTTPS only;
+the signature check always applies — see docs/RELEASE.md). `JARVIS_PROFILE_DIR`
+(an absolute path) keeps settings, data and logs in one folder instead —
+used by the release smoke test and for portable use. The WebView cache
+(`EBWebView`) stays in the local data folder; JARVIS keeps no state there.
 
 ## Debugging
 
@@ -294,4 +327,9 @@ The exact paths are shown on the Settings screen.
 | Real Ollama / LM Studio | not installed on the dev machine | not verified |
 | Voice: packages installed through Settings → Voice (whisper.cpp b5454, Whisper Small, Piper, uk voice), SHA-256 verified | ✔ | not verified live |
 | Voice: speech through the speakers, reply read aloud while it streams, microphone capture (WASAPI), wake word mode on/off with indicator | ✔ (recognition checked on Piper-generated speech; the laptop mic array cancels its own speakers, so the acoustic loop is no test; wake word detection not tried with a live voice) | not verified live |
+| Plugins: example MCP server (Node.js) added through the Plugins screen, protocol 2026-07-28 negotiated, an agent with Qwen2.5 3B calling `text-tools__word_count` after approval (correct answer, audit entries), changed script stopped until reviewed again, disable and remove (process gone, `plugins.json` empty) | ✔ (the folder dialog path is covered by tests only) | CI only |
+| Release smoke test (`e2e/smoke.mjs`) on the release binary: every screen, echo chat turn, MCP plugin, idle renderer, clean shutdown | ✔ (17/17; UI ready 1.7–2.3 s after start, `jarvis.exe` 45 MB, WebView2 processes about 420 MB in total) | ✔ WSL release build: start-up, still running after 10 s, exit (3/3) |
+| Installers | NSIS/MSI not built locally (the first build downloads NSIS and WiX); built by the Release workflow | ✔ WSL: deb and rpm (11 MB each); depends on `libasound2t64` or `libasound2`, `libwebkit2gtk-4.1-0`, `libgtk-3-0` |
+| Signed updates (`e2e/update-test.mjs`, debug build, real key) | ✔ 5/5: version mismatch refused, changed file refused, signed installer started with `/P /UPDATE /R`, core stopped first | WSL: signed deb and rpm built (`.sig` bound to version 0.1.0); installing through the updater not verified |
+| Idle CPU (release, dashboard, 8 logical cores) | ✔ 2.6 % focused, 1.1 % in the background (was 7.5 %) | not measured |
 | Vision: screenshot and window capture, Qwen3-VL 2B + mmproj answering about the screen | ✔ (b11739 CPU, 70–85 s per screenshot question) | unit tests only (X11, portal) |

@@ -25,7 +25,9 @@
     ],
     "security": {
       "freezePrototype": true,
-      "dangerousDisableAssetCspModification": ["style-src"],
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",
@@ -53,7 +55,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "msi",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "publisher": "JARVIS project",
+    "homepage": "https://github.com/RomanNikolaenko/JARVIS",
+    "copyright": "Copyright © 2026 the JARVIS authors",
     "category": "Productivity",
     "shortDescription": "Local-first personal AI assistant",
     "longDescription": "JARVIS is a local-first, privacy-first personal AI assistant with support for local and cloud AI models.",
@@ -63,6 +74,46 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2t64 | libasound2"
+        ],
+        "section": "utils"
+      },
+      "rpm": {
+        "depends": [
+          "alsa-lib"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZENkYzM0M2MkIxRkNFNjkKUldScHpoOHJ4ak52YlFKVHRPT0cwMnZDajVRR095MG9nd0lSMjBNL0lRdFQya09hbnY1SWxtcHMK",
+      "endpoints": [
+        "https://github.com/RomanNikolaenko/JARVIS/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

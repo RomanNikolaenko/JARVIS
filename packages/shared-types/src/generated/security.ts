@@ -25,7 +25,7 @@ brokenAt: string | null, };
  * What a tool call may do. Tools declare the capabilities they need; the
  * policy decides per call.
  */
-export type Capability = "fsRead" | "fsWrite" | "fsDelete" | "processSpawn" | "processControl" | "systemRead" | "netFetch" | "openExternal";
+export type Capability = "fsRead" | "fsWrite" | "fsDelete" | "processSpawn" | "processControl" | "systemRead" | "netFetch" | "openExternal" | "pluginTool";
 
 /**
  * A call waiting for the user.

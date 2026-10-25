@@ -69,6 +69,7 @@ impl Git {
             capabilities: vec![Capability::FsRead],
             risk: RiskLevel::Low,
             idempotent: true,
+            plugin: None,
         })
     }
 }

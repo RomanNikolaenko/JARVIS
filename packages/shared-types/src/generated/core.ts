@@ -75,6 +75,19 @@ export type AppInfo = { name: string, version: string, buildProfile: BuildProfil
 
 export type AssistantLanguage = "uk" | "en";
 
+/**
+ * A newer version announced by the update feed.
+ */
+export type AvailableUpdate = { version: string, 
+/**
+ * Release notes from the feed (untrusted text, shown as plain text).
+ */
+notes: string | null, 
+/**
+ * RFC 3339 publication date.
+ */
+date: string | null, };
+
 export type BuildProfile = "debug" | "release";
 
 /**
@@ -265,7 +278,11 @@ tools: ToolSettings, agents: AgentsSettings,
 /**
  * Settings → Голос.
  */
-voice: VoiceSettings, privacy: PrivacySettings, logging: LoggingSettings, };
+voice: VoiceSettings, privacy: PrivacySettings, 
+/**
+ * Application updates (ADR 0014).
+ */
+updates: UpdateSettings, logging: LoggingSettings, };
 
 /**
  * Kinds of work JARVIS routes to models. Speech categories arrive with the
@@ -319,6 +336,20 @@ export type UiErrorReport = { message: string,
  * Where the error happened, e.g. a component or service name.
  */
 context: string | null, };
+
+export type UpdatePhase = "idle" | "checking" | "upToDate" | "available" | "downloading" | "installing" | "failed";
+
+/**
+ * Application updates.
+ */
+export type UpdateSettings = { 
+/**
+ * Look for a new version shortly after start and once a day. Nothing is
+ * downloaded or installed without the user's confirmation.
+ */
+checkAutomatically: boolean, };
+
+export type UpdateStatus = { currentVersion: string, phase: UpdatePhase, available: AvailableUpdate | null, downloadedBytes: number | null, totalBytes: number | null, lastCheckedMs: number | null, error: string | null, };
 
 export type WorkspaceFolder = { path: string, 
 /**

@@ -54,6 +54,7 @@ impl FetchUrl {
             capabilities: vec![Capability::NetFetch],
             risk: RiskLevel::Medium,
             idempotent: true,
+            plugin: None,
         })
     }
 }
@@ -311,6 +312,7 @@ impl OpenUrl {
             capabilities: vec![Capability::OpenExternal],
             risk: RiskLevel::Medium,
             idempotent: false,
+            plugin: None,
         })
     }
 }

@@ -52,7 +52,12 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 | **Agent bounds**: steps, wall-clock time, invalid replies, consecutive failures, model errors and concurrent tasks are limited; no action is retried automatically; running tasks pause on exit and resume from the journal without re-running actions. | `jarvis-agent` |
 | **Agents and cloud models**: a cloud model can be used by agents only with a separate permission (`privacy.allowCloudAgents`) on top of `allowCloudProviders`, because agents send file contents and program output to the model. | `jarvis-core::agents` |
 | Workspace folders are added through a native folder dialog in Rust. | `agent_commands.rs` |
-| Microphone, camera and screen are not accessed at all. | — |
+| **Microphone** opens only for push-to-talk or in wake word mode (off by default); an indicator is shown on every screen while it is open, and opening/closing is logged. Speech is recognized on the computer. | `jarvis-voice`, `jarvis-core::voice` |
+| **Screen, windows and camera** are captured only when the user asks; captures are shown before sending, kept in memory for at most 30 minutes, used once, and reach cloud models only with `privacy.shareCapturesWithCloud`. | `jarvis-vision`, `jarvis-core::vision` |
+| **Voice engines** (whisper.cpp, Piper) are pinned downloads with SHA-256, installed after confirmation; program and library hashes are checked before every start. | `jarvis-voice::catalog` |
+| **Updates** are installed only after the user confirms, and only when the file's minisign signature matches the public key built into the app and is bound to the announced version (a tampered file or a feed announcing another version is refused). The private key and its password stay outside the repository (GitHub secrets for the Release workflow). The check sends only the HTTPS request, without a proxy. | `updates.rs` in the desktop shell, ADR 0014 |
+| **Plugins (MCP servers)** start only after the user reviewed the exact program, arguments, folder, variables and a fingerprint of the files; the fingerprint is checked before every start, so a changed plugin stops until it is reviewed again. Servers get a minimal environment and secrets from the OS keychain, never from `plugins.json`. Messages are size-limited, requests have deadlines. | `jarvis-plugins` |
+| **Plugin tools** are untrusted: high risk by default (every call asks), a lowered risk resets when the tool's definition changes, the server's annotations are hints only, descriptions are clipped and marked as third-party text in the agent prompt, results are framed data, calls are never repeated automatically. | `jarvis-plugins::tool`, `jarvis-agent::protocol` |
 
 Known trade-off: the *Test connection* action on the Models screen lets the
 main window make the core send a `GET` request to a URL the user typed (no
@@ -68,15 +73,19 @@ already-running requests retain their original provider. A locked or unavailable
 vault is reported as an error. Connection tests contact the selected endpoint
 without sending conversation content, including when cloud chat is disabled.
 
+The latest review: [docs/security-review-2026-10.md](docs/security-review-2026-10.md).
+
 ## Planned controls (not implemented yet)
 
-- Visible indicators and explicit consent for microphone, camera and screen
-  capture (Phase 6).
+- Sandboxing of plugin processes (AppContainer / bubblewrap / Landlock).
 - Encryption of the memory database at rest with a key in the OS keychain.
-- Signed installers and updates (Phase 8).
+- Authenticode-signed Windows installers (need a certificate; until then
+  releases ship with SHA-256 checksums, and updates are verified with their
+  own signatures).
+- A RustSec advisory scan of the Rust dependencies in CI.
 
-Process isolation/sandboxing of tools is **not** implemented; do not assume
-it exists. Tools run with the user's rights: the policy limits what they are
+Process isolation/sandboxing of tools and plugins is **not** implemented;
+do not assume it exists. A plugin process can do anything the user can. Tools run with the user's rights: the policy limits what they are
 asked to do (folders, programs, URLs, approvals), it does not contain a
 program once the user allowed and approved it. Prompt-injection mitigations
 reduce the risk; they do not remove it — approvals are the safeguard for

@@ -1,5 +1,6 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import type { Settings } from '@jarvis/shared-types';
 
 import { JarvisApi } from '../../core/ipc/jarvis-api';
@@ -48,5 +49,56 @@ describe('Settings form', () => {
     expect(page.fields.controls.requestTimeoutSecs.value).toBe(edited ? 180 : 120);
     expect(page.fields.dirty).toBe(edited);
     expect(page.saved() !== null).toBe(!edited);
+  });
+
+  it('installs an update only after the user confirms it, and saves the automatic check setting', async () => {
+    const available = {
+      currentVersion: '0.1.0',
+      phase: 'available' as const,
+      available: { version: '0.2.0', notes: 'Faster start-up', date: null },
+      downloadedBytes: null,
+      totalBytes: null,
+      lastCheckedMs: 1,
+      error: null,
+    };
+    const api = {
+      onUpdateStatus: vi.fn(async () => () => undefined),
+      getUpdateStatus: vi.fn(async () => available),
+      installUpdate: vi.fn(async () => undefined),
+      updateSettings: vi.fn(async (settings: Settings) => settings),
+    };
+    TestBed.configureTestingModule({
+      imports: [SettingsPage],
+      providers: [
+        provideRouter([]),
+        { provide: JarvisApi, useValue: api },
+        { provide: SystemStore, useValue: { appInfo: signal(null) } },
+      ],
+    });
+    TestBed.inject(SettingsStore).settings.set(SETTINGS);
+    const fixture = TestBed.createComponent(SettingsPage);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    const button = (text: string) =>
+      [...element.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith(text)) as HTMLButtonElement;
+
+    expect(element.textContent).toContain('version 0.2.0 is available');
+    expect(element.textContent).toContain('Faster start-up');
+    button('Install 0.2.0').click();
+    fixture.detectChanges();
+    expect(api.installUpdate).not.toHaveBeenCalled();
+    expect(element.textContent).toContain('installs version 0.2.0 and starts');
+    button('Install and restart').click();
+    await fixture.whenStable();
+    expect(api.installUpdate).toHaveBeenCalledWith('0.2.0');
+
+    const automatic = element.querySelector<HTMLInputElement>('input[formcontrolname="checkUpdates"]')!;
+    expect(automatic.checked).toBe(true);
+    automatic.click();
+    fixture.detectChanges();
+    button('Save settings').click();
+    await fixture.whenStable();
+    expect(api.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ updates: { checkAutomatically: false } }));
   });
 });
