@@ -334,12 +334,11 @@ impl Tool for LaunchProgram {
         let program = resolve_program(&args.program).ok_or_else(|| {
             ToolError::Failed(format!("\"{}\" was not found in PATH", args.program))
         })?;
-        let mut command = tokio::process::Command::from(base_command(&program, &args.args, &cwd));
+        let mut command = base_command(&program, &args.args, &cwd);
         command
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let mut child = command
-            .spawn()
+        let mut child = jarvis_platform::spawn_owned(command)
             .map_err(|err| ToolError::io("starting the program", err))?;
         let pid = child
             .id()
@@ -357,7 +356,7 @@ impl Tool for LaunchProgram {
             tokio::select! {
                 _ = child.wait() => {}
                 () = stop.cancelled() => {
-                    let _ = child.kill().await;
+                    let _ = child.start_kill();
                 }
             }
             registry.running().remove(&pid);

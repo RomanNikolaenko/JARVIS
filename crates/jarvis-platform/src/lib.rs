@@ -24,6 +24,7 @@ pub use hardware::{
 };
 pub use info::{OsFamily, PlatformInfo};
 pub use monitor::{SystemMetrics, SystemMonitor};
+pub use process::{OwnedProcess, spawn_owned};
 pub use process::{kill_if_executable, process_memory, request_termination};
 
 /// OS-specific behaviour that cannot be expressed through portable crates.

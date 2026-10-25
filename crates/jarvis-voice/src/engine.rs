@@ -174,6 +174,7 @@ struct Inner {
     config: Mutex<Config>,
     state: watch::Sender<VoiceState>,
     transcripts: broadcast::Sender<VoiceTranscript>,
+    events: broadcast::Sender<VoiceEvent>,
     levels: broadcast::Sender<f32>,
     recognizer: tokio::sync::Mutex<Option<(String, Box<dyn Recognizer>)>>,
     synthesizer: tokio::sync::Mutex<Option<(SynthKey, Box<dyn Synthesizer>)>>,
@@ -208,6 +209,13 @@ fn has_words(text: &str) -> bool {
     text.chars().any(char::is_alphanumeric)
 }
 
+/// Ordered state transitions and recognition results for UI consumers.
+#[derive(Debug, Clone)]
+pub enum VoiceEvent {
+    State(VoiceState),
+    Transcript(VoiceTranscript),
+}
+
 impl VoiceEngine {
     pub fn new(options: VoiceEngineOptions) -> Self {
         let store = PackageStore::new(options.voice_dir);
@@ -232,6 +240,7 @@ impl VoiceEngine {
                 }),
                 state,
                 transcripts: broadcast::channel(16).0,
+                events: broadcast::channel(256).0,
                 levels: broadcast::channel(32).0,
                 recognizer: tokio::sync::Mutex::new(None),
                 synthesizer: tokio::sync::Mutex::new(None),
@@ -248,6 +257,11 @@ impl VoiceEngine {
 
     pub fn subscribe_state(&self) -> watch::Receiver<VoiceState> {
         self.inner.state.subscribe()
+    }
+
+    /// Unlike the watch snapshot, this queue retains individual capture starts.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<VoiceEvent> {
+        self.inner.events.subscribe()
     }
 
     pub fn state(&self) -> VoiceState {
@@ -281,6 +295,9 @@ impl VoiceEngine {
         self.inner.state.send_if_modified(|state| {
             let before = state.clone();
             change(state);
+            if *state != before {
+                let _ = self.inner.events.send(VoiceEvent::State(state.clone()));
+            }
             *state != before
         });
     }
@@ -537,12 +554,17 @@ impl VoiceEngine {
         recognizer.transcribe(samples, language.code()).await
     }
 
-    fn emit(&self, text: String, source: TranscriptSource) {
+    fn emit(&self, text: String, source: TranscriptSource, capture_id: String) {
         let transcript = VoiceTranscript {
+            capture_id,
             text,
             source,
             language: self.language().code().to_owned(),
         };
+        let _ = self
+            .inner
+            .events
+            .send(VoiceEvent::Transcript(transcript.clone()));
         let _ = self.inner.transcripts.send(transcript);
     }
 
@@ -655,6 +677,10 @@ impl VoiceEngine {
         cancel: &CancellationToken,
         mut control: mpsc::UnboundedReceiver<Control>,
     ) -> Result<()> {
+        let mut capture_id = uuid::Uuid::new_v4().to_string();
+        if mode == ListenMode::PushToTalk {
+            self.update(|s| s.capture_id = Some(capture_id.clone()));
+        }
         let settings = self.config().settings;
         let (events, mut audio) = mpsc::channel::<CaptureEvent>(256);
         let backend = Arc::clone(&self.inner.backend);
@@ -680,7 +706,7 @@ impl VoiceEngine {
         );
         // Wake word mode: phrases go to a worker so capture never stalls;
         // when it is busy, new phrases are dropped.
-        let (phrases, phrases_rx) = mpsc::channel::<Vec<f32>>(2);
+        let (phrases, phrases_rx) = mpsc::channel::<(String, Vec<f32>)>(2);
         let worker = (mode == ListenMode::WakeWord).then(|| {
             let engine = self.clone();
             let cancel = cancel.clone();
@@ -721,14 +747,20 @@ impl VoiceEngine {
                         match event {
                             SegmentEvent::Started => {
                                 heard = true;
-                                self.update(|s| s.hearing_speech = true);
+                                if mode == ListenMode::WakeWord {
+                                    capture_id = uuid::Uuid::new_v4().to_string();
+                                }
+                                self.update(|s| {
+                                    s.hearing_speech = true;
+                                    s.capture_id = Some(capture_id.clone());
+                                });
                             }
                             SegmentEvent::Finished(phrase) => {
                                 self.update(|s| s.hearing_speech = false);
                                 if mode == ListenMode::PushToTalk {
                                     finished = Some(phrase);
                                 } else {
-                                    let _ = phrases.try_send(phrase);
+                                    let _ = phrases.try_send((capture_id.clone(), phrase));
                                 }
                             }
                         }
@@ -786,24 +818,24 @@ impl VoiceEngine {
                 "the speech could not be recognized".into(),
             ));
         }
-        self.emit(text, TranscriptSource::PushToTalk);
+        self.emit(text, TranscriptSource::PushToTalk, capture_id);
         Ok(())
     }
 
     async fn run_wake_worker(
         &self,
-        mut phrases: mpsc::Receiver<Vec<f32>>,
+        mut phrases: mpsc::Receiver<(String, Vec<f32>)>,
         cancel: &CancellationToken,
     ) {
         loop {
-            let phrase = tokio::select! {
+            let (capture_id, phrase) = tokio::select! {
                 () = cancel.cancelled() => return,
                 phrase = phrases.recv() => match phrase {
                     Some(phrase) => phrase,
                     None => return,
                 },
             };
-            match self.handle_wake_phrase(&phrase).await {
+            match self.handle_wake_phrase(&phrase, capture_id).await {
                 Ok(()) | Err(VoiceError::Cancelled) => {}
                 Err(err) => {
                     tracing::warn!("wake word recognition failed: {err}");
@@ -843,14 +875,14 @@ impl VoiceEngine {
         self.update(|s| s.awaiting_command = false);
     }
 
-    async fn handle_wake_phrase(&self, phrase: &[f32]) -> Result<()> {
+    async fn handle_wake_phrase(&self, phrase: &[f32], capture_id: String) -> Result<()> {
         if self.command_pending() {
             let text = self.transcribe(phrase).await?;
             self.command_done();
             // The command may repeat the wake word.
             let command = wake::find(&text).map_or(text, |found| found.command);
             if has_words(&command) {
-                self.emit(command, TranscriptSource::WakeWord);
+                self.emit(command, TranscriptSource::WakeWord, capture_id);
             }
             return Ok(());
         }
@@ -869,7 +901,7 @@ impl VoiceEngine {
         // Barge-in: the user wants JARVIS's attention.
         self.stop_speaking();
         if has_words(&found.command) {
-            self.emit(found.command, TranscriptSource::WakeWord);
+            self.emit(found.command, TranscriptSource::WakeWord, capture_id);
         } else {
             self.expect_command();
             self.chime().await;

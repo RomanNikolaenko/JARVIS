@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import type {
   ModelCapabilities,
   ModelInfo,
@@ -13,6 +13,7 @@ import type {
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
+import { withRequestDeadline } from '../ipc/request-deadline';
 import { SettingsStore } from './settings.store';
 
 export interface ModelOption {
@@ -46,6 +47,8 @@ export class ModelsStore {
   private readonly api = inject(JarvisApi);
   private readonly settingsStore = inject(SettingsStore);
   private refreshing: Promise<void> | null = null;
+  private readonly destroyRef = inject(DestroyRef);
+  private refreshEpoch = 0;
 
   readonly providers = signal<readonly ProviderModels[]>([]);
   readonly routes = signal<readonly RouteResolution[]>([]);
@@ -70,22 +73,33 @@ export class ModelsStore {
 
   /** Loads providers and routes; concurrent calls share one request. */
   refresh(force = false): Promise<void> {
+    if (this.destroyRef.destroyed) return Promise.resolve();
     if (this.refreshing && !force) {
       return this.refreshing;
     }
     this.loading.set(true);
+    const epoch = ++this.refreshEpoch;
+    const current = () => !this.destroyRef.destroyed && epoch === this.refreshEpoch;
     const run = (async () => {
       try {
-        const [providers, routes] = await Promise.all([this.api.listAiModels(force), this.api.getModelRoutes()]);
+        const [providers, routes] = await withRequestDeadline(
+          () => Promise.all([this.api.listAiModels(force), this.api.getModelRoutes()]),
+          30_000,
+          'AI models and routes',
+          this.destroyRef
+        );
+        if (!current()) return;
         this.providers.set(providers);
         this.routes.set(routes);
         this.error.set(null);
         this.loaded.set(true);
       } catch (error) {
-        this.error.set(IpcError.from(error));
+        if (current()) this.error.set(IpcError.from(error));
       } finally {
-        this.loading.set(false);
-        this.refreshing = null;
+        if (epoch === this.refreshEpoch) {
+          this.loading.set(false);
+          this.refreshing = null;
+        }
       }
     })();
     this.refreshing = run;

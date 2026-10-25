@@ -1,8 +1,7 @@
 //! Running programs without a shell: the program is looked up in `PATH`
 //! (absolute entries only, never the working directory), arguments are
 //! passed as a vector, output is captured with limits, and the process is
-//! killed on timeout or cancellation. Only the direct child is killed;
-//! programs it started itself may keep running.
+//! killed on timeout or cancellation, together with its descendants.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -129,38 +128,46 @@ pub(crate) async fn capture(
     timeout: Duration,
     ctx: &ToolContext,
 ) -> Result<Captured, ToolError> {
-    let mut command = tokio::process::Command::from(command);
-    command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = command
-        .spawn()
+    let mut command = command;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = jarvis_platform::spawn_owned(command)
         .map_err(|err| ToolError::io("starting the program", err))?;
-    let stdout = child.stdout.take().map(|s| tokio::spawn(read_limited(s)));
-    let stderr = child.stderr.take().map(|s| tokio::spawn(read_limited(s)));
-    let status = tokio::select! {
-        status = child.wait() => status.map_err(|err| ToolError::io("waiting for the program", err))?,
+    let stdout = child.stdout().take();
+    let stderr = child.stderr().take();
+    // Readers are owned by this future, so cancellation closes the pipes too.
+    let operation = async {
+        let (status, stdout, stderr) = tokio::join!(
+            child.wait(),
+            async {
+                match stdout {
+                    Some(s) => read_limited(s).await,
+                    None => String::new(),
+                }
+            },
+            async {
+                match stderr {
+                    Some(s) => read_limited(s).await,
+                    None => String::new(),
+                }
+            },
+        );
+        Ok(Captured {
+            status: status.map_err(|err| ToolError::io("waiting for the program", err))?,
+            stdout,
+            stderr,
+        })
+    };
+    tokio::select! {
+        result = operation => result,
         () = tokio::time::sleep(timeout) => {
-            let _ = child.kill().await;
-            return Err(ToolError::TimedOut(timeout.as_secs()));
+            let _ = child.start_kill();
+            Err(ToolError::TimedOut(timeout.as_secs()))
         }
         () = ctx.cancel.cancelled() => {
-            let _ = child.kill().await;
-            return Err(ToolError::Cancelled);
+            let _ = child.start_kill();
+            Err(ToolError::Cancelled)
         }
-    };
-    let collect = |handle: Option<tokio::task::JoinHandle<String>>| async move {
-        match handle {
-            Some(handle) => handle.await.unwrap_or_default(),
-            None => String::new(),
-        }
-    };
-    Ok(Captured {
-        status,
-        stdout: collect(stdout).await,
-        stderr: collect(stderr).await,
-    })
+    }
 }
 
 /// Reads a stream to the end, keeping the first [`MAX_STREAM_BYTES`].
@@ -298,6 +305,83 @@ impl Tool for RunCommand {
                 &format!("`{line}` failed\n{content}"),
                 ctx.limits.max_output_chars,
             )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    #![allow(clippy::expect_used)]
+    use super::*;
+    use crate::{ProcessRegistry, ToolLimits};
+    use jarvis_security::FileScope;
+
+    // Child test binaries let us exercise inherited pipes without a shell or
+    // external runtime. The leaf is bounded and exits by itself.
+    #[test]
+    #[ignore = "subprocess fixture"]
+    fn pipe_holder() {
+        match std::env::var("JARVIS_PIPE_FIXTURE").as_deref() {
+            Ok("leaf") => std::thread::sleep(Duration::from_secs(3)),
+            Ok("parent") => {
+                let mut command = std::process::Command::new(std::env::current_exe().expect("exe"));
+                command
+                    .args([
+                        "--ignored",
+                        "--exact",
+                        "command::capture_tests::pipe_holder",
+                        "--nocapture",
+                    ])
+                    .env("JARVIS_PIPE_FIXTURE", "leaf");
+                jarvis_platform::current_adapter().prepare_background_command(&mut command);
+                let mut child = command.spawn().expect("leaf");
+                // The parent exits while the child still owns inherited output.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            _ => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_pipes_obey_deadline_and_cancellation() {
+        for cancel in [false, true] {
+            let ctx = ToolContext::new(
+                FileScope::default(),
+                ToolLimits::default(),
+                Arc::new(ProcessRegistry::default()),
+            );
+            let mut command = std::process::Command::new(std::env::current_exe().expect("exe"));
+            command
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "command::capture_tests::pipe_holder",
+                    "--nocapture",
+                ])
+                .env("JARVIS_PIPE_FIXTURE", "parent");
+            jarvis_platform::current_adapter().prepare_background_command(&mut command);
+            let cancellation = ctx.cancel.clone();
+            let trigger = async move {
+                if cancel {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    cancellation.cancel();
+                }
+            };
+            let duration = if cancel {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_millis(800)
+            };
+            let started = std::time::Instant::now();
+            let (result, ()) = tokio::join!(capture(command, duration, &ctx), trigger);
+            assert!(started.elapsed() < Duration::from_secs(2));
+            if cancel {
+                assert!(matches!(result, Err(ToolError::Cancelled)));
+            } else {
+                assert!(matches!(result, Err(ToolError::TimedOut(_))));
+            }
         }
     }
 }

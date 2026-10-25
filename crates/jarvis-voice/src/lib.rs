@@ -25,7 +25,7 @@ pub mod vad;
 pub mod wake;
 pub mod wav;
 
-pub use engine::{SpeechLanguage, SpeechStream, VoiceEngine, VoiceEngineOptions};
+pub use engine::{SpeechLanguage, SpeechStream, VoiceEngine, VoiceEngineOptions, VoiceEvent};
 pub use error::{Result, VoiceError};
 pub use types::{
     AudioDevice, TranscriptSource, VoiceLanguage, VoicePackage, VoicePackageKind, VoicePhase,

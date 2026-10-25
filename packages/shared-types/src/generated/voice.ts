@@ -90,7 +90,11 @@ endSilenceMs: number, };
  * What the voice engine is doing. `mic_open` drives the microphone
  * indicator and is true exactly while audio is being captured.
  */
-export type VoiceState = { phase: VoicePhase, micOpen: boolean, 
+export type VoiceState = { 
+/**
+ * Identity of the latest captured phrase; retained during recognition.
+ */
+captureId: string | null, phase: VoicePhase, micOpen: boolean, 
 /**
  * Wake word mode is on (the microphone stays open).
  */
@@ -136,7 +140,7 @@ canSpeak: boolean, state: VoiceState, voiceDir: string, };
 /**
  * Recognized speech meant as a request.
  */
-export type VoiceTranscript = { text: string, source: TranscriptSource, 
+export type VoiceTranscript = { captureId: string, text: string, source: TranscriptSource, 
 /**
  * Language whisper used ("uk", "en").
  */

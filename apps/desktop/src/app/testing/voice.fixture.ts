@@ -1,6 +1,7 @@
 import type { VoicePackage, VoiceState, VoiceStatus } from '@jarvis/shared-types';
 
 export const IDLE_VOICE: VoiceState = {
+  captureId: null,
   phase: 'idle',
   micOpen: false,
   wakeWordActive: false,

@@ -1,8 +1,9 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import type { CaptureInfo, VisionStatus, WindowInfo } from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
+import { withRequestDeadline } from '../ipc/request-deadline';
 
 /** Images in one message (the core enforces the same limit). */
 export const MAX_ATTACHMENTS = 4;
@@ -14,6 +15,33 @@ export const MAX_ATTACHMENTS = 4;
 @Injectable({ providedIn: 'root' })
 export class VisionStore {
   private readonly api = inject(JarvisApi);
+  private readonly destroyRef = inject(DestroyRef);
+  private attachmentEpoch = 0;
+  private capturing = false;
+  private pending = 0;
+  private statusEpoch = 0;
+  private windowsEpoch = 0;
+
+  constructor() {
+    this.destroyRef.onDestroy(() => this.clear());
+  }
+
+  /** A different conversation must never inherit the previous draft's captures. */
+  clear(): void {
+    ++this.attachmentEpoch;
+    const discarded = this.attachments();
+    this.attachments.set([]);
+    this.error.set(null);
+    for (const capture of discarded) void this.discard(capture.id);
+  }
+
+  private async discard(id: string): Promise<void> {
+    try {
+      await this.api.discardCapture(id);
+    } catch (error) {
+      console.error('Failed to discard a capture', error);
+    }
+  }
 
   readonly status = signal<VisionStatus | null>(null);
   readonly windows = signal<readonly WindowInfo[]>([]);
@@ -25,11 +53,21 @@ export class VisionStore {
   readonly full = computed(() => this.attachments().length >= MAX_ATTACHMENTS);
 
   async refresh(): Promise<void> {
-    await this.run(async () => this.status.set(await this.api.getVisionStatus()));
+    const epoch = ++this.statusEpoch;
+    const current = () => epoch === this.statusEpoch && !this.destroyRef.destroyed;
+    await this.run(async () => {
+      const status = await withRequestDeadline(() => this.api.getVisionStatus(), 10_000, 'Vision status', this.destroyRef);
+      if (current()) this.status.set(status);
+    }, current);
   }
 
   async loadWindows(): Promise<void> {
-    await this.run(async () => this.windows.set(await this.api.listWindows()));
+    const epoch = ++this.windowsEpoch;
+    const current = () => epoch === this.windowsEpoch && !this.destroyRef.destroyed;
+    await this.run(async () => {
+      const windows = await withRequestDeadline(() => this.api.listWindows(), 10_000, 'Window list', this.destroyRef);
+      if (current()) this.windows.set(windows);
+    }, current);
   }
 
   captureScreen(display: string | null, hideJarvis = true): Promise<void> {
@@ -63,35 +101,48 @@ export class VisionStore {
 
   /** Hands the attachments to a message (the core uses each one once). */
   take(): CaptureInfo[] {
+    ++this.attachmentEpoch;
     const taken = [...this.attachments()];
     this.attachments.set([]);
     return taken;
   }
 
   private async add(capture: () => Promise<CaptureInfo | null>): Promise<void> {
+    if (this.destroyRef.destroyed || this.capturing) return;
     if (this.full()) {
       this.error.set(new IpcError('limitExceeded', `A message may have at most ${MAX_ATTACHMENTS} images`));
       return;
     }
-    await this.run(async () => {
-      const info = await capture();
-      if (info) {
-        this.attachments.update((list) => [...list, info]);
-      }
-    });
+    const epoch = this.attachmentEpoch;
+    this.capturing = true;
+    try {
+      await this.run(
+        async () => {
+          const info = await capture();
+          if (!info) return;
+          if (epoch !== this.attachmentEpoch || this.destroyRef.destroyed) await this.discard(info.id);
+          else this.attachments.update((list) => [...list, info]);
+        },
+        () => epoch === this.attachmentEpoch
+      );
+    } finally {
+      this.capturing = false;
+    }
   }
 
-  private async run(action: () => Promise<void>): Promise<void> {
+  private async run(action: () => Promise<void>, current: () => boolean = () => true): Promise<void> {
+    if (this.destroyRef.destroyed) return;
+    if (this.pending === 0) this.error.set(null);
+    ++this.pending;
     this.busy.set(true);
     try {
       await action();
-      this.error.set(null);
     } catch (error) {
       const failure = IpcError.from(error);
       // Closing the system dialog is not an error.
-      this.error.set(failure.code === 'cancelled' ? null : failure);
+      if (current() && !this.destroyRef.destroyed && failure.code !== 'cancelled') this.error.set(failure);
     } finally {
-      this.busy.set(false);
+      this.busy.set(--this.pending > 0);
     }
   }
 }

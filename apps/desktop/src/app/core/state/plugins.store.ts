@@ -1,8 +1,10 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, inject, signal } from '@angular/core';
 import type { McpServerRequest, PluginInfo, PluginReview, RiskLevel } from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
+import { listenerWithDeadline } from '../ipc/listener-deadline';
+import { withRequestDeadline } from '../ipc/request-deadline';
 
 /**
  * Plugins (MCP servers). The core pushes the whole list after every change;
@@ -12,6 +14,17 @@ import { JarvisApi } from '../ipc/jarvis-api';
 export class PluginsStore {
   private readonly api = inject(JarvisApi);
   private started = false;
+  private readonly destroyRef = inject(DestroyRef);
+  private unlisten: (() => void) | null = null;
+  private revision = 0;
+  private startEpoch = 0;
+
+  constructor() {
+    this.destroyRef.onDestroy(() => {
+      this.unlisten?.();
+      this.unlisten = null;
+    });
+  }
 
   readonly plugins = signal<PluginInfo[]>([]);
   readonly loaded = signal(false);
@@ -24,19 +37,39 @@ export class PluginsStore {
   readonly logs = signal<Readonly<Record<string, string[]>>>({});
 
   async start(): Promise<void> {
-    if (this.started) {
+    if (this.started || this.destroyRef.destroyed) {
       return;
     }
     this.started = true;
+    const epoch = ++this.startEpoch;
+    const revision = this.revision;
     try {
-      await this.api.onPlugins((plugins) => this.plugins.set(plugins));
-      this.plugins.set(await this.api.listPlugins());
+      const stop = await listenerWithDeadline(
+        this.api.onPlugins((plugins) => {
+          if (this.destroyRef.destroyed || !this.started || epoch !== this.startEpoch) return;
+          ++this.revision;
+          this.plugins.set(plugins);
+        }),
+        10_000,
+        'Plugin subscription',
+        this.destroyRef
+      );
+      if (this.destroyRef.destroyed) {
+        stop();
+        return;
+      }
+      this.unlisten = stop;
+      const plugins = await withRequestDeadline(() => this.api.listPlugins(), 10_000, 'Plugin list', this.destroyRef);
+      if (this.destroyRef.destroyed) return;
+      if (revision === this.revision) this.plugins.set(plugins);
       this.error.set(null);
     } catch (error) {
       this.started = false;
-      this.error.set(IpcError.from(error));
+      this.unlisten?.();
+      this.unlisten = null;
+      if (!this.destroyRef.destroyed) this.error.set(IpcError.from(error));
     } finally {
-      this.loaded.set(true);
+      if (!this.destroyRef.destroyed) this.loaded.set(true);
     }
   }
 

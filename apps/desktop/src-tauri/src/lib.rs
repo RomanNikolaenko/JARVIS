@@ -31,7 +31,7 @@ use jarvis_core::config::LogLevel;
 use jarvis_core::jarvis_agent::AgentTask;
 use jarvis_core::jarvis_plugins::PluginManager;
 use jarvis_core::jarvis_security::PendingApproval;
-use jarvis_core::jarvis_voice::VoiceEngine;
+use jarvis_core::jarvis_voice::{VoiceEngine, VoiceEvent};
 use jarvis_core::{AppPaths, CoreOptions, JarvisCore};
 use jarvis_events::{EventSubscription, RecvError};
 use tauri::{App, AppHandle, Builder, Emitter, Manager, RunEvent, Runtime, UserAttentionType};
@@ -288,32 +288,25 @@ fn spawn_agent_forwarders<R: Runtime>(
 
 /// Forwards the voice state, recognized requests and microphone levels.
 fn spawn_voice_forwarders<R: Runtime>(app: AppHandle<R>, voice: &VoiceEngine) {
-    let mut state = voice.subscribe_state();
-    let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        while state.changed().await.is_ok() {
-            let current = state.borrow_and_update().clone();
-            if let Err(err) = handle.emit_to(MAIN_WINDOW, VOICE_STATE_EVENT, &current) {
-                tracing::debug!("cannot forward the voice state: {err}");
-            }
-        }
-    });
-    let mut transcripts = voice.subscribe_transcripts();
+    let mut events = voice.subscribe_events();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
-            match transcripts.recv().await {
-                Ok(transcript) => {
-                    if let Err(err) =
-                        handle.emit_to(MAIN_WINDOW, VOICE_TRANSCRIPT_EVENT, &transcript)
-                    {
-                        tracing::debug!("cannot forward a transcript: {err}");
-                    }
+            let result = match events.recv().await {
+                Ok(VoiceEvent::State(state)) => {
+                    handle.emit_to(MAIN_WINDOW, VOICE_STATE_EVENT, &state)
+                }
+                Ok(VoiceEvent::Transcript(transcript)) => {
+                    handle.emit_to(MAIN_WINDOW, VOICE_TRANSCRIPT_EVENT, &transcript)
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::warn!("UI voice forwarder skipped {skipped} transcripts");
+                    tracing::warn!("UI voice forwarder skipped {skipped} events");
+                    continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
+            };
+            if let Err(err) = result {
+                tracing::debug!("cannot forward a voice event: {err}");
             }
         }
     });

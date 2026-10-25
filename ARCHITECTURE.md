@@ -543,6 +543,27 @@ must be granted by a capability; anything not granted is denied. See
   Refused or timed-out stops do not fabricate completion. Early cancellation is
   dispatched once when the request ID becomes known; old cancellation results
   cannot alter a subsequent turn, even if the core reuses its request ID.
+  Explicit conversation opens and new-chat actions advance an input context and
+  clear unsent image attachments. Captures finishing after a context change,
+  message handoff or store destruction are discarded in the core. Capture actions
+  are serialized to enforce the four-image limit under concurrent clicks.
+  Push-to-talk records the context at microphone activation; a later transcript
+  cannot send into another conversation. Voice handoff rechecks context and chat
+  readiness after cancellation and navigation, leaving attachments untouched when
+  the previous reply remains busy. Every voice phrase carries a UUID through
+  capture state and recognition, including separate phrases from a continuous
+  wake-word listener. The frontend binds each observed capture to its input
+  context and microphone-test intent; unknown, cancelled and consumed IDs are
+  ignored. A bounded 64-entry history prevents duplicate delivery without
+  retaining an unlimited history. Wake-word context is bound when the capture
+  state event is observed. State transitions and transcripts share a bounded
+  ordered native event queue, preserving capture starts instead of coalescing
+  them through a watch snapshot. The frontend buffers up to 64 unknown transcripts
+  for five seconds to tolerate cross-event delivery delays; buffered results
+  cannot cross an input-context change. Unmatched results still expire safely.
+  Voice status reads and initial plugin reads cannot overwrite newer pushed
+  state. Both stores release partial and late subscriptions on failure/disposal.
+  Failed microphone starts clear their test intent without clearing newer starts.
   Opening a conversation has a 30-second frontend deadline. Failure retains the
   currently displayed chat; a later open can retry. Older timeouts cannot clear a
   newer open's loading state, and store destruction settles pending opens without

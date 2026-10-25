@@ -85,4 +85,64 @@ describe('ModelsStore', () => {
     expect(supportsCategory('embeddings', { ...CHAT, chat: false, embeddings: true })).toBe(true);
     expect(supportsCategory('toolCalling', CHAT)).toBe(false);
   });
+  it('keeps the forced refresh when an older refresh finishes last', async () => {
+    let old!: (value: ProviderModels[]) => void;
+    api.listAiModels.mockReturnValueOnce(
+      new Promise((resolve) => {
+        old = resolve;
+      })
+    );
+    const first = store.refresh();
+    api.listAiModels.mockResolvedValueOnce([provider('new', 'localServer', null)]);
+    await store.refresh(true);
+    old([provider('old', 'localServer', null)]);
+    await first;
+    expect(store.providers()[0].provider.id).toBe('new');
+  });
+  it('does not clear loading or deduplication while a newer refresh is pending', async () => {
+    let old!: (value: ProviderModels[]) => void;
+    let next!: (value: ProviderModels[]) => void;
+    api.listAiModels.mockReturnValueOnce(
+      new Promise((resolve) => {
+        old = resolve;
+      })
+    );
+    api.listAiModels.mockReturnValueOnce(
+      new Promise((resolve) => {
+        next = resolve;
+      })
+    );
+    const first = store.refresh();
+    const second = store.refresh(true);
+    old([]);
+    await first;
+    expect(store.loading()).toBe(true);
+    expect(store.refresh()).toBe(second);
+    next([]);
+    await second;
+    expect(store.loading()).toBe(false);
+  });
+  it('can retry a timed out refresh and ignores its late result', async () => {
+    vi.useFakeTimers();
+    try {
+      let old!: (value: ProviderModels[]) => void;
+      api.listAiModels.mockReturnValueOnce(
+        new Promise((resolve) => {
+          old = resolve;
+        })
+      );
+      const first = store.refresh();
+      await vi.advanceTimersByTimeAsync(30_001);
+      await first;
+      expect(store.error()?.code).toBe('timeout');
+      expect(store.loading()).toBe(false);
+      api.listAiModels.mockResolvedValueOnce([provider('retry', 'localServer', null)]);
+      await store.refresh();
+      old([provider('old', 'localServer', null)]);
+      await Promise.resolve();
+      expect(store.providers()[0].provider.id).toBe('retry');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

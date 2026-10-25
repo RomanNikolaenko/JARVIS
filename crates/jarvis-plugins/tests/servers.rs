@@ -1047,15 +1047,8 @@ fn process_alive(pid: u32) -> bool {
 }
 
 async fn programs_started_by_a_server_are_stopped_with_it() {
-    // A server that ignores the end of its input is stopped with what it
-    // started (Windows: process tree, Unix: process group). A server that
-    // exits by itself can leave programs behind; Unix finds them through the
-    // process group, Windows cannot without job objects (documented).
-    let modes: &[&str] = if cfg!(windows) {
-        &["hung-parent"]
-    } else {
-        &["hung-parent", "parent"]
-    };
+    // Both stubborn and cleanly exiting servers must release descendants.
+    let modes = &["hung-parent", "parent"];
     for mode in modes {
         let dir = tempfile::tempdir().unwrap();
         let pid_file = dir.path().join("sleeper.pid");

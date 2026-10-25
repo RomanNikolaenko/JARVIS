@@ -1445,6 +1445,7 @@ checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "futures-executor",
  "futures-io",
  "futures-sink",
  "futures-task",
@@ -2415,12 +2416,15 @@ dependencies = [
 name = "jarvis-platform"
 version = "0.1.1"
 dependencies = [
+ "process-wrap",
  "serde",
  "serde_json",
  "sysinfo",
  "tempfile",
+ "tokio",
  "tracing",
  "ts-rs",
+ "windows",
  "windows-registry",
 ]
 
@@ -2561,6 +2565,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4057,6 +4062,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "process-wrap"
+version = "10.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f21b97672d2dc848e7b25701ab4535618b92f4861c13cc3f7f7bed52ad3c8da"
+dependencies = [
+ "futures",
+ "indexmap 2.14.2",
+ "nix 0.31.3",
+ "tokio",
+ "windows",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5539,7 +5557,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",

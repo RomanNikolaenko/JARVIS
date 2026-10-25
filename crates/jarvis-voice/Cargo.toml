@@ -22,6 +22,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [features]
 # Fake audio devices and engines for tests of dependent crates.

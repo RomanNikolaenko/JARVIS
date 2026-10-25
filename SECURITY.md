@@ -75,6 +75,8 @@ without sending conversation content, including when cloud chat is disabled.
 
 The latest review: [docs/security-review-2026-10.md](docs/security-review-2026-10.md).
 
+Dependency advisory checks (`cargo audit` and production `npm audit`) run in CI.
+
 ## Planned controls (not implemented yet)
 
 - Sandboxing of plugin processes (AppContainer / bubblewrap / Landlock).
@@ -82,7 +84,6 @@ The latest review: [docs/security-review-2026-10.md](docs/security-review-2026-1
 - Authenticode-signed Windows installers (need a certificate; until then
   releases ship with SHA-256 checksums, and updates are verified with their
   own signatures).
-- A RustSec advisory scan of the Rust dependencies in CI.
 
 Process isolation/sandboxing of tools and plugins is **not** implemented;
 do not assume it exists. A plugin process can do anything the user can. Tools run with the user's rights: the policy limits what they are

@@ -3,7 +3,7 @@
 A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 **Linux** (X11 and Wayland), built with **Rust**, **Tauri 2** and **Angular**.
 
-> **Status: Phase 8 — Production readiness.** JARVIS chats with local models
+> **Status: Phase 9 — Real local AI; production hardening continues.** JARVIS chats with local models
 > served by **Ollama**, any **OpenAI-compatible** server (LM Studio,
 > llama.cpp server, vLLM, …) or its own **embedded llama.cpp runtime**,
 > remembers conversations, facts and projects in a local SQLite database,

@@ -5,6 +5,49 @@ use std::path::Path;
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
+/// Starts a background process owned by JARVIS, including its descendants.
+/// Windows assigns a suspended process to a kill-on-close job before resuming;
+/// Unix uses a fresh process group. This is lifecycle containment, not a sandbox.
+pub fn spawn_owned(command: std::process::Command) -> std::io::Result<OwnedProcess> {
+    use process_wrap::tokio::{CommandWrap, KillOnDrop};
+    let mut wrapped = CommandWrap::from(tokio::process::Command::from(command));
+    wrapped.wrap(KillOnDrop);
+    #[cfg(windows)]
+    wrapped
+        .wrap(process_wrap::tokio::CreationFlags(
+            windows::Win32::System::Threading::CREATE_NO_WINDOW,
+        ))
+        .wrap(process_wrap::tokio::JobObject);
+    #[cfg(unix)]
+    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
+    wrapped.spawn().map(|child| OwnedProcess { child })
+}
+
+/// Owns the whole job/group even if the root exits before its descendants.
+#[derive(Debug)]
+pub struct OwnedProcess {
+    child: Box<dyn process_wrap::tokio::ChildWrapper>,
+}
+
+impl std::ops::Deref for OwnedProcess {
+    type Target = dyn process_wrap::tokio::ChildWrapper;
+    fn deref(&self) -> &Self::Target {
+        self.child.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for OwnedProcess {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.child.as_mut()
+    }
+}
+
+impl Drop for OwnedProcess {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
 fn refreshed(pid: u32) -> System {
     let mut system = System::new();
     system.refresh_processes_specifics(

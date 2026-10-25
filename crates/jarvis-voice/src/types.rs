@@ -134,6 +134,8 @@ pub enum VoicePhase {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "voice.ts")]
 pub struct VoiceState {
+    /// Identity of the latest captured phrase; retained during recognition.
+    pub capture_id: Option<String>,
     pub phase: VoicePhase,
     pub mic_open: bool,
     /// Wake word mode is on (the microphone stays open).
@@ -162,6 +164,7 @@ pub enum TranscriptSource {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "voice.ts")]
 pub struct VoiceTranscript {
+    pub capture_id: String,
     pub text: String,
     pub source: TranscriptSource,
     /// Language whisper used ("uk", "en").

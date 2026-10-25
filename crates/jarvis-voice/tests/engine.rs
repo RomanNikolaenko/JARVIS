@@ -85,10 +85,12 @@ fn wake_word_settings() -> VoiceSettings {
 async fn push_to_talk_opens_the_microphone_for_one_request() {
     let Some(mut s) = setup() else { return };
     assert!(!s.engine.state().mic_open);
+    let mut events = s.engine.subscribe_events();
     s.fake.reply("Яка сьогодні погода?");
     s.engine.listen().expect("listen");
     wait_state(&mut s.state, "the microphone", |st| st.mic_open).await;
     assert_eq!(s.engine.state().phase, VoicePhase::Listening);
+    let capture_id = s.engine.state().capture_id.expect("capture identity");
     assert_eq!(
         s.engine.state().input_device.as_deref(),
         Some("Test microphone")
@@ -99,6 +101,23 @@ async fn push_to_talk_opens_the_microphone_for_one_request() {
     assert_eq!(transcript.text, "Яка сьогодні погода?");
     assert_eq!(transcript.source, TranscriptSource::PushToTalk);
     assert_eq!(transcript.language, "uk");
+    assert_eq!(transcript.capture_id, capture_id);
+    assert!(uuid::Uuid::parse_str(&transcript.capture_id).is_ok());
+    // Consume only after recognition: unlike watch, the UI queue must retain
+    // the capture-start event and deliver it before the result.
+    let mut captured = false;
+    loop {
+        match events.try_recv().expect("ordered voice event") {
+            jarvis_voice::VoiceEvent::State(state) => {
+                captured |= state.capture_id.as_ref() == Some(&transcript.capture_id);
+            }
+            jarvis_voice::VoiceEvent::Transcript(result) => {
+                assert!(captured);
+                assert_eq!(result.capture_id, transcript.capture_id);
+                break;
+            }
+        }
+    }
     // The microphone closed after the phrase.
     wait_state(&mut s.state, "the microphone to close", |st| {
         !st.mic_open && st.phase == VoicePhase::Idle
@@ -166,6 +185,11 @@ async fn the_wake_word_starts_a_request() {
     let transcript = next_transcript(&mut s.transcripts).await;
     assert_eq!(transcript.text, "котра година?");
     assert_eq!(transcript.source, TranscriptSource::WakeWord);
+    assert_eq!(
+        s.engine.state().capture_id.as_ref(),
+        Some(&transcript.capture_id)
+    );
+    let first_capture_id = transcript.capture_id;
 
     // The name alone: the next phrase is the command.
     s.fake.reply("Джарвіс.");
@@ -176,9 +200,12 @@ async fn the_wake_word_starts_a_request() {
     .await;
     s.fake.reply("увімкни світло");
     s.fake.speak_into_mic(1.0).await;
+    let command = next_transcript(&mut s.transcripts).await;
+    assert_eq!(command.text, "увімкни світло");
+    assert_ne!(command.capture_id, first_capture_id);
     assert_eq!(
-        next_transcript(&mut s.transcripts).await.text,
-        "увімкни світло"
+        s.engine.state().capture_id.as_ref(),
+        Some(&command.capture_id)
     );
     wait_state(&mut s.state, "the command window to close", |st| {
         !st.awaiting_command

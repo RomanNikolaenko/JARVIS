@@ -71,4 +71,89 @@ describe('VisionStore', () => {
     await store.captureWindow('42');
     expect(store.error()?.message).toBe('the window was closed');
   });
+
+  it('discards existing and late captures after changing the draft', async () => {
+    await store.captureScreen(null);
+    let finish!: (info: CaptureInfo) => void;
+    api['captureScreen'].mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = store.captureScreen(null);
+    store.clear();
+    finish(capture('late'));
+    await pending;
+    expect(store.attachments()).toEqual([]);
+    expect(api['discardCapture']).toHaveBeenCalledWith('c1');
+    expect(api['discardCapture']).toHaveBeenCalledWith('late');
+  });
+
+  it('serializes capture requests so concurrent calls cannot exceed the limit', async () => {
+    for (let i = 0; i < MAX_ATTACHMENTS - 1; i++) await store.captureScreen(null);
+    let finish!: (info: CaptureInfo) => void;
+    api['captureScreen'].mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = store.captureScreen(null);
+    await store.attachFile();
+    expect(api['attachImageFile']).not.toHaveBeenCalled();
+    expect(store.busy()).toBe(true);
+    finish(capture('last'));
+    await pending;
+    expect(store.attachments()).toHaveLength(MAX_ATTACHMENTS);
+  });
+
+  it('does not attach a pending capture to the next message after take', async () => {
+    let finish!: (info: CaptureInfo) => void;
+    api['captureScreen'].mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = store.captureScreen(null);
+    store.take();
+    finish(capture('late'));
+    await pending;
+    expect(store.attachments()).toEqual([]);
+    expect(api['discardCapture']).toHaveBeenCalledWith('late');
+  });
+
+  it('discards a capture completed after destruction', async () => {
+    let finish!: (info: CaptureInfo) => void;
+    api['captureScreen'].mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = store.captureScreen(null);
+    TestBed.resetTestingModule();
+    finish(capture('late'));
+    await pending;
+    expect(store.attachments()).toEqual([]);
+    expect(api['discardCapture']).toHaveBeenCalledWith('late');
+    await store.captureScreen(null);
+    expect(api['captureScreen']).toHaveBeenCalledTimes(1);
+  });
+  it('releases busy after a window-list timeout and allows retry', async () => {
+    vi.useFakeTimers();
+    try {
+      api['listWindows'] = vi
+        .fn()
+        .mockReturnValueOnce(new Promise(() => undefined))
+        .mockResolvedValueOnce([]);
+      const first = store.loadWindows();
+      await vi.advanceTimersByTimeAsync(10_001);
+      await first;
+      expect(store.busy()).toBe(false);
+      expect(store.error()?.code).toBe('timeout');
+      await store.loadWindows();
+      expect(store.error()).toBeNull();
+      expect(store.windows()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

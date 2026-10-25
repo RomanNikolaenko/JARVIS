@@ -14,6 +14,7 @@ import { JarvisApi } from '../ipc/jarvis-api';
 import { withRequestDeadline } from '../ipc/request-deadline';
 import { type ModelOption, ModelsStore, optionKey } from './models.store';
 import { SettingsStore } from './settings.store';
+import { VisionStore } from './vision.store';
 
 export type ChatEntryStatus = 'complete' | 'streaming' | 'cancelled' | 'failed';
 
@@ -60,6 +61,7 @@ function toEntry(message: StoredMessage): ChatEntry {
 @Injectable({ providedIn: 'root' })
 export class ChatStore {
   private readonly api = inject(JarvisApi);
+  private readonly vision = inject(VisionStore);
   private readonly destroyRef = inject(DestroyRef);
   private activeEntryId: string | null = null;
   private openRequest = 0;
@@ -92,6 +94,16 @@ export class ChatStore {
   readonly cancelling = signal(false);
   readonly loading = signal(false);
   readonly savingNote = signal(false);
+  readonly inputContext = signal(0);
+  readonly acceptsInput = computed(
+    () =>
+      !this.destroyRef.destroyed &&
+      !this.busy() &&
+      !this.loading() &&
+      !this.savingNote() &&
+      !this.readOnly() &&
+      !this.deletingIds().includes(this.conversation()?.id ?? '')
+  );
   readonly deletingIds = signal<readonly string[]>([]);
   readonly noteCreationId = signal<string | null>(null);
 
@@ -193,6 +205,8 @@ export class ChatStore {
       return;
     }
     this.loading.set(true);
+    this.inputContext.update((context) => context + 1);
+    this.vision.clear();
     this.noteCreationId.set(null);
     this.error.set(null);
     const request = ++this.openRequest;
@@ -225,6 +239,8 @@ export class ChatStore {
       return;
     }
     ++this.openRequest;
+    this.inputContext.update((context) => context + 1);
+    this.vision.clear();
     this.openingId = null;
     this.noteCreationId.set(null);
     this.loading.set(false);

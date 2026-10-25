@@ -73,4 +73,70 @@ describe('PluginsStore', () => {
     await store.remove('notes');
     expect(store.plugins()).toEqual([]);
   });
+  it('preserves events newer than the initial snapshot', async () => {
+    let resolve!: (value: PluginInfo[]) => void;
+    api['listPlugins'].mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      })
+    );
+    const start = store.start();
+    await Promise.resolve();
+    pushed?.([pluginInfo({ enabled: false, status: { state: 'disabled' } })]);
+    resolve([pluginInfo()]);
+    await start;
+    expect(store.plugins()[0].enabled).toBe(false);
+  });
+  it('cleans up partial startup before retrying and on destruction', async () => {
+    const stop = vi.fn();
+    api['onPlugins'].mockResolvedValue(stop);
+    api['listPlugins'].mockRejectedValueOnce(new Error('offline'));
+    await store.start();
+    expect(stop).toHaveBeenCalledTimes(1);
+    await store.start();
+    TestBed.resetTestingModule();
+    expect(stop).toHaveBeenCalledTimes(2);
+  });
+  it('releases a subscription that resolves after destruction', async () => {
+    let resolve!: (value: () => void) => void;
+    const stop = vi.fn();
+    api['onPlugins'].mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      })
+    );
+    const start = store.start();
+    TestBed.resetTestingModule();
+    resolve(stop);
+    await start;
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(api['listPlugins']).not.toHaveBeenCalled();
+  });
+  it('retries a timed out registration and disposes the late old listener', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (value: () => void) => void;
+      let oldHandler!: (value: PluginInfo[]) => void;
+      const stop = vi.fn();
+      api['onPlugins'].mockImplementationOnce((handler: (value: PluginInfo[]) => void) => {
+        oldHandler = handler;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      });
+      const first = store.start();
+      await vi.advanceTimersByTimeAsync(10_001);
+      await first;
+      expect(store.error()?.code).toBe('timeout');
+      await store.start();
+      const current = store.plugins();
+      oldHandler([]);
+      expect(store.plugins()).toEqual(current);
+      finish(stop);
+      await Promise.resolve();
+      expect(stop).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

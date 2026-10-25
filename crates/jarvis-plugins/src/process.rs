@@ -118,62 +118,12 @@ impl Termination {
     /// escalates.
     async fn stop(&self) {
         self.client.close();
-        let exited = self.wait_exit(EXIT_GRACE).await;
-        #[cfg(unix)]
-        if let Some(pid) = self.pid {
-            // Also reaches programs the server left behind.
-            signal_group(pid, "TERM").await;
-            if exited || self.wait_exit(EXIT_GRACE).await {
-                return;
-            }
-            signal_group(pid, "KILL").await;
-        }
-        #[cfg(windows)]
-        if !exited && let Some(pid) = self.pid {
-            kill_tree(pid).await;
-        }
-        if !exited {
+        if !self.wait_exit(EXIT_GRACE).await {
             self.kill.cancel();
             self.wait_exit(EXIT_GRACE).await;
         }
     }
 }
-
-/// Sends a signal to a process group (`kill -<signal> -- -<group>`).
-#[cfg(unix)]
-async fn signal_group(group: u32, signal: &str) {
-    let result = tokio::process::Command::new("kill")
-        .arg(format!("-{signal}"))
-        .arg("--")
-        .arg(format!("-{group}"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-    if let Err(err) = result {
-        tracing::debug!(target: "jarvis_plugins::server", "cannot signal process group {group}: {err}");
-    }
-}
-
-/// Kills a process and the processes it started.
-#[cfg(windows)]
-async fn kill_tree(pid: u32) {
-    use std::os::windows::process::CommandExt;
-    /// No console window for `taskkill`.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let mut command = std::process::Command::new("taskkill");
-    command
-        .args(["/T", "/F", "/PID", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW);
-    if let Err(err) = tokio::process::Command::from(command).status().await {
-        tracing::debug!(target: "jarvis_plugins::server", "cannot stop process tree {pid}: {err}");
-    }
-}
-
 /// A running server and its connection.
 #[derive(Debug)]
 pub struct ServerProcess {
@@ -204,14 +154,13 @@ impl ServerProcess {
         // Its own process group, so programs it starts can be stopped too.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        let mut command = tokio::process::Command::from(command);
-        command.kill_on_drop(true);
-        let mut child = command
-            .spawn()
+        let mut child = jarvis_platform::spawn_owned(command)
             .map_err(|err| PluginError::io(format!("starting {}", spec.program.display()), err))?;
-        let (Some(stdin), Some(stdout), Some(stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
+        let (Some(stdin), Some(stdout), Some(stderr)) = (
+            child.stdin().take(),
+            child.stdout().take(),
+            child.stderr().take(),
+        ) else {
             return Err(PluginError::Invalid(
                 "the server's standard streams are unavailable".into(),
             ));
@@ -227,7 +176,14 @@ impl ServerProcess {
             let client = Arc::clone(&client);
             tokio::spawn(async move {
                 let status = tokio::select! {
-                    status = child.wait() => status,
+                    // Observe the server itself, then drop its owned job/group
+                    // even if descendants retained the server's stdout pipe.
+                    status = async {
+                        match (child.inner_mut() as &mut dyn std::any::Any).downcast_mut::<tokio::process::Child>() {
+                            Some(server) => server.wait().await,
+                            None => Err(std::io::Error::other("missing native server process")),
+                        }
+                    } => status,
                     () = kill.cancelled() => {
                         let _ = child.start_kill();
                         child.wait().await
@@ -237,7 +193,9 @@ impl ServerProcess {
                     Ok(status) => format!("the server exited ({status})"),
                     Err(err) => format!("the server could not be watched: {err}"),
                 };
-                // Programs the server started may keep its output open.
+                // Release the job/group before announcing exit; descendants
+                // must not keep the server's output open or survive it.
+                drop(child);
                 client.end(text.clone());
                 let _ = exit_sender.send(Some(text));
             });
