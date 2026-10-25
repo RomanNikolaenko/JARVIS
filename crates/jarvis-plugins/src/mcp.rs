@@ -72,6 +72,8 @@ pub struct ServerDescription {
     pub instructions: Option<String>,
     /// The server announced tools.
     pub has_tools: bool,
+    /// The server can announce changes of its tool list (`tools.listChanged`).
+    pub tools_list_changed: bool,
 }
 
 /// A tool as the server describes it (untrusted text).
@@ -155,6 +157,10 @@ struct Shared {
     closed: CancellationToken,
     close_reason: Mutex<Option<String>>,
     tools_changed: watch::Sender<u64>,
+    /// The `subscriptions/listen` request id and whether the server
+    /// acknowledged tool list changes for it.
+    subscription: Mutex<Option<u64>>,
+    acknowledged: watch::Sender<Option<bool>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -185,7 +191,7 @@ impl Shared {
         let method = map.get("method").and_then(Value::as_str);
         match (method, map.get("id")) {
             (Some(method), Some(id)) => self.answer_request(method, id, outgoing),
-            (Some(method), None) => self.notification(method),
+            (Some(method), None) => self.notification(method, map.get("params")),
             (None, Some(id)) => {
                 let Some(id) = id.as_u64() else {
                     return;
@@ -223,10 +229,22 @@ impl Shared {
         let _ = outgoing.send(answer.to_string());
     }
 
-    fn notification(&self, method: &str) {
+    fn notification(&self, method: &str, params: Option<&Value>) {
         match method {
             "notifications/tools/list_changed" => {
                 self.tools_changed.send_modify(|count| *count += 1);
+            }
+            "notifications/subscriptions/acknowledged" => {
+                let id = params
+                    .and_then(|p| p.pointer("/_meta/io.modelcontextprotocol~1subscriptionId"))
+                    .and_then(Value::as_u64);
+                if id.is_some() && id == *lock(&self.subscription) {
+                    let tools = params
+                        .and_then(|p| p.pointer("/notifications/toolsListChanged"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    self.acknowledged.send_replace(Some(tools));
+                }
             }
             "notifications/message" => {
                 tracing::debug!(target: "jarvis_plugins::mcp", "log message from a server");
@@ -281,6 +299,8 @@ impl McpClient {
             closed: CancellationToken::new(),
             close_reason: Mutex::default(),
             tools_changed: watch::channel(0).0,
+            subscription: Mutex::default(),
+            acknowledged: watch::channel(None).0,
         });
         let (outgoing, incoming) = mpsc::unbounded_channel();
         let shutdown = CancellationToken::new();
@@ -604,6 +624,49 @@ impl McpClient {
         Ok(description)
     }
 
+    /// Asks a modern server to announce tool list changes
+    /// (`subscriptions/listen`, 2026-07-28). Returns whether the server
+    /// acknowledged them; changes then arrive like a legacy server's
+    /// `notifications/tools/list_changed` ([`Self::tools_changed`]). Legacy
+    /// servers announce changes without subscribing, and `false` is returned.
+    /// The subscription lasts as long as the connection.
+    pub async fn subscribe_tool_changes(&self, timeout: Duration) -> Result<bool, McpError> {
+        if self.shared.era() != Some(Era::Modern) {
+            return Ok(false);
+        }
+        let mut params = Map::new();
+        params.insert(
+            "notifications".to_owned(),
+            json!({"toolsListChanged": true}),
+        );
+        let (id, mut response) = self.send_request("subscriptions/listen", self.params(params))?;
+        *lock(&self.shared.subscription) = Some(id);
+        let mut acknowledged = self.shared.acknowledged.subscribe();
+        let deadline = Deadline::after(timeout);
+        tokio::select! {
+            ack = acknowledged.wait_for(Option::is_some) => {
+                let tools = ack.ok().and_then(|value| *value).unwrap_or(false);
+                // The request stays open for the life of the subscription; a
+                // response only means the server ended it.
+                tokio::spawn(async move {
+                    if let Ok(reply) = response.await {
+                        tracing::debug!(target: "jarvis_plugins::mcp", "the server ended the tool subscription: {reply:?}");
+                    }
+                });
+                Ok(tools)
+            }
+            reply = &mut response => match reply {
+                Ok(Err(error)) => {
+                    tracing::debug!(target: "jarvis_plugins::mcp", "subscriptions/listen refused: {error}");
+                    Ok(false)
+                }
+                Ok(Ok(_)) => Ok(false),
+                Err(_) => Err(self.closed_error()),
+            },
+            () = tokio::time::sleep_until(deadline.at.into()) => Ok(false),
+        }
+    }
+
     /// All tools of the server, following pages. Tools that cannot be used
     /// are left out and described in the second list.
     pub async fn list_tools(
@@ -790,6 +853,10 @@ fn describe(result: &Value, info: Option<&Value>, version: &str, era: Era) -> Se
             .get("capabilities")
             .and_then(|caps| caps.get("tools"))
             .is_some(),
+        tools_list_changed: result
+            .pointer("/capabilities/tools/listChanged")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 

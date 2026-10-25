@@ -148,7 +148,9 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ Live check on Windows: the example server through the Plugins screen,
   an agent (Qwen2.5 3B) calling a plugin tool after approval, a changed
   script stopped until reviewed again, disable and remove
-- ⬜ HTTP (remote) MCP servers, resources and prompts, `subscriptions/listen`
+- ✅ Tool list changes of modern servers through `subscriptions/listen`
+  (checked with `server-everything`'s `trigger-list-changed`)
+- ⬜ HTTP (remote) MCP servers, resources and prompts
 - ✅ Stopping a plugin stops what its server started: process group with
   `SIGTERM` → `SIGKILL` on Unix, process tree of a stuck server on Windows
 - ⬜ Sandboxed plugin processes; job objects on Windows (programs left
@@ -187,7 +189,11 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11); `cargo audit` and
   `npm audit` in CI on every push
 - ⬜ License for the project
-- ⬜ ARM64 builds; native WebDriver end-to-end tests
+- 🟡 ARM64 builds (Windows 11 ARM and Linux) added to CI and the Release
+  workflow, with the release smoke test and `aarch64` update feed entries;
+  waiting for the first CI run
+- ⬜ Voice on ARM64 (pinned whisper.cpp and Piper packages for ARM64)
+- ⬜ Native WebDriver end-to-end tests (the CDP smoke test covers Windows)
 
 ## Next iteration
 

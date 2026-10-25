@@ -6,6 +6,12 @@
 | --- | --- | --- |
 | Windows 10/11 x64 | `JARVIS_<version>_x64-setup.exe` (NSIS), `JARVIS_<version>_x64_en-US.msi` | NSIS installs for the current user, no administrator rights; installs WebView2 if missing |
 | Linux x64 | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE), `.AppImage` | built on Ubuntu 22.04; needs WebKitGTK 4.1 and ALSA |
+| Windows 11 ARM64 | `JARVIS_<version>_arm64-setup.exe`, `JARVIS_<version>_arm64_en-US.msi` | built on `windows-11-arm` |
+| Linux ARM64 | `_arm64.deb`, `.aarch64.rpm`, `_aarch64.AppImage` | built on `ubuntu-22.04-arm` |
+
+On ARM64, voice (whisper.cpp, Piper) is not available: only x64 engine
+packages are pinned. The embedded runtime installs the official llama.cpp
+ARM64 CPU builds.
 | All | `*.sig`, `latest.json` | update signatures and the update feed read by installed copies |
 | All | `SHA256SUMS.txt` | checksums of every file |
 

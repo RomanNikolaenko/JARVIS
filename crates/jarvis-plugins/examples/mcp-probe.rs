@@ -97,6 +97,18 @@ async fn main() -> ExitCode {
     );
 
     let mut status = ExitCode::SUCCESS;
+    if server.tools_list_changed {
+        match process
+            .client()
+            .subscribe_tool_changes(Duration::from_secs(5))
+            .await
+        {
+            Ok(true) => println!("tool list changes: subscribed"),
+            Ok(false) => println!("tool list changes: announced without a subscription"),
+            Err(err) => println!("tool list changes: subscription failed: {err}"),
+        }
+    }
+    let mut changes = process.client().tools_changed();
     match process.client().list_tools(TIMEOUT).await {
         Ok((tools, problems)) => {
             println!("tools: {}", tools.len());
@@ -143,6 +155,13 @@ async fn main() -> ExitCode {
                 status = ExitCode::FAILURE;
             }
         }
+    }
+    // A change the call caused (e.g. `trigger-list-changed`).
+    if tokio::time::timeout(Duration::from_secs(2), changes.changed())
+        .await
+        .is_ok_and(|changed| changed.is_ok())
+    {
+        println!("the server announced a tool list change");
     }
     process.shutdown().await;
     status

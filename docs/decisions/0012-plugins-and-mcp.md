@@ -141,7 +141,10 @@ folder. Unknown fields are refused.
   Windows: a server that does not exit after its input is closed is killed
   with its process tree (`taskkill /T /F`); programs left behind by a
   server that exited on its own are not found (that needs job objects).
+- Tool list changes: legacy servers announce them on their own; modern
+  servers that declare `tools.listChanged` get a `subscriptions/listen`
+  request with `toolsListChanged` before their tools are used, and their
+  `notifications/tools/list_changed` trigger the same refresh.
 - Not supported yet: HTTP transports (remote MCP servers), resources,
-  prompts, `subscriptions/listen` for modern servers (their tool list is
-  refreshed on start and on request), sampling and elicitation, and tools
-  in plain chat (only agents use tools).
+  prompts, sampling and elicitation, and tools in plain chat (only agents
+  use tools).

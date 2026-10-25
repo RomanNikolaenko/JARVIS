@@ -776,9 +776,8 @@ must be granted by a capability; anything not granted is denied. See
   sandboxed; on Windows, programs left behind by a server that exited on
   its own are not stopped (no job objects; a stuck server is stopped with
   its process tree); only stdio servers, only tools (no resources,
-  prompts, sampling or elicitation); modern servers' tool lists refresh on
-  start and on request (no `subscriptions/listen`); plugin tools are used
-  by agents, not by plain chat.
+  prompts, sampling or elicitation); plugin tools are used by agents, not
+  by plain chat.
 - Linux builds are verified in CI only (not on the development machine).
 - No end-to-end (WebDriver) tests yet.
 

@@ -35,6 +35,8 @@ const HEALTHY_RUN: Duration = Duration::from_secs(10 * 60);
 /// Pause between tool list refreshes asked for by a server.
 const REFRESH_PAUSE: Duration = Duration::from_secs(1);
 const LOG_TAIL_IN_ERRORS: usize = 6;
+/// Time for a modern server to acknowledge the tool list subscription.
+const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct PluginManagerOptions {
     /// `plugins.json`, in the protected settings folder.
@@ -448,6 +450,23 @@ impl Inner {
                 (Vec::new(), vec!["the server offers no tools".to_owned()])
             }
         };
+        // Modern servers announce tool changes only to a subscription; it is
+        // open before the tools are used, so no change is missed.
+        if process.description().tools_list_changed {
+            match process
+                .client()
+                .subscribe_tool_changes(SUBSCRIBE_TIMEOUT)
+                .await
+            {
+                Ok(true) => {
+                    tracing::debug!(target: "jarvis_plugins", "subscribed to tool list changes")
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::debug!(target: "jarvis_plugins", "tool subscription failed: {err}")
+                }
+            }
+        }
         Ok(Started {
             process,
             tools,

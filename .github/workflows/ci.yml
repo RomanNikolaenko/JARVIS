@@ -107,7 +107,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest]
+        # ARM64 runners are free for public repositories.
+        os: [ubuntu-24.04, windows-latest, ubuntu-24.04-arm, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -144,7 +145,7 @@ jobs:
         run: xvfb-run -a node e2e/smoke.mjs ../../target/release/jarvis
       - uses: actions/upload-artifact@v7
         with:
-          name: jarvis-${{ runner.os }}
+          name: jarvis-${{ runner.os }}-${{ runner.arch }}
           path: |
             target/release/jarvis
             target/release/jarvis.exe

@@ -164,6 +164,9 @@ fn fake_server(mode: &str) -> ! {
     let cancelled: Arc<Mutex<HashSet<String>>> = Arc::default();
     let mut initialized = false;
     let mut echo_description = "Echoes text back.".to_owned();
+    // The `subscriptions/listen` id of a modern client that asked for tool
+    // list changes.
+    let mut subscription: Option<Value> = None;
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
@@ -209,7 +212,7 @@ fn fake_server(mode: &str) -> ! {
                 "modern" if version.as_deref() == Some("2026-07-28") => reply(json!({
                     "resultType": "complete",
                     "supportedVersions": ["2026-07-28"],
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {"listChanged": true}},
                     "instructions": "Use echo.",
                     "ttlMs": 1000,
                     "cacheScope": "public",
@@ -229,6 +232,19 @@ fn fake_server(mode: &str) -> ! {
                 _ => error(-32601, "Method not found", Value::Null),
             },
             "initialize" if modern => error(-32600, "use server/discover", Value::Null),
+            "subscriptions/listen" if modern => {
+                if params["notifications"]["toolsListChanged"] == json!(true) {
+                    subscription = Some(id.clone());
+                }
+                send(json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/subscriptions/acknowledged",
+                    "params": {
+                        "_meta": {"io.modelcontextprotocol/subscriptionId": id},
+                        "notifications": {"toolsListChanged": subscription.is_some()},
+                    },
+                }));
+            }
             "initialize" => reply(json!({
                 "protocolVersion": if mode == "old-version" { params["protocolVersion"].clone() } else { json!("2025-06-18") },
                 "capabilities": {"tools": {"listChanged": true}},
@@ -319,6 +335,12 @@ fn fake_server(mode: &str) -> ! {
                             send(
                                 json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}),
                             );
+                        } else if let Some(subscription) = &subscription {
+                            send(json!({
+                                "jsonrpc": "2.0",
+                                "method": "notifications/tools/list_changed",
+                                "params": {"_meta": {"io.modelcontextprotocol/subscriptionId": subscription}},
+                            }));
                         }
                     }
                     "env" => {
@@ -794,18 +816,26 @@ async fn harness_at(h: &Harness, restart_delays: Vec<Duration>) -> PluginManager
 }
 
 async fn lowered_risk_resets_when_a_tool_changes() {
+    // Legacy servers announce changes on their own; modern ones to the
+    // subscription JARVIS opens with subscriptions/listen.
+    for mode in ["legacy", "modern"] {
+        lowered_risk_resets_for(mode).await;
+    }
+}
+
+async fn lowered_risk_resets_for(mode: &str) {
     let h = harness(Vec::new()).await;
     let review = h
         .manager
-        .review_command(command_request("Legacy", "legacy", &[]))
+        .review_command(command_request(mode, mode, &[]))
         .await
         .unwrap();
     h.manager.install(&review.review_id).await.unwrap();
-    wait_for(&h.manager, "legacy", "the server to run", running).await;
+    wait_for(&h.manager, mode, "the server to run", running).await;
     let info = h
         .manager
         .set_tool(PluginToolUpdate {
-            plugin_id: "legacy".into(),
+            plugin_id: mode.into(),
             tool: "echo".into(),
             enabled: true,
             risk: RiskLevel::Low,
@@ -814,7 +844,7 @@ async fn lowered_risk_resets_when_a_tool_changes() {
         .unwrap();
     let echo = info.tools.iter().find(|t| t.name == "echo").unwrap();
     assert_eq!(echo.risk, RiskLevel::Low);
-    let tool = h.registry.get("legacy__echo").unwrap();
+    let tool = h.registry.get(&format!("{mode}__echo")).unwrap();
     let ctx = context();
     let prepared = tool.prepare(&json!({"text": "x"}), &ctx).unwrap();
     assert_eq!(
@@ -823,10 +853,10 @@ async fn lowered_risk_resets_when_a_tool_changes() {
     );
 
     // The server changes the tool's description and announces it.
-    let mutate = h.registry.get("legacy__mutate").unwrap();
+    let mutate = h.registry.get(&format!("{mode}__mutate")).unwrap();
     let prepared = mutate.prepare(&json!({}), &ctx).unwrap();
     mutate.run(&prepared, &ctx).await.unwrap();
-    let info = wait_for(&h.manager, "legacy", "the risk to reset", |info| {
+    let info = wait_for(&h.manager, mode, "the risk to reset", |info| {
         info.tools
             .iter()
             .any(|t| t.name == "echo" && t.risk_reset && t.risk == RiskLevel::High)
@@ -837,7 +867,7 @@ async fn lowered_risk_resets_when_a_tool_changes() {
             .iter()
             .any(|t| t.description.ends_with("Changed."))
     );
-    let tool = h.registry.get("legacy__echo").unwrap();
+    let tool = h.registry.get(&format!("{mode}__echo")).unwrap();
     assert_eq!(tool.spec().risk, RiskLevel::High);
     h.manager.shutdown().await;
 }

@@ -29,7 +29,7 @@ jobs:
       matrix:
         # The oldest supported Ubuntu, so the Linux packages run on older
         # distributions too (glibc).
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-latest, ubuntu-22.04, windows-11-arm, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -85,7 +85,7 @@ jobs:
         run: xvfb-run -a node e2e/smoke.mjs ../../target/release/jarvis
       - uses: actions/upload-artifact@v7
         with:
-          name: installers-${{ runner.os }}
+          name: installers-${{ runner.os }}-${{ runner.arch }}
           path: |
             target/release/bundle/nsis/*-setup.exe*
             target/release/bundle/msi/*.msi*
