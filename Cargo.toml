@@ -136,3 +136,7 @@ opt-level = 3
 # Resizing is generic code, compiled into the crate that calls it.
 [profile.dev.package.jarvis-vision]
 opt-level = 3
+
+# SHA-256 of downloads, engines and plugin programs (hundreds of MB).
+[profile.dev.package.sha2]
+opt-level = 3

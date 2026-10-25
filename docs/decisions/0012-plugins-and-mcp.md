@@ -135,9 +135,12 @@ folder. Unknown fields are refused.
   own. JARVIS controls only what the agent asks the plugin to do (policy,
   approvals, audit log) and what the plugin is started with. Sandboxing
   (AppContainer, bubblewrap/Landlock) is future work.
-- On Windows, programs that the server itself starts are not stopped with
-  it (no job object yet); on Unix the server gets `SIGKILL` without a
-  `SIGTERM` first (no signal API without `unsafe` or another dependency).
+- Stopping a server also stops what it started. Unix: the server leads its
+  own process group, which gets `SIGTERM` after the input is closed and
+  `SIGKILL` if it does not exit (through the `kill` program, no `unsafe`).
+  Windows: a server that does not exit after its input is closed is killed
+  with its process tree (`taskkill /T /F`); programs left behind by a
+  server that exited on its own are not found (that needs job objects).
 - Not supported yet: HTTP transports (remote MCP servers), resources,
   prompts, `subscriptions/listen` for modern servers (their tool list is
   refreshed on start and on request), sampling and elicitation, and tools

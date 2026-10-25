@@ -35,6 +35,8 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 const FAKE_ENV: &str = "JARVIS_FAKE_MCP";
+/// File where the sleeper writes its process id.
+const SLEEPER_PID_ENV: &str = "JARVIS_SLEEPER_PID_FILE";
 const TIMEOUT: Duration = Duration::from_secs(15);
 
 fn main() {
@@ -85,6 +87,9 @@ fn main() {
         ("secrets_come_from_the_keychain", || {
             Box::pin(secrets_come_from_the_keychain())
         }),
+        ("programs_started_by_a_server_are_stopped_with_it", || {
+            Box::pin(programs_started_by_a_server_are_stopped_with_it())
+        }),
     ];
     let filter: Vec<String> = std::env::args()
         .skip(1)
@@ -115,7 +120,33 @@ fn fake_server(mode: &str) -> ! {
             out.flush().unwrap();
         }
     };
+    if mode == "sleeper" {
+        // A program the server started: records its id and waits.
+        if let Ok(file) = std::env::var(SLEEPER_PID_ENV) {
+            std::fs::write(file, std::process::id().to_string()).unwrap();
+        }
+        std::thread::sleep(Duration::from_secs(120));
+        std::process::exit(0);
+    }
     eprintln!("fake server ({mode}) started");
+    if mode == "parent" || mode == "hung-parent" {
+        // Left running on purpose: the test checks that JARVIS stops it.
+        #[allow(clippy::zombie_processes)]
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .env(FAKE_ENV, "sleeper")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+    }
+    // The parent modes speak the modern protocol.
+    let hung = mode == "hung-parent";
+    let mode = if mode == "parent" || hung {
+        "modern"
+    } else {
+        mode
+    };
     match mode {
         "exit" => {
             eprintln!("fatal: the configuration is missing");
@@ -305,6 +336,10 @@ fn fake_server(mode: &str) -> ! {
             }
             _ => error(-32601, "Method not found", Value::Null),
         }
+    }
+    if hung {
+        // Ignores the end of its input, like a stuck server.
+        std::thread::sleep(Duration::from_secs(120));
     }
     std::process::exit(0);
 }
@@ -962,4 +997,67 @@ async fn secrets_come_from_the_keychain() {
         None
     );
     h.manager.shutdown().await;
+}
+
+fn process_alive(pid: u32) -> bool {
+    if cfg!(windows) {
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
+    } else {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+}
+
+async fn programs_started_by_a_server_are_stopped_with_it() {
+    // A server that ignores the end of its input is stopped with what it
+    // started (Windows: process tree, Unix: process group). A server that
+    // exits by itself can leave programs behind; Unix finds them through the
+    // process group, Windows cannot without job objects (documented).
+    let modes: &[&str] = if cfg!(windows) {
+        &["hung-parent"]
+    } else {
+        &["hung-parent", "parent"]
+    };
+    for mode in modes {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("sleeper.pid");
+        let mut launch = spec(mode);
+        launch
+            .env
+            .push((SLEEPER_PID_ENV.to_owned(), pid_file.display().to_string()));
+        let logs = LogTail::default();
+        let adapter = jarvis_platform::current_adapter();
+        let process = ServerProcess::start(&launch, adapter.as_ref(), info(), TIMEOUT, &logs)
+            .await
+            .unwrap_or_else(|err| panic!("{mode} server did not start: {err}"));
+        eventually("the sleeper to start", || pid_file.exists()).await;
+        let sleeper: u32 = loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file)
+                .unwrap_or_default()
+                .trim()
+                .parse()
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert!(process_alive(sleeper), "{mode}: the sleeper runs");
+        let server = process.pid().unwrap();
+
+        process.shutdown().await;
+        eventually(
+            &format!("{mode}: the program the server started to stop"),
+            || !process_alive(sleeper),
+        )
+        .await;
+        assert!(!process_alive(server), "{mode}: the server stopped");
+    }
 }

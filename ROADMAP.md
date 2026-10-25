@@ -149,8 +149,15 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   an agent (Qwen2.5 3B) calling a plugin tool after approval, a changed
   script stopped until reviewed again, disable and remove
 - ⬜ HTTP (remote) MCP servers, resources and prompts, `subscriptions/listen`
-- ⬜ Sandboxed plugin processes; job objects on Windows
-- ⬜ Interoperability check with third-party MCP servers (needs downloads)
+- ✅ Stopping a plugin stops what its server started: process group with
+  `SIGTERM` → `SIGKILL` on Unix, process tree of a stuck server on Windows
+- ⬜ Sandboxed plugin processes; job objects on Windows (programs left
+  behind by a server that exited on its own)
+- ✅ Interoperability with the official reference servers
+  (`@modelcontextprotocol/server-everything` and `server-filesystem` 2.0.1,
+  protocol 2026-07-28): tools listed and called, images and resource links
+  summarized, structured results, elicitation refused clearly, the server
+  gets only the minimal environment; `mcp-probe` example for plugin authors
 - ⬜ Live check on Linux
 
 ## Phase 8 — Production readiness 🟡
@@ -176,7 +183,9 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   only after confirmation; end-to-end test with a refused tampered file, a
   refused version mismatch and a real installer run
 - ⬜ Authenticode-signed Windows installers (needs a certificate)
-- ⬜ RustSec advisory scan (`cargo audit`)
+- ✅ RustSec scan: 6 advisories in the TLS stack fixed (`rustls` 0.23.46,
+  `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11); `cargo audit` and
+  `npm audit` in CI on every push
 - ⬜ License for the project
 - ⬜ ARM64 builds; native WebDriver end-to-end tests
 

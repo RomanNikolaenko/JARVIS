@@ -218,12 +218,19 @@ UI pick it up automatically.
 - `jarvis-plugins` contains the MCP client (`mcp.rs`), server processes
   (`process.rs`), the tool adapter (`tool.rs`), manifests, the store
   (`<config>/plugins.json`) and the `PluginManager`.
+- Stopping a server stops what it started: on Unix the server leads its
+  own process group (`SIGTERM`, then `SIGKILL`), on Windows a stuck server
+  is killed with its process tree (`taskkill /T /F`).
 - `cargo test -p jarvis-plugins` runs unit tests and `tests/servers.rs`:
   that test binary has its own `main` (`harness = false`) because it
   re-runs itself as a fake MCP server (`JARVIS_FAKE_MCP=<mode>`) for modern,
   legacy, silent, oversized and crashing servers, and drives the manager
   end to end (review, install, policy, risk reset, restarts, fingerprint
   changes, keychain secrets).
+- `cargo run -p jarvis-plugins --example mcp-probe -- [--call <tool> <json>] -- <program> [args]`
+  connects JARVIS's MCP client to any server: the negotiated protocol, its
+  tools, and one call. Checked with the official reference servers
+  (`server-everything`, `server-filesystem` 2.0.1).
 - Try a real plugin: Plugins → **Choose a plugin folder…** →
   `examples/plugins/text-tools` (needs Node.js). Or **Add an MCP server**
   with program `node` and the absolute path of `server.mjs` as argument.

@@ -90,14 +90,95 @@ impl LogTail {
     }
 }
 
-/// A running server and its connection.
+/// Stops a server and the programs it started.
+///
+/// Unix: the server leads its own process group, so the whole group gets
+/// `SIGTERM` and, if that is not enough, `SIGKILL`. Windows: without job
+/// objects, a server that does not exit by itself is killed with its process
+/// tree (`taskkill /T`); programs left behind by a server that exited on its
+/// own cannot be found there.
 #[derive(Debug)]
-pub struct ServerProcess {
+struct Termination {
+    pid: Option<u32>,
     client: Arc<McpClient>,
-    description: ServerDescription,
     /// `Some` with a description once the process ended.
     exit: watch::Receiver<Option<String>>,
     kill: CancellationToken,
+}
+
+impl Termination {
+    async fn wait_exit(&self, limit: Duration) -> bool {
+        let mut exit = self.exit.clone();
+        tokio::time::timeout(limit, exit.wait_for(Option::is_some))
+            .await
+            .is_ok()
+    }
+
+    /// Closes the server's input (the MCP way to ask it to exit), then
+    /// escalates.
+    async fn stop(&self) {
+        self.client.close();
+        let exited = self.wait_exit(EXIT_GRACE).await;
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            // Also reaches programs the server left behind.
+            signal_group(pid, "TERM").await;
+            if exited || self.wait_exit(EXIT_GRACE).await {
+                return;
+            }
+            signal_group(pid, "KILL").await;
+        }
+        #[cfg(windows)]
+        if !exited && let Some(pid) = self.pid {
+            kill_tree(pid).await;
+        }
+        if !exited {
+            self.kill.cancel();
+            self.wait_exit(EXIT_GRACE).await;
+        }
+    }
+}
+
+/// Sends a signal to a process group (`kill -<signal> -- -<group>`).
+#[cfg(unix)]
+async fn signal_group(group: u32, signal: &str) {
+    let result = tokio::process::Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg("--")
+        .arg(format!("-{group}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    if let Err(err) = result {
+        tracing::debug!(target: "jarvis_plugins::server", "cannot signal process group {group}: {err}");
+    }
+}
+
+/// Kills a process and the processes it started.
+#[cfg(windows)]
+async fn kill_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    /// No console window for `taskkill`.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new("taskkill");
+    command
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW);
+    if let Err(err) = tokio::process::Command::from(command).status().await {
+        tracing::debug!(target: "jarvis_plugins::server", "cannot stop process tree {pid}: {err}");
+    }
+}
+
+/// A running server and its connection.
+#[derive(Debug)]
+pub struct ServerProcess {
+    description: ServerDescription,
+    termination: Termination,
 }
 
 impl ServerProcess {
@@ -120,6 +201,9 @@ impl ServerProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         adapter.prepare_background_command(&mut command);
+        // Its own process group, so programs it starts can be stopped too.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut command = tokio::process::Command::from(command);
         command.kill_on_drop(true);
         let mut child = command
@@ -133,6 +217,7 @@ impl ServerProcess {
             ));
         };
         forward_stderr(stderr, logs.clone());
+        let pid = child.id();
 
         let client = McpClient::start(stdout, stdin, info);
         let (exit_sender, exit) = watch::channel(None);
@@ -158,25 +243,31 @@ impl ServerProcess {
             });
         }
 
-        let process = match client.negotiate(connect_timeout).await {
-            Ok(description) => Self {
-                client,
-                description,
-                exit,
-                kill,
-            },
-            Err(err) => {
-                let mut exit = exit;
-                kill.cancel();
-                let _ = tokio::time::timeout(EXIT_GRACE, exit.wait_for(Option::is_some)).await;
-                return Err(err.into());
-            }
+        let termination = Termination {
+            pid,
+            client: Arc::clone(&client),
+            exit,
+            kill,
         };
-        Ok(process)
+        match client.negotiate(connect_timeout).await {
+            Ok(description) => Ok(Self {
+                description,
+                termination,
+            }),
+            Err(err) => {
+                termination.stop().await;
+                Err(err.into())
+            }
+        }
     }
 
     pub fn client(&self) -> &Arc<McpClient> {
-        &self.client
+        &self.termination.client
+    }
+
+    /// The server's process id (on Unix also its process group).
+    pub fn pid(&self) -> Option<u32> {
+        self.termination.pid
     }
 
     pub fn description(&self) -> &ServerDescription {
@@ -185,7 +276,7 @@ impl ServerProcess {
 
     /// Waits until the process ends and says how.
     pub async fn exited(&self) -> String {
-        let mut exit = self.exit.clone();
+        let mut exit = self.termination.exit.clone();
         let text = exit
             .wait_for(Option::is_some)
             .await
@@ -194,17 +285,10 @@ impl ServerProcess {
         text.unwrap_or_else(|| "the server exited".to_owned())
     }
 
-    /// Closes the server's input, waits briefly, then kills it.
+    /// Closes the server's input, waits briefly, then stops it and the
+    /// programs it started (see [`Termination`]).
     pub async fn shutdown(&self) {
-        self.client.close();
-        let mut exit = self.exit.clone();
-        let exited = tokio::time::timeout(EXIT_GRACE, exit.wait_for(Option::is_some))
-            .await
-            .is_ok();
-        if !exited {
-            self.kill.cancel();
-            let _ = tokio::time::timeout(EXIT_GRACE, exit.wait_for(Option::is_some)).await;
-        }
+        self.termination.stop().await;
     }
 }
 

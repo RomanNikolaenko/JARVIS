@@ -39,6 +39,25 @@ jobs:
       - run: npm run test:ci
       - run: npm run build
 
+  audit:
+    name: Dependency audit (RustSec, npm)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # Fails on known vulnerabilities; unmaintained or unsound crates that
+      # come with Tauri and zbus are reported as warnings only.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Rust dependencies (RustSec advisory database)
+        run: cargo audit
+      - name: npm dependencies shipped in the app
+        working-directory: apps/desktop
+        run: npm audit --omit=dev --audit-level=moderate
+
   rust:
     name: Rust (${{ matrix.os }})
     strategy:

@@ -773,8 +773,9 @@ must be granted by a capability; anything not granted is denied. See
   screenshot; local vision models answer a screenshot in about a minute on
   a CPU. The camera works where the WebView offers one (not WebKitGTK).
 - Plugins: a plugin process runs with the user's rights and is not
-  sandboxed; on Windows, programs a server starts are not stopped with it
-  (no job object yet); only stdio servers, only tools (no resources,
+  sandboxed; on Windows, programs left behind by a server that exited on
+  its own are not stopped (no job objects; a stuck server is stopped with
+  its process tree); only stdio servers, only tools (no resources,
   prompts, sampling or elicitation); modern servers' tool lists refresh on
   start and on request (no `subscriptions/listen`); plugin tools are used
   by agents, not by plain chat.
@@ -789,6 +790,8 @@ See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 - `jarvis-tools`: native tool calling where providers support it.
 - `jarvis-plugins`: HTTP MCP servers, resources and prompts, sandboxed
   plugin processes, job objects on Windows.
+- CI: `cargo audit` (RustSec) and `npm audit` run on every push; known
+  vulnerabilities fail the build.
 - `jarvis-voice`: echo cancellation, optional cloud speech, a dedicated
   wake-word model.
 

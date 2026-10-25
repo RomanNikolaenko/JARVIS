@@ -20,6 +20,12 @@ only Node.js 18 or newer and offers two tools:
 Changing `server.mjs` or the manifest changes the fingerprint: JARVIS then
 stops the plugin until you review it again.
 
+## Check a server
+
+```bash
+cargo run -p jarvis-plugins --example mcp-probe -- --call word_count '{"text":"a b c"}' -- node examples/plugins/text-tools/server.mjs
+```
+
 ## Write your own
 
 - Read newline-delimited JSON-RPC from stdin and write answers to stdout;

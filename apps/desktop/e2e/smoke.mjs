@@ -39,9 +39,20 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
 const metrics = {};
 
+/** GitHub Actions annotation (public, unlike job logs). */
+function annotate(title, text) {
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const encode = (value) => value.replaceAll('%', '%25').replaceAll('\r', '').replaceAll('\n', '%0A');
+    console.log(`::error title=${encode(title).replaceAll(':', '%3A').replaceAll(',', '%2C')}::${encode(text)}`);
+  }
+}
+
 function check(name, ok, detail = '') {
   results.push({ name, ok, detail });
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
+  if (!ok) {
+    annotate(`Smoke test (${process.platform}): ${name}`, detail || 'failed');
+  }
 }
 
 async function until(what, probe, timeout = STEP_TIMEOUT_MS) {
@@ -170,7 +181,17 @@ async function windowsChecks(page, profile, pid, started) {
       return /Online|Limited|Faulty|offline/i.test(text) ? text : '';
     })()`)
   );
-  check('core reachable from the UI', /Online|Limited/i.test(status), status);
+  let healthDetail = status;
+  if (!/Online|Limited/i.test(status)) {
+    // Which components are not healthy (the UI only shows the summary).
+    const report = await page
+      .evaluate(
+        `window.__TAURI_INTERNALS__.invoke('get_health').then((h) => JSON.stringify(h.components.filter((c) => c.status !== 'healthy')))`
+      )
+      .catch((error) => `health report unavailable: ${error.message}`);
+    healthDetail = `${status}: ${report}`;
+  }
+  check('core reachable from the UI', /Online|Limited/i.test(status), healthDetail);
 
   // Every screen renders, without an error banner.
   const links = await page.evaluate(`[...document.querySelectorAll('.nav-link')].map((a) => a.getAttribute('href'))`);
@@ -327,6 +348,11 @@ async function main() {
   }
 
   console.log(`\nmetrics: ${JSON.stringify(metrics)}`);
+  if (results.some((r) => !r.ok)) {
+    // The end of JARVIS's own log explains most failures.
+    const tail = logText(profile).split('\n').filter(Boolean).slice(-40).join('\n');
+    annotate(`Smoke test (${process.platform}): JARVIS log`, tail || 'no log written');
+  }
   if (!keepProfile) {
     fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   }
