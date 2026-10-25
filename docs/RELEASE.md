@@ -20,7 +20,10 @@ processor (`apps/desktop/src-tauri/windows/installer-hooks.nsh`): on an x64
 PC it names the x64 file and exits with code 3 before anything is installed.
 The MSI needs no such check (Windows Installer refuses a package for another
 processor); x64 installers stay allowed on Windows 11 on ARM, which runs x64
-programs. The draft release starts with a "Which file do I need?" table
+programs. The same hook file makes the installer move on to the finish page
+by itself once the files are installed (Tauri's template keeps the progress
+page open). The installer and uninstaller use `icons/icon.ico`. The draft
+release starts with a "Which file do I need?" table
 (`.github/scripts/release-notes.md`).
 
 Every installer contains `LICENSE-MIT`, `LICENSE-APACHE` and

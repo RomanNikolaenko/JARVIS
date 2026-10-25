@@ -19,6 +19,9 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 - JARVIS opens maximized. A restored window is never larger than the work
   area of its monitor (the screen without the taskbar): it was taller than
   small or scaled screens before.
+- The Windows installer and uninstaller show the JARVIS icon instead of the
+  NSIS default, and the installer moves on to the finish page by itself
+  once the files are installed.
 
 ### Fixed
 

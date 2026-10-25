@@ -17,3 +17,10 @@
     ${EndIf}
   !endif
 !macroend
+
+; Tauri's template keeps the progress page open after installing
+; (MUI_FINISHPAGE_NOAUTOCLOSE), so the user had to press Next on
+; "Installation Complete". Go on to the finish page by itself.
+!macro NSIS_HOOK_POSTINSTALL
+  SetAutoClose true
+!macroend
