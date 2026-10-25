@@ -126,5 +126,16 @@ docs/decisions/        ADRs
 
 ## License
 
-No license has been chosen yet. Until one is added, all rights are reserved by
-the authors.
+JARVIS is licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), or
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. The licenses of the Rust crates and npm packages it ships
+are in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt), which the
+installers include.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in JARVIS by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

@@ -35,7 +35,13 @@ npm run build
 - **Security:** new IPC commands need an explicit capability entry and tests;
   no secrets in code, configs or logs; untrusted input is validated in Rust.
 - **Dependencies:** add only what is needed, prefer well-maintained crates,
-  check compatibility (MSRV 1.90, Angular/TypeScript peer ranges).
+  check compatibility (MSRV 1.90, Angular/TypeScript peer ranges). Licenses
+  must be compatible with MIT OR Apache-2.0 (no GPL in shipped code). After
+  changing `Cargo.lock` or the app's npm dependencies, regenerate the
+  notices with `node .github/scripts/third-party-notices.mjs` (CI checks
+  them).
+- **License:** contributions are dual licensed under MIT OR Apache-2.0
+  (README).
 - **Generated code:** never edit `packages/shared-types/src/generated/` by
   hand.
 - **Commits:** imperative mood, explain *why* in the body when not obvious.

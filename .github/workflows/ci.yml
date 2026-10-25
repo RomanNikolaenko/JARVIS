@@ -57,6 +57,13 @@ jobs:
       - name: npm dependencies shipped in the app
         working-directory: apps/desktop
         run: npm audit --omit=dev --audit-level=moderate
+      # The installers ship THIRD-PARTY-NOTICES.txt; its texts come from the
+      # cargo registry and node_modules.
+      - name: Install frontend dependencies (license texts)
+        working-directory: apps/desktop
+        run: npm ci --ignore-scripts
+      - name: Third-party notices are current
+        run: node .github/scripts/third-party-notices.mjs --check
 
   rust:
     name: Rust (${{ matrix.os }})

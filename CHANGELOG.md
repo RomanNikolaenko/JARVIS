@@ -35,6 +35,8 @@ Linux (X11 and Wayland).
   ARM64, a draft-release workflow with checksums, and a release smoke test.
 - **Updates**: signed automatic updates from GitHub Releases (Settings →
   Updates), installed only after confirmation.
+- **License**: MIT OR Apache-2.0; the installers include the licenses of
+  all shipped third-party crates and packages (`THIRD-PARTY-NOTICES.txt`).
 
 ### Not included
 

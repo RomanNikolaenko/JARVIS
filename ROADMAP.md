@@ -191,7 +191,9 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ RustSec scan: 6 advisories in the TLS stack fixed (`rustls` 0.23.46,
   `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11); `cargo audit` and
   `npm audit` in CI on every push
-- ⬜ License for the project
+- ✅ License: MIT OR Apache-2.0; all dependencies are compatible (no GPL);
+  `THIRD-PARTY-NOTICES.txt` with the licenses of the 447 shipped crates and
+  npm packages, in every installer, checked in CI
 - ✅ ARM64 builds (Windows 11 ARM and Linux) in CI and the Release workflow,
   with the release smoke test (CI green on all four desktop targets, run
   40177361213) and `aarch64` update feed entries
@@ -200,8 +202,9 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 
 ## Next iteration
 
-Finish Phase 8: a license, then the manual release checklist and v0.1.0
-(the update signing secrets are in GitHub, the RustSec scan runs in CI).
+Finish Phase 8: the manual release checklist and v0.1.0 (the license is
+chosen, the update signing secrets are in GitHub, the RustSec scan runs in
+CI).
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
 voice, third-party MCP servers.
 Open Phase 2 items: live verification of local and cloud providers, including

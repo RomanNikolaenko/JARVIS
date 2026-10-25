@@ -65,6 +65,11 @@
     "publisher": "JARVIS project",
     "homepage": "https://github.com/RomanNikolaenko/JARVIS",
     "copyright": "Copyright © 2026 the JARVIS authors",
+    "resources": {
+      "../../../LICENSE-MIT": "LICENSE-MIT",
+      "../../../LICENSE-APACHE": "LICENSE-APACHE",
+      "../../../THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
+    },
     "category": "Productivity",
     "shortDescription": "Local-first personal AI assistant",
     "longDescription": "JARVIS is a local-first, privacy-first personal AI assistant with support for local and cloud AI models.",
