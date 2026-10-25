@@ -10,7 +10,8 @@
 // folder), so outside CI it runs only with --allow-install, and never when
 // JARVIS is already installed. The MSI installs for all users and needs an
 // elevated shell; deb uses sudo unless run as root; the AppImage is extracted,
-// not installed.
+// not installed. On Windows the test also removes the installers' registry
+// key afterwards when it did not exist before.
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -92,24 +93,33 @@ function elevated() {
 
 /** Where each kind installs, and how to install and remove it. */
 const UNINSTALL_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\JARVIS';
+// The MSI installs into the folder of an earlier installation (the NSIS
+// uninstaller leaves its path under this key) and records its own as
+// InstallDir, which the MSI uninstall removes.
+const VENDOR_KEY = 'HKCU\\Software\\JARVIS project';
+const PRODUCT_KEY = `${VENDOR_KEY}\\JARVIS`;
+
+/** A string value from the registry, or null. */
+function registryValue(key, name) {
+  const output = run('reg', ['query', key, '/v', name]).output;
+  return output.match(new RegExp(`${name}\\s+REG_\\w+\\s+"?([^"\\r\\n]+?)"?\\s*$`, 'm'))?.[1] ?? null;
+}
+
 const platform = {
   nsis: {
     installed: () => run('reg', ['query', UNINSTALL_KEY]).code === 0,
     install: () => run(installer, ['/S']),
-    location: () =>
-      run('reg', ['query', UNINSTALL_KEY, '/v', 'InstallLocation'])
-        .output.match(/InstallLocation\s+REG_SZ\s+"?([^"\r\n]+)"?/)?.[1]
-        ?.trim() ?? null,
+    location: () => registryValue(UNINSTALL_KEY, 'InstallLocation'),
     binary: (dir) => path.join(dir, 'jarvis.exe'),
     shortcut: path.join(process.env.APPDATA ?? '', 'Microsoft/Windows/Start Menu/Programs/JARVIS.lnk'),
     uninstall: (dir) => run(path.join(dir, 'uninstall.exe'), ['/S']),
     userData: path.join(process.env.APPDATA ?? '', 'ai.jarvis.desktop'),
   },
   msi: {
-    installed: () => fs.existsSync(path.join(process.env.ProgramFiles ?? '', 'JARVIS', 'jarvis.exe')),
+    installed: () => registryValue(PRODUCT_KEY, 'InstallDir') !== null,
     install: () =>
       run('msiexec', ['/i', installer, '/qn', '/norestart', '/l*v', path.join(os.tmpdir(), 'jarvis-msi-install.log')]),
-    location: () => path.join(process.env.ProgramFiles ?? '', 'JARVIS'),
+    location: () => registryValue(PRODUCT_KEY, 'InstallDir'),
     binary: (dir) => path.join(dir, 'jarvis.exe'),
     shortcut: path.join(process.env.ProgramData ?? '', 'Microsoft/Windows/Start Menu/Programs/JARVIS/JARVIS.lnk'),
     uninstall: () => run('msiexec', ['/x', installer, '/qn', '/norestart']),
@@ -175,6 +185,7 @@ async function testInstaller() {
     console.error('JARVIS is already installed here; the test does not touch an existing installation.');
     process.exit(2);
   }
+  const vendorKeyExisted = process.platform !== 'win32' || run('reg', ['query', VENDOR_KEY]).code === 0;
 
   const installed = target.install();
   if (
@@ -184,7 +195,11 @@ async function testInstaller() {
   }
   const dir = target.location();
   const binary = dir ? target.binary(dir) : '';
-  check('program installed', !!binary && fs.existsSync(binary), binary || 'install location not registered');
+  const programInstalled = check(
+    'program installed',
+    !!binary && fs.existsSync(binary),
+    binary || 'install location not registered'
+  );
   if (kind === 'deb') {
     const files = run('dpkg', ['-L', target.name()]).output.split('\n');
     for (const name of LICENSE_FILES) {
@@ -198,7 +213,7 @@ async function testInstaller() {
   }
   check('menu shortcut created', fs.existsSync(target.shortcut), target.shortcut);
 
-  if (fs.existsSync(binary)) {
+  if (programInstalled) {
     smoke(binary);
   }
 
@@ -213,14 +228,21 @@ async function testInstaller() {
   check('uninstall', removed.code === 0, removed.code === 0 ? '' : removed.output.slice(-800));
   // The NSIS uninstaller copies itself to a temporary folder and returns at once.
   const gone = await until(() => !fs.existsSync(binary) && !target.installed(), 60_000);
-  check('program removed', gone, gone ? '' : `${binary} or its registration is still there`);
-  check('menu shortcut removed', !fs.existsSync(target.shortcut), target.shortcut);
-  if (kind !== 'deb') {
-    check('install folder removed', !fs.existsSync(dir), dir);
+  if (programInstalled) {
+    check('program removed', gone, gone ? '' : `${binary} or its registration is still there`);
+    check('menu shortcut removed', !fs.existsSync(target.shortcut), target.shortcut);
+    if (kind !== 'deb') {
+      check('install folder removed', !fs.existsSync(dir), dir);
+    }
   }
   check('user data kept', fs.existsSync(marker), target.userData);
 
   fs.rmSync(createdUserData ? target.userData : marker, { recursive: true, force: true });
+  // Leave the machine as found: the NSIS uninstaller keeps the install path
+  // for the next installer, and the MSI leaves an empty key.
+  if (!vendorKeyExisted) {
+    run('reg', ['delete', VENDOR_KEY, '/f']);
+  }
 }
 
 console.log(`install test: ${kind}, ${installer}`);
