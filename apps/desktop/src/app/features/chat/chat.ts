@@ -111,7 +111,13 @@ export class Chat {
     // An image alone can be sent too.
     const hasContent = text.length > 0 || this.vision.attachments().length > 0;
     return (
-      hasContent && text.length <= MAX_MESSAGE_LENGTH && !this.store.busy() && !this.store.readOnly() && !this.agentStarting()
+      hasContent &&
+      text.length <= MAX_MESSAGE_LENGTH &&
+      !this.store.busy() &&
+      !this.store.savingNote() &&
+      !this.store.deletingIds().includes(this.store.conversation()?.id ?? '') &&
+      !this.store.readOnly() &&
+      !this.agentStarting()
     );
   });
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
@@ -139,8 +145,9 @@ export class Chat {
       const conversation = this.store.conversation();
       const id = conversation?.id ?? null;
       if (id !== this.noteFor) {
+        const createdForNote = this.noteFor === null && id !== null && id === this.store.noteCreationId();
         this.noteFor = id;
-        this.noteDraft.set(conversation?.pinnedNote ?? '');
+        if (!createdForNote) this.noteDraft.set(conversation?.pinnedNote ?? '');
         this.noteSaved.set(false);
       }
     });
@@ -175,7 +182,9 @@ export class Chat {
   }
 
   protected async saveNote(): Promise<void> {
-    if (await this.store.setPinnedNote(this.noteDraft().trim())) {
+    const draft = this.noteDraft();
+    if (await this.store.setPinnedNote(draft.trim())) {
+      if (this.noteDraft() !== draft) return;
       this.noteSaved.set(true);
       const id = this.store.conversation()?.id;
       if (id) {

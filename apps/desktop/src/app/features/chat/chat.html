@@ -74,7 +74,7 @@
           <button
             type="button"
             class="primary small"
-            [disabled]="store.busy() || noteDraft() === (store.conversation()?.pinnedNote ?? '')"
+            [disabled]="store.busy() || store.savingNote() || noteDraft() === (store.conversation()?.pinnedNote ?? '')"
             (click)="saveNote()">
             Save note
           </button>
@@ -114,6 +114,9 @@
           <a routerLink="/memory">Memory</a>.
         </span>
       </div>
+    }
+    @if (store.cancelError(); as error) {
+      <div class="notice error" role="alert">Could not confirm stopping: {{ error.message }} You can try Stop again.</div>
     }
     @if (store.summary(); as summary) {
       <div class="summary">
@@ -341,9 +344,9 @@
           </button>
         }
         @if (store.busy()) {
-          <button type="button" class="danger" (click)="stop()">
+          <button type="button" class="danger" (click)="stop()" [disabled]="store.cancelling()">
             <jv-icon name="stop" [size]="16" />
-            Stop
+            {{ store.cancelling() ? 'Stopping…' : 'Stop' }}
           </button>
         } @else {
           <button type="button" class="primary" (click)="send()" [disabled]="!canSend()">

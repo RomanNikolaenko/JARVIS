@@ -93,6 +93,7 @@ export class App {
         if (error) {
           agents.connectionLost(error);
           eventLog.connectionLost(error);
+          chat.connectionLost(error);
         } else {
           void agents.start();
           void eventLog.start();

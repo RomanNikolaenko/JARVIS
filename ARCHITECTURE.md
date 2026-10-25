@@ -484,6 +484,48 @@ must be granted by a capability; anything not granted is denied. See
   `idle → connecting → streaming → idle`; "Automatic" lets the core route),
   `MemoryStore` (facts, projects, action history, search, data),
   `AgentsStore` (tasks, pushed task updates, approvals, tools, audit log).
+- Chat stream callbacks and send acknowledgements are scoped to their local
+  assistant entry. Finished, disconnected or disposed turns cannot change a
+  later turn. A failed core health probe ends frontend waiting and preserves
+  partial text with an explicit unknown-outcome message; it neither resends nor
+  cancels the native request. Saved conversations can be reopened after recovery
+  to inspect the persisted result. Detection follows the visible-window health
+  poll, not a token inactivity timer. New chats and sends invalidate pending
+  conversation-open reads so old history cannot replace a new turn.
+  Stop commands are coalesced per active turn and have a 30-second frontend
+  deadline, an independent pending indicator and retryable error. Acknowledgement
+  only confirms the command; final stream events determine the reply's status.
+  Refused or timed-out stops do not fabricate completion. Early cancellation is
+  dispatched once when the request ID becomes known; old cancellation results
+  cannot alter a subsequent turn, even if the core reuses its request ID.
+  Opening a conversation has a 30-second frontend deadline. Failure retains the
+  currently displayed chat; a later open can retry. Older timeouts cannot clear a
+  newer open's loading state, and store destruction settles pending opens without
+  applying their late results.
+  Conversation search uses request generations, invalidated immediately on input
+  changes, so even A → B → A edits during debounce cannot publish an old response.
+  Reads have a 30-second frontend deadline and settle on store destruction.
+  Search loading/errors are separate from chat errors and expose a retry action;
+  failed refreshes retain existing rows. Confirmed rename/delete operations
+  invalidate pending list reads, and destroying the list panel clears its debounce
+  timer. Only a current successful post-turn list refresh may update the title.
+  Conversation metadata writes are guarded per conversation to prevent overlapping
+  full-record responses from reverting another edit. Responses update the open
+  conversation and its error only in the original navigation context. Note saves
+  share a separate write guard, block sending during draft-chat creation, and do
+  not attach a newly created chat after navigation. The note editor retains edits
+  made during a save and marks success only for the submitted draft. Native writes
+  are not retried automatically or assumed cancelled when the user navigates away.
+  Conversation deletion shares the metadata write guard and rejects deletion of
+  the actively streaming chat. Pending deletion blocks sending into that chat.
+  Its result distinguishes failure, background deletion and closing the current
+  chat; the sidebar clears the route only for the last case. A later navigation
+  is preserved, and pending reads cannot reopen a confirmed-deleted conversation.
+  Failures keep the chat and rows available for retry.
+  The rename editor remains open until a confirmed save of its submitted draft.
+  Failed writes expose an inline retry message, Enter/blur share one pending
+  write, and edits made during saving are retained. Editor session generations
+  prevent a late response from closing a cancelled-and-reopened editor.
 - **Agents screen**: new task (goal, model, limits), task list, the journal
   of the selected task with plan, steps, decisions and results, pause /
   resume / cancel; *Tools & permissions* (workspace folders, tools by risk,

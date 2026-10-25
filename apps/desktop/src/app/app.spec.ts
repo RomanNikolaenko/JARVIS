@@ -7,6 +7,7 @@ import { IpcError } from './core/ipc/ipc-error';
 import { AgentsStore } from './core/state/agents.store';
 import { SystemStore } from './core/state/system.store';
 import { EventLogStore } from './core/state/event-log.store';
+import { ChatStore } from './core/state/chat.store';
 
 describe('App shell', () => {
   beforeEach(async () => {
@@ -53,10 +54,12 @@ describe('App shell', () => {
       const eventLog = TestBed.inject(EventLogStore);
       const startEvents = vi.spyOn(eventLog, 'start').mockResolvedValue();
       const lostEvents = vi.spyOn(eventLog, 'connectionLost').mockImplementation(() => undefined);
+      const lostChat = vi.spyOn(TestBed.inject(ChatStore), 'connectionLost').mockImplementation(() => undefined);
       const fixture = TestBed.createComponent(App);
       await vi.advanceTimersByTimeAsync(0);
       expect(lost).toHaveBeenCalledWith(offline);
       expect(lostEvents).toHaveBeenCalledWith(offline);
+      expect(lostChat).toHaveBeenCalledWith(offline);
       expect(start).toHaveBeenCalledTimes(1);
       connectionError.set(null);
       await vi.advanceTimersByTimeAsync(15_000);

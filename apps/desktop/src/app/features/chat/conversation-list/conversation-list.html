@@ -23,6 +23,14 @@
     (input)="onSearch($event)" />
 </label>
 
+@if (store.conversationsLoading()) {
+  <p role="status">Loading conversations…</p>
+}
+@if (store.conversationsError(); as error) {
+  <p role="alert">{{ error.message }}</p>
+  <button type="button" (click)="store.loadConversations()" [disabled]="store.conversationsLoading()">Retry search</button>
+}
+
 <ul class="conversation-list">
   @for (conversation of store.conversations(); track conversation.id) {
     <li [class.active]="conversation.id === store.conversation()?.id">
@@ -34,12 +42,24 @@
           [value]="renameDraft()"
           (input)="onRenameInput($event)"
           (keydown.enter)="saveRename(conversation)"
-          (keydown.escape)="renamingId.set(null)"
+          (keydown.escape)="cancelRename()"
           (blur)="saveRename(conversation)" />
+        @if (renameSavingId() === conversation.id) {
+          <span role="status">Saving title…</span>
+        }
+        @if (renameError(); as error) {
+          <span role="alert">{{ error }}</span>
+        }
       } @else if (confirmDeleteId() === conversation.id) {
         <div class="confirm">
           <span>Delete this conversation?</span>
-          <button type="button" class="danger small" (click)="remove(conversation)">Delete</button>
+          <button
+            type="button"
+            class="danger small"
+            (click)="remove(conversation)"
+            [disabled]="store.deletingIds().includes(conversation.id)">
+            Delete
+          </button>
           <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">Cancel</button>
         </div>
       } @else {
@@ -64,7 +84,9 @@
             class="ghost small"
             title="Delete"
             aria-label="Delete"
-            [disabled]="store.busy() && conversation.id === store.conversation()?.id"
+            [disabled]="
+              store.deletingIds().includes(conversation.id) || (store.busy() && conversation.id === store.conversation()?.id)
+            "
             (click)="confirmDeleteId.set(conversation.id)">
             <jv-icon name="trash" [size]="13" />
           </button>
@@ -72,8 +94,10 @@
       }
     </li>
   } @empty {
-    <li class="empty-list">
-      {{ store.conversationQuery() ? 'Nothing found.' : 'No conversations yet.' }}
-    </li>
+    @if (!store.conversationsLoading() && !store.conversationsError()) {
+      <li class="empty-list">
+        {{ store.conversationQuery() ? 'Nothing found.' : 'No conversations yet.' }}
+      </li>
+    }
   }
 </ul>
