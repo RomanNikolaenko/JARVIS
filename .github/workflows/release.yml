@@ -85,14 +85,24 @@ jobs:
           New-Item -Path $key -Force | Out-Null
           New-ItemProperty -Path $key -Name 'jarvis.exe' -Value '--remote-debugging-port=9333' -PropertyType String -Force | Out-Null
           Add-Content -Path $env:GITHUB_ENV -Value 'JARVIS_SMOKE_DEVTOOLS_PORT=9333'
-      - name: Release smoke test (Windows)
+      # Install, smoke test the installed program, uninstall (the rpm is not
+      # installable on Ubuntu runners).
+      - name: Install test (NSIS)
         if: runner.os == 'Windows'
         working-directory: apps/desktop
-        run: node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugins/text-tools/server.mjs
-      - name: Release smoke test (Linux)
+        run: node e2e/install-test.mjs nsis ../../target/release/bundle --plugin ../../examples/plugins/text-tools/server.mjs
+      - name: Install test (MSI)
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        run: node e2e/install-test.mjs msi ../../target/release/bundle
+      - name: Install test (deb)
         if: runner.os == 'Linux'
         working-directory: apps/desktop
-        run: xvfb-run -a node e2e/smoke.mjs ../../target/release/jarvis
+        run: xvfb-run -a node e2e/install-test.mjs deb ../../target/release/bundle
+      - name: Install test (AppImage)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: xvfb-run -a node e2e/install-test.mjs appimage ../../target/release/bundle
       - uses: actions/upload-artifact@v7
         with:
           name: installers-${{ runner.os }}-${{ runner.arch }}

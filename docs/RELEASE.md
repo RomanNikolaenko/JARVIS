@@ -57,11 +57,11 @@ need them: updater artifacts are only made with
 
 1. Update the version in `Cargo.toml` (`[workspace.package]`) and
    `apps/desktop/package.json`; add the release to `CHANGELOG.md`.
-2. Make sure CI is green on `main` (the desktop job runs the release smoke
-   test on Windows and Linux).
+2. Make sure CI is green on `main` (the desktop job builds the installers
+   and runs the install test on Windows and Linux, x64 and ARM64).
 3. Tag and push: `git tag v<version>` and `git push origin v<version>`.
 4. The **Release** workflow builds and signs the installers on Windows and
-   Ubuntu 22.04, runs the smoke test against the release binary, writes
+   Ubuntu 22.04, runs the install test (NSIS, MSI, deb, AppImage), writes
    `latest.json` (`.github/scripts/latest-json.mjs`) and creates a **draft**
    GitHub release with the files, signatures and checksums.
 5. Check the draft (manual checklist below), then publish it. Publishing
@@ -97,6 +97,29 @@ no switch that opens the port. When the endpoint does not answer, the test
 reports the WebView2 processes, their arguments and ports, the runtime
 version, the policies and elevation.
 
+## Install test
+
+`apps/desktop/e2e/install-test.mjs` installs a built package the way a user
+would, on the clean CI runner: the program, both licenses and the
+third-party notices are installed, the menu shortcut exists, the release
+smoke test passes against the installed program, the uninstaller removes the
+program, its folder and the shortcut, and a marker in the user's settings
+folder survives (user data stays).
+
+```bash
+cd apps/desktop
+node e2e/install-test.mjs nsis ../../target/release/bundle --plugin ../../examples/plugins/text-tools/server.mjs
+node e2e/install-test.mjs msi ../../target/release/bundle      # elevated shell
+xvfb-run -a node e2e/install-test.mjs deb ../../target/release/bundle
+xvfb-run -a node e2e/install-test.mjs appimage ../../target/release/bundle
+```
+
+It changes the machine, so outside CI it needs `--allow-install`, and it
+refuses to run when JARVIS is already installed. The MSI installs for all
+users and is skipped in a non-elevated shell; deb uses `sudo`; the AppImage
+is extracted and run, not installed. The rpm is not installable on the
+Ubuntu runners and is not tested.
+
 ## Update test (manual, Windows, needs the key)
 
 `apps/desktop/e2e/update-test.mjs` signs a stand-in installer with the real
@@ -117,7 +140,9 @@ node e2e/update-test.mjs ../../target/debug/jarvis-desktop.exe
 ## Manual checklist (per release)
 
 - [ ] Install from each installer on a clean machine (or VM); the app starts
-      and the dashboard shows the core online or limited.
+      and the dashboard shows the core online or limited. (The install test
+      covers NSIS, MSI, deb and AppImage on clean CI runners; the rpm and a
+      real desktop session still need a person.)
 - [ ] Ollama or LM Studio: models listed, a chat reply streams and can be
       stopped.
 - [ ] Embedded runtime: install llama.cpp (CPU build), download a curated

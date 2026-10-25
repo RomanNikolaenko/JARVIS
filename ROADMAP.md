@@ -198,6 +198,10 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   with the release smoke test (CI green on all four desktop targets, run
   40177361213) and `aarch64` update feed entries
 - ⬜ Voice on ARM64 (pinned whisper.cpp and Piper packages for ARM64)
+- ✅ Install test (`apps/desktop/e2e/install-test.mjs`) in CI and the Release
+  workflow: NSIS, MSI, deb and AppImage installed on clean runners, licenses
+  and shortcuts checked, the smoke test against the installed program,
+  uninstall removes the program and keeps user data (rpm not tested)
 - ⬜ Native WebDriver end-to-end tests (the CDP smoke test covers Windows)
 
 ## Next iteration

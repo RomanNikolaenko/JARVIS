@@ -72,7 +72,8 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 - Typed IPC: Rust types → generated TypeScript (`packages/shared-types`),
   structured error codes, deny-by-default command permissions.
 - Tests: Rust unit + integration + IPC/ACL tests, Angular unit tests.
-- CI for Windows and Linux, including a smoke test of the release build;
+- CI for Windows and Linux (x64 and ARM64), including an install test of
+  the installers with a smoke test of the installed program;
   installers (NSIS, MSI, deb, rpm, AppImage) from the Release workflow —
   see [docs/RELEASE.md](docs/RELEASE.md). Signed updates: JARVIS checks
   the project's releases (Settings → Updates) and installs a new version
@@ -108,7 +109,7 @@ Full instructions (Linux packages, tests, release builds, troubleshooting):
 | [SECURITY.md](SECURITY.md) | Threat model, implemented controls, reporting |
 | [ROADMAP.md](ROADMAP.md) | Phases and current progress |
 | [CHANGELOG.md](CHANGELOG.md) | Changes per version |
-| [docs/RELEASE.md](docs/RELEASE.md) | Installers, release workflow, smoke test, release checklist |
+| [docs/RELEASE.md](docs/RELEASE.md) | Installers, release workflow, smoke and install tests, release checklist |
 | [docs/security-review-2026-10.md](docs/security-review-2026-10.md) | Security review of the first release |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Workflow and quality gates |
 

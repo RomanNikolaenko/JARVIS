@@ -2,7 +2,7 @@
 
 All notable changes to JARVIS. Versions follow [Semantic Versioning](https://semver.org).
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-10-25
 
 The first version: a local-first desktop assistant for Windows 10/11 and
 Linux (X11 and Wayland).
@@ -32,7 +32,8 @@ Linux (X11 and Wayland).
   older handshake) reviewed and fingerprinted before every start; their
   tools go through the same policy; example plugin `text-tools`.
 - **Release**: installers (NSIS, MSI, deb, rpm, AppImage) for x64 and
-  ARM64, a draft-release workflow with checksums, and a release smoke test.
+  ARM64, a draft-release workflow with checksums; every installer except the
+  rpm is installed, smoke tested and uninstalled on clean machines in CI.
 - **Updates**: signed automatic updates from GitHub Releases (Settings →
   Updates), installed only after confirmation.
 - **License**: MIT OR Apache-2.0; the installers include the licenses of

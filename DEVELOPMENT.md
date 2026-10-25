@@ -65,6 +65,9 @@ npm run tauri build
 
 # smoke test of a built binary (fresh temporary profile; see docs/RELEASE.md)
 node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugins/text-tools/server.mjs
+
+# install test: install, smoke test, uninstall (changes the machine)
+node e2e/install-test.mjs nsis ../../target/release/bundle --allow-install
 ```
 
 ```bash

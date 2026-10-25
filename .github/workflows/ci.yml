@@ -136,12 +136,13 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
-      - name: Build release binary (frontend + Tauri, no installer)
+      - name: Build installers (frontend + Tauri)
         working-directory: apps/desktop
-        run: npm run tauri -- build --no-bundle
-      # Starts the release binary with a fresh profile: every screen, a chat
-      # turn, an MCP plugin, start-up time and memory, a clean shutdown
-      # (Linux: start-up and shutdown only, WebKitGTK has no DevTools).
+        run: npm run tauri -- build --bundles ${{ runner.os == 'Windows' && 'nsis,msi' || 'deb,appimage' }}
+      # Each installer on the clean runner: install, the installed files, the
+      # release smoke test against the installed program (every screen, a
+      # chat turn, an MCP plugin, a clean shutdown; Linux: start-up and
+      # shutdown only, WebKitGTK has no DevTools), uninstall, user data kept.
       # The runner is elevated, so WebView2 ignores the debugging port from
       # the environment; a machine policy sets it (docs/RELEASE.md).
       - name: WebView2 debugging port for the smoke test (runner only)
@@ -152,19 +153,29 @@ jobs:
           New-Item -Path $key -Force | Out-Null
           New-ItemProperty -Path $key -Name 'jarvis.exe' -Value '--remote-debugging-port=9333' -PropertyType String -Force | Out-Null
           Add-Content -Path $env:GITHUB_ENV -Value 'JARVIS_SMOKE_DEVTOOLS_PORT=9333'
-      - name: Release smoke test (Windows)
+      - name: Install test (NSIS)
         if: runner.os == 'Windows'
         working-directory: apps/desktop
-        run: node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugins/text-tools/server.mjs
-      - name: Release smoke test (Linux)
+        run: node e2e/install-test.mjs nsis ../../target/release/bundle --plugin ../../examples/plugins/text-tools/server.mjs
+      - name: Install test (MSI)
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        run: node e2e/install-test.mjs msi ../../target/release/bundle
+      - name: Install test (deb)
         if: runner.os == 'Linux'
         working-directory: apps/desktop
-        run: xvfb-run -a node e2e/smoke.mjs ../../target/release/jarvis
+        run: xvfb-run -a node e2e/install-test.mjs deb ../../target/release/bundle
+      - name: Install test (AppImage)
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: xvfb-run -a node e2e/install-test.mjs appimage ../../target/release/bundle
       - uses: actions/upload-artifact@v7
         with:
           name: jarvis-${{ runner.os }}-${{ runner.arch }}
           path: |
-            target/release/jarvis
-            target/release/jarvis.exe
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/msi/*.msi
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 7
