@@ -111,6 +111,66 @@ function workingSetMb(pid) {
   }
 }
 
+// Reports the WebView2 browser process, its listening ports, the runtime
+// version and WebView2 policies (PowerShell, as -EncodedCommand).
+const WEBVIEW_PROBE = String.raw`
+$ProgressPreference = 'SilentlyContinue'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$elevated = ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+"user $($identity.Name), elevated: $($elevated), session $((Get-Process -Id $PID).SessionId)"
+$webviews = @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'")
+"webview processes: $($webviews.Count)"
+$webviews | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object {
+  "browser process $($_.ProcessId) (parent $($_.ParentProcessId)): $($_.CommandLine)"
+}
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object { $_.OwningProcess -in $webviews.ProcessId } |
+  ForEach-Object { "listening $($_.LocalAddress):$($_.LocalPort) (pid $($_.OwningProcess))" }
+foreach ($key in 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                 'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') {
+  $version = (Get-ItemProperty $key -ErrorAction SilentlyContinue).pv
+  if ($version) { "WebView2 runtime $version ($($key))" }
+}
+foreach ($key in 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2', 'HKCU:\SOFTWARE\Policies\Microsoft\Edge\WebView2',
+                 'HKLM:\SOFTWARE\Policies\Microsoft\Edge') {
+  if (Test-Path $key) { "policy $($key): " + ((Get-ItemProperty $key | Out-String) -replace '\s+', ' ') }
+}
+$data = $env:WEBVIEW2_USER_DATA_FOLDER
+"webview data folder $($data) exists: $(Test-Path $data)"
+$active = Join-Path $data 'EBWebView\DevToolsActivePort'
+if (Test-Path $active) { "DevToolsActivePort: $((Get-Content $active) -join ' ')" }
+`;
+
+/** What WebView2 is doing when its DevTools endpoint does not answer. */
+async function webviewDiagnostics(port, pid, env) {
+  const lines = [];
+  for (const route of ['/json/version', '/json']) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}${route}`, { signal: AbortSignal.timeout(5_000) });
+      lines.push(`GET :${port}${route}: ${response.status} ${(await response.text()).slice(0, 800)}`);
+    } catch (error) {
+      lines.push(`GET :${port}${route}: ${error.cause?.code ?? error.message}`);
+    }
+  }
+  const run = (program, programArgs) => {
+    try {
+      const options = { env, encoding: 'utf8', timeout: 30_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] };
+      return execFileSync(program, programArgs, options)
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => line.slice(0, 700))
+        .join('\n');
+    } catch (error) {
+      return `${program} failed: ${error.message.split('\n')[0]}`;
+    }
+  };
+  lines.push(`app window: ${run('tasklist', ['/V', '/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'])}`);
+  const script = Buffer.from(WEBVIEW_PROBE, 'utf16le').toString('base64');
+  lines.push(run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', script]));
+  return lines.join('\n');
+}
+
 /** A minimal CDP client over Node's WebSocket. */
 async function connect(port) {
   const target = await until(
@@ -292,11 +352,15 @@ async function windowsChecks(page, profile, pid, started) {
 }
 
 async function main() {
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-smoke-'));
+  // The long form of the path: CI runners hand out 8.3 temp paths.
+  const profile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-smoke-')));
   const port = await freePort();
   const env = { ...process.env, JARVIS_PROFILE_DIR: profile };
   if (process.platform === 'win32') {
     env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${port}`;
+    // A WebView2 browser process of its own: one that a running JARVIS
+    // already owns for the default folder would ignore the arguments above.
+    env.WEBVIEW2_USER_DATA_FOLDER = path.join(profile, 'webview');
   }
   const started = Date.now();
   const child = spawn(path.resolve(binary), [], { env, stdio: 'ignore' });
@@ -324,6 +388,11 @@ async function main() {
     }
   } catch (error) {
     check('smoke run', false, error.message);
+    if (process.platform === 'win32' && !exited && error.message.includes('DevTools')) {
+      const report = await webviewDiagnostics(port, child.pid, env);
+      console.log(report);
+      annotate('Smoke test (win32): WebView diagnostics', report);
+    }
   }
 
   // A clean shutdown: close the window (WM_CLOSE on Windows, SIGTERM on Linux).
@@ -354,7 +423,12 @@ async function main() {
     annotate(`Smoke test (${process.platform}): JARVIS log`, tail || 'no log written');
   }
   if (!keepProfile) {
-    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    try {
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+    } catch (error) {
+      // WebView2 helper processes can outlive the app for a moment.
+      console.warn(`profile ${profile} not removed: ${error.message}`);
+    }
   }
   const failed = results.filter((r) => !r.ok);
   console.log(`\nsmoke test: ${results.length - failed.length} passed, ${failed.length} failed`);
