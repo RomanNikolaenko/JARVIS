@@ -30,6 +30,7 @@ pub struct OpenAiCompatibleProvider {
     /// Capabilities reported for every model instead of the guess from the
     /// model id (servers that are known to serve one kind of model).
     capabilities: Option<ModelCapabilities>,
+    native_tool_models: std::collections::BTreeSet<String>,
 }
 
 impl std::fmt::Debug for OpenAiCompatibleProvider {
@@ -49,6 +50,7 @@ impl OpenAiCompatibleProvider {
             http,
             api_key: None,
             capabilities: None,
+            native_tool_models: Default::default(),
         }
     }
 
@@ -62,6 +64,22 @@ impl OpenAiCompatibleProvider {
     pub fn with_capabilities(mut self, capabilities: ModelCapabilities) -> Self {
         self.capabilities = Some(capabilities);
         self
+    }
+
+    /// Explicit per-model tool support; embedding-only models remain unchanged.
+    pub fn with_native_tool_models(mut self, models: impl IntoIterator<Item = String>) -> Self {
+        self.native_tool_models = models.into_iter().collect();
+        self
+    }
+
+    fn model_capabilities(&self, model: &str) -> ModelCapabilities {
+        let mut capabilities = self
+            .capabilities
+            .unwrap_or_else(|| infer_capabilities(model));
+        if capabilities.chat && self.native_tool_models.contains(model) {
+            capabilities.tool_calling = true;
+        }
+        capabilities
     }
 
     fn url(&self, path: &str) -> Result<Url, AiError> {
@@ -84,6 +102,10 @@ impl OpenAiCompatibleProvider {
 
 #[async_trait]
 impl AiProvider for OpenAiCompatibleProvider {
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
     fn descriptor(&self) -> &ProviderDescriptor {
         &self.descriptor
     }
@@ -99,9 +121,7 @@ impl AiProvider for OpenAiCompatibleProvider {
             .data
             .into_iter()
             .map(|model| ModelInfo {
-                capabilities: self
-                    .capabilities
-                    .unwrap_or_else(|| infer_capabilities(&model.id)),
+                capabilities: self.model_capabilities(&model.id),
                 display_name: model.id.clone(),
                 id: model.id,
                 provider_id: self.descriptor.id.clone(),
@@ -140,6 +160,24 @@ impl AiProvider for OpenAiCompatibleProvider {
             return Err(http::status_error(response, Some(&request.model)).await);
         }
         Ok(http::decode_stream(response, SseChatDecoder::default()))
+    }
+
+    async fn chat_with_tools(
+        &self,
+        request: crate::ToolChatRequest,
+    ) -> Result<crate::ToolChatResponse, AiError> {
+        let dialect = crate::tool_calling::Dialect::OpenAi;
+        let body = request.body(dialect, message_json)?;
+        let response = self
+            .authorize(self.http.get()?.post(self.url("chat/completions")?))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| http::map_transport_error(&err))?;
+        if !response.status().is_success() {
+            return Err(http::status_error(response, Some(&request.model)).await);
+        }
+        crate::tool_calling::read_response(response, dialect).await
     }
 
     async fn embeddings(&self, request: EmbeddingRequest) -> Result<EmbeddingResponse, AiError> {

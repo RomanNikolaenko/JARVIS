@@ -21,7 +21,7 @@ export const AUDIT_TIMEOUT_MS = 30_000;
 export const AGENT_READ_TIMEOUT_MS = 30_000;
 export const MAX_GOAL_LENGTH = 4000;
 
-const FINISHED: readonly TaskStatus[] = ['completed', 'failed', 'cancelled'];
+const FINISHED: readonly TaskStatus[] = ['completed', 'unverified', 'failed', 'cancelled'];
 
 export function isFinished(status: TaskStatus): boolean {
   return FINISHED.includes(status);

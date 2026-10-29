@@ -55,6 +55,10 @@ pub struct ProviderConfig {
     /// credentials.
     pub base_url: String,
     pub enabled: bool,
+    /// Exact chat model IDs explicitly confirmed to support native tools on
+    /// an OpenAI-compatible endpoint. Empty preserves conservative discovery.
+    #[serde(default)]
+    pub native_tool_models: Vec<String>,
 }
 
 impl ProviderConfig {
@@ -67,6 +71,7 @@ impl ProviderConfig {
                 display_name: "Ollama".to_owned(),
                 base_url: ProviderBackend::Ollama.default_base_url().to_owned(),
                 enabled: true,
+                native_tool_models: vec![],
             },
             Self {
                 id: ProviderId::new("lm-studio"),
@@ -76,12 +81,33 @@ impl ProviderConfig {
                     .default_base_url()
                     .to_owned(),
                 enabled: true,
+                native_tool_models: vec![],
             },
         ]
     }
 
     /// Validates the configuration and returns the parsed base URL.
     pub fn validate(&self) -> Result<Url, String> {
+        if !self.native_tool_models.is_empty()
+            && !matches!(
+                self.backend,
+                ProviderBackend::OpenAiCompatible | ProviderBackend::OpenAi
+            )
+        {
+            return Err("native tool model overrides require an OpenAI-compatible provider".into());
+        }
+        let mut models = std::collections::BTreeSet::new();
+        if self.native_tool_models.len() > 128
+            || self.native_tool_models.iter().any(|model| {
+                model.is_empty()
+                    || model.len() > 256
+                    || model.trim() != model
+                    || model.chars().any(char::is_control)
+                    || !models.insert(model)
+            })
+        {
+            return Err("native tool models must be unique non-empty IDs (up to 128 IDs, 256 bytes each) without surrounding whitespace or control characters".into());
+        }
         if !is_valid_provider_id(self.id.as_str()) {
             return Err(format!(
                 "provider id \"{}\" must be 1-64 lowercase letters, digits, '-', '_' or '.'",
@@ -194,6 +220,33 @@ fn classify_domain(domain: &str) -> DataLocality {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_tool_overrides_are_optional_and_validated() {
+        let old = serde_json::json!({"id":"local","backend":"openAiCompatible","displayName":"Local","baseUrl":"http://localhost:1234/v1","enabled":true});
+        let mut config: ProviderConfig = serde_json::from_value(old).expect("old config");
+        assert!(config.native_tool_models.is_empty());
+        config.native_tool_models = vec!["model-a".into()];
+        assert!(config.validate().is_ok());
+        let restored: ProviderConfig =
+            serde_json::from_value(serde_json::to_value(&config).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(restored, config);
+        for invalid in [
+            vec!["".into()],
+            vec![" model-a".into()],
+            vec!["model\na".into()],
+            vec!["a".into(), "a".into()],
+            vec!["x".repeat(257)],
+            vec!["a".into(); 129],
+        ] {
+            config.native_tool_models = invalid;
+            assert!(config.validate().is_err());
+        }
+        config.native_tool_models = vec!["model-a".into()];
+        config.backend = ProviderBackend::Ollama;
+        assert!(config.validate().is_err());
+    }
 
     fn locality(url: &str) -> DataLocality {
         classify_locality(&parse_base_url(url).expect("valid url"))

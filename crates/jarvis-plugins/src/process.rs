@@ -92,11 +92,9 @@ impl LogTail {
 
 /// Stops a server and the programs it started.
 ///
-/// Unix: the server leads its own process group, so the whole group gets
-/// `SIGTERM` and, if that is not enough, `SIGKILL`. Windows: without job
-/// objects, a server that does not exit by itself is killed with its process
-/// tree (`taskkill /T`); programs left behind by a server that exited on its
-/// own cannot be found there.
+/// Closing stdin gives the server time to exit cleanly. The owned process
+/// then releases its Windows job or Unix group, including descendants of a
+/// root that already exited. A stalled server is terminated after the grace.
 #[derive(Debug)]
 struct Termination {
     pid: Option<u32>,
@@ -151,9 +149,6 @@ impl ServerProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         adapter.prepare_background_command(&mut command);
-        // Its own process group, so programs it starts can be stopped too.
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = jarvis_platform::spawn_owned(command)
             .map_err(|err| PluginError::io(format!("starting {}", spec.program.display()), err))?;
         let (Some(stdin), Some(stdout), Some(stderr)) = (
@@ -178,12 +173,7 @@ impl ServerProcess {
                 let status = tokio::select! {
                     // Observe the server itself, then drop its owned job/group
                     // even if descendants retained the server's stdout pipe.
-                    status = async {
-                        match (child.inner_mut() as &mut dyn std::any::Any).downcast_mut::<tokio::process::Child>() {
-                            Some(server) => server.wait().await,
-                            None => Err(std::io::Error::other("missing native server process")),
-                        }
-                    } => status,
+                    status = child.wait_root() => status,
                     () = kill.cancelled() => {
                         let _ = child.start_kill();
                         child.wait().await

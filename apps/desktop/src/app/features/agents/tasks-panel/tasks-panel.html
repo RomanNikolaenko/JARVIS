@@ -131,7 +131,7 @@
         </div>
       }
       @if (task.error) {
-        <p class="notice" [class.danger]="task.status === 'failed'">
+        <p class="notice" [class.danger]="task.status === 'failed'" [class.warning]="task.status === 'unverified'">
           <jv-icon name="warning" [size]="15" />
           {{ task.error }}
         </p>

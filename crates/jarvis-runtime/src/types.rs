@@ -339,6 +339,9 @@ pub struct ServerState {
     /// Started with a vision projector: the model can see images.
     #[serde(default)]
     pub vision: bool,
+    /// Native tools were explicitly enabled for this running chat model.
+    #[serde(default)]
+    pub tool_calling: bool,
 }
 
 impl ServerState {
@@ -355,6 +358,7 @@ impl ServerState {
             memory_bytes: None,
             error: None,
             vision: false,
+            tool_calling: false,
         }
     }
 }
@@ -412,6 +416,9 @@ pub struct RuntimeSettings {
     pub autostart_embedding_model: Option<String>,
     /// Maximum time to load a model.
     pub startup_timeout_secs: u32,
+    /// Exact local chat model IDs whose templates support native tool calls.
+    /// Applied on the next server start; empty keeps the text protocol.
+    pub native_tool_models: Vec<String>,
 }
 
 impl Default for RuntimeSettings {
@@ -424,6 +431,7 @@ impl Default for RuntimeSettings {
             autostart_model: None,
             autostart_embedding_model: None,
             startup_timeout_secs: 180,
+            native_tool_models: Vec::new(),
         }
     }
 }
@@ -456,6 +464,19 @@ impl RuntimeSettings {
         {
             problems.push("runtime.autostartEmbeddingModel has an invalid format".to_owned());
         }
+        let unique: std::collections::BTreeSet<_> = self.native_tool_models.iter().collect();
+        if self.native_tool_models.len() > 128
+            || unique.len() != self.native_tool_models.len()
+            || self
+                .native_tool_models
+                .iter()
+                .any(|id| !crate::library::is_valid_model_id(id))
+        {
+            problems.push(
+                "runtime.nativeToolModels must contain at most 128 unique valid local model IDs"
+                    .to_owned(),
+            );
+        }
         problems
     }
 }
@@ -469,4 +490,37 @@ pub struct MemoryEstimate {
     pub kv_cache_bytes: u64,
     pub overhead_bytes: u64,
     pub total_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_tool_settings_are_opt_in_validated_and_roundtrip() {
+        let old: RuntimeSettings =
+            serde_json::from_str(r#"{"contextSize":4096}"#).expect("old settings");
+        assert!(old.native_tool_models.is_empty());
+        let mut settings = old;
+        settings.native_tool_models = vec!["qwen-tools".into()];
+        assert!(settings.problems().is_empty());
+        let restored: RuntimeSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(restored, settings);
+        for ids in [
+            vec!["qwen".into(), "qwen".into()],
+            vec!["../model".into()],
+            vec!["".into()],
+            (0..129).map(|i| format!("model-{i}")).collect(),
+        ] {
+            settings.native_tool_models = ids;
+            assert!(
+                settings
+                    .problems()
+                    .iter()
+                    .any(|p| p.contains("nativeToolModels"))
+            );
+        }
+    }
 }

@@ -47,7 +47,7 @@ export class TauriBridge {
     if (!this.available) {
       throw new IpcError(
         'unavailable',
-        'The JARVIS core is not reachable. Start the UI through the desktop app (npm run tauri dev).'
+        'The JARVIS core is not reachable. Start the UI through the desktop app (pnpm run tauri dev).'
       );
     }
   }

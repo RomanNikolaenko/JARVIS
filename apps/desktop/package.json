@@ -11,13 +11,16 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "test:ci": "ng test --watch=false",
-    "lint": "ng lint",
+    "lint": "pnpm run lint:ox && pnpm run lint:angular && pnpm run lint:styles",
+    "lint:ox": "oxlint .",
+    "lint:angular": "ng lint",
     "lint:styles": "stylelint \"src/**/*.scss\"",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "quality": "pnpm run format:check && pnpm run lint && pnpm run test:ci && pnpm run build",
     "tauri": "tauri"
   },
-  "packageManager": "npm@11.19.0",
+  "packageManager": "pnpm@12.16.1",
   "engines": {
     "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
@@ -43,16 +46,12 @@
     "angular-eslint": "22.6.0",
     "eslint": "^10.12.0",
     "jsdom": "^30.0.0",
-    "prettier": "^3.8.1",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
     "stylelint": "^17.16.0",
     "stylelint-config-standard-scss": "^17.0.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "8.71.0",
     "vitest": "^5.0.0"
-  },
-  "overrides": {
-    "@angular/build": {
-      "vite": "8.3.4"
-    }
   }
 }

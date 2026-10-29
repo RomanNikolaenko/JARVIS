@@ -23,11 +23,15 @@ pub type ChatStream = BoxStream<'static, Result<ChatChunk, AiError>>;
 /// must check [`ModelCapabilities`] instead of assuming support.
 ///
 /// Implementations must not retry non-idempotent operations on their own.
-/// Tool calling is part of the capability model but its API is introduced
-/// together with the agent system (Phase 5).
 #[async_trait]
 pub trait AiProvider: Send + Sync + fmt::Debug {
     fn descriptor(&self) -> &ProviderDescriptor;
+
+    /// Whether this adapter implements the native tools transport. Model
+    /// support must also be checked independently.
+    fn supports_native_tools(&self) -> bool {
+        false
+    }
 
     /// Cheap readiness probe (e.g. `GET /api/version`). Must not load models.
     async fn health_check(&self) -> Result<(), AiError>;
@@ -48,6 +52,19 @@ pub trait AiProvider: Send + Sync + fmt::Debug {
 
     /// Starts a streamed chat completion.
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, AiError>;
+
+    /// A native tool turn. Callers must check model capabilities and apply
+    /// their security policy to every returned call. No tools are executed
+    /// here. Dropping the future cancels the request; callers own deadlines.
+    async fn chat_with_tools(
+        &self,
+        _request: crate::ToolChatRequest,
+    ) -> Result<crate::ToolChatResponse, AiError> {
+        Err(AiError::Unsupported {
+            provider: self.descriptor().id.clone(),
+            operation: "tool calling",
+        })
+    }
 
     /// Non-streamed chat completion. The default implementation collects
     /// [`AiProvider::stream_chat`].

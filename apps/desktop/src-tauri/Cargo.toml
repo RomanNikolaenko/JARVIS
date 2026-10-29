@@ -13,6 +13,7 @@ name = "jarvis_desktop_lib"
 crate-type = ["rlib"]
 
 [build-dependencies]
+serde_json.workspace = true
 tauri-build.workspace = true
 
 [dependencies]

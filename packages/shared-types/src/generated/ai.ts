@@ -36,7 +36,12 @@ export type ProviderConfig = { id: ProviderId, backend: ProviderBackend, display
  * `http://127.0.0.1:1234/v1` (OpenAI-compatible). Must not contain
  * credentials.
  */
-baseUrl: string, enabled: boolean, };
+baseUrl: string, enabled: boolean, 
+/**
+ * Exact chat model IDs explicitly confirmed to support native tools on
+ * an OpenAI-compatible endpoint. Empty preserves conservative discovery.
+ */
+nativeToolModels: Array<string>, };
 
 /**
  * Static description of a provider.

@@ -5,9 +5,10 @@
 //! module and is selected once in [`current_adapter`]. This keeps `cfg`
 //! conditions out of the rest of the code base.
 //!
-//! All functions in this crate are synchronous and may block briefly
-//! (they read `/proc`, WMI-backed counters, etc.). Async callers should run
-//! them on a blocking thread pool (e.g. `tokio::task::spawn_blocking`).
+//! Hardware and process-inspection functions are synchronous and may block
+//! briefly (reading `/proc`, WMI-backed counters, etc.); async callers should
+//! use a blocking thread pool. Owned process handles expose asynchronous wait
+//! methods and require a Tokio runtime when spawned.
 
 mod adapters;
 mod display;

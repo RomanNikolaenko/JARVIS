@@ -27,38 +27,36 @@ jobs:
         working-directory: apps/desktop
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v3
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-      # node_modules itself is cached per OS, processor and lockfile: npm ci
-      # took up to 6 minutes on the Windows ARM runner.
-      - name: Cache node_modules
-        id: node-modules
-        uses: actions/cache@v6
-        with:
-          path: apps/desktop/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('apps/desktop/package-lock.json') }}
-      - if: steps.node-modules.outputs.cache-hit != 'true'
-        run: npm ci
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run lint:styles
-      - run: npm run test:ci
-      - run: npm run build
+          working-directory: apps/desktop
+          runtime: node@24
+          cache: true
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run format:check
+      - run: pnpm run lint
+      - run: pnpm run test:ci
+      - run: pnpm run build
 
   audit:
-    name: Dependency audit (RustSec, npm)
+    name: Dependency audit (RustSec, pnpm)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Keeps the compiled cargo-audit (~/.cargo/bin) between runs.
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v3
         with:
-          node-version: 24
+          working-directory: apps/desktop
+          runtime: node@24
+          cache: true
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+          install: false
       # Fails on known vulnerabilities; unmaintained or unsound crates that
       # come with Tauri and zbus are reported as warnings only. Installing
       # is a no-op when the cache holds this version.
@@ -66,21 +64,14 @@ jobs:
         run: cargo install cargo-audit --locked --version 0.22.2
       - name: Rust dependencies (RustSec advisory database)
         run: cargo audit
-      - name: npm dependencies shipped in the app
-        working-directory: apps/desktop
-        run: npm audit --omit=dev --audit-level=moderate
-      # The installers ship THIRD-PARTY-NOTICES.txt; its texts come from the
-      # cargo registry and node_modules (the same cache as the frontend job).
-      - name: Cache node_modules
-        id: node-modules
-        uses: actions/cache@v6
-        with:
-          path: apps/desktop/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('apps/desktop/package-lock.json') }}
       - name: Install frontend dependencies (license texts)
-        if: steps.node-modules.outputs.cache-hit != 'true'
         working-directory: apps/desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
+      - name: Node.js dependencies shipped in the app
+        working-directory: apps/desktop
+        run: pnpm audit --prod --audit-level=moderate
+      # The installers ship THIRD-PARTY-NOTICES.txt; its texts come from the
+      # cargo registry and the frozen pnpm dependency tree.
       - name: Third-party notices are current
         run: node .github/scripts/third-party-notices.mjs --check
 
@@ -148,24 +139,20 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev libasound2-dev xvfb
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v3
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-      - name: Cache node_modules
-        id: node-modules
-        uses: actions/cache@v6
-        with:
-          path: apps/desktop/node_modules
-          key: node-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('apps/desktop/package-lock.json') }}
+          working-directory: apps/desktop
+          runtime: node@24
+          cache: true
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+          install: false
       - name: Install frontend dependencies
-        if: steps.node-modules.outputs.cache-hit != 'true'
         working-directory: apps/desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Build installers (frontend + Tauri)
         working-directory: apps/desktop
-        run: npm run tauri -- build --bundles ${{ runner.os == 'Windows' && 'nsis,msi' || 'deb,appimage' }}
+        run: pnpm run tauri build --bundles ${{ runner.os == 'Windows' && 'nsis,msi' || 'deb,appimage' }}
       # Each installer on the clean runner: install, the installed files, the
       # release smoke test against the installed program (every screen, a
       # chat turn, an MCP plugin, a clean shutdown; Linux: start-up and

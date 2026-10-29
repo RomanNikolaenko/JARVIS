@@ -1,0 +1,16 @@
+packages:
+  - .
+
+# Keep dependency installation deterministic and do not allow arbitrary
+# transitive packages to execute install scripts.
+allowBuilds:
+  '@parcel/watcher@2.6.0': true
+  'esbuild@0.28.2': true
+  'fsevents@2.3.3': true
+  'lmdb@3.5.6': true
+  'msgpackr-extract@3.0.4': true
+strictDepBuilds: true
+
+# Vite is bundled by Angular's build package; keep the patched release pinned.
+overrides:
+  '@angular/build>vite': 8.3.4

@@ -17,6 +17,7 @@ const STATUS: Record<TaskStatus, { label: string; tone: string }> = {
   waitingForApproval: { label: 'Needs approval', tone: 'warning' },
   paused: { label: 'Paused', tone: 'unknown' },
   completed: { label: 'Completed', tone: 'healthy' },
+  unverified: { label: 'Answer unverified', tone: 'warning' },
   failed: { label: 'Failed', tone: 'error' },
   cancelled: { label: 'Cancelled', tone: 'unknown' },
 };
@@ -30,6 +31,9 @@ const STEP_ICON: Record<StepKind, IconName> = {
 };
 
 const OUTCOME_CHIP: Record<StepOutcome, string> = {
+  inProgress: 'warning',
+  unknown: 'warning',
+  unverified: 'warning',
   succeeded: 'success',
   failed: 'danger',
   denied: 'warning',

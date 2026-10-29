@@ -4,9 +4,9 @@
   "mainBinaryName": "jarvis",
   "identifier": "ai.jarvis.desktop",
   "build": {
-    "beforeDevCommand": "npm run start",
+    "beforeDevCommand": "pnpm run start",
     "devUrl": "http://localhost:4200",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm run build",
     "frontendDist": "../dist/desktop/browser"
   },
   "app": {

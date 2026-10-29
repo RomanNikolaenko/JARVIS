@@ -151,6 +151,7 @@ export class RuntimePage {
     }),
     autostartModel: new FormControl('', { nonNullable: true }),
     autostartEmbeddingModel: new FormControl('', { nonNullable: true }),
+    nativeToolModels: new FormControl<string[]>([], { nonNullable: true }),
     startupTimeoutSecs: new FormControl(180, {
       nonNullable: true,
       validators: [Validators.required, Validators.min(10), Validators.max(1800)],
@@ -255,6 +256,7 @@ export class RuntimePage {
       autostartModel: value.autostartModel || null,
       autostartEmbeddingModel: value.autostartEmbeddingModel || null,
       startupTimeoutSecs: value.startupTimeoutSecs,
+      nativeToolModels: value.nativeToolModels,
     };
     this.submittingSettings.set(true);
     this.settingsSaved.set(false);

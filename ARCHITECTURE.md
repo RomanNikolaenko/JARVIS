@@ -69,7 +69,7 @@ crates/
                               file, search, process, system, web and git tools
   jarvis-agent/               Task manager (states, limits, persisted journal),
                               orchestrator (planner, executor, verifier,
-                              recovery), text protocol for the model
+                              recovery), native tools with text fallback
   jarvis-plugins/             MCP client (stdio, protocol 2026-07-28 and the
                               legacy handshake), plugin manifests, approvals
                               bound to fingerprints, keychain secrets,
@@ -181,8 +181,12 @@ pub trait AiProvider: Send + Sync + Debug {
   `ChatService::cancel(request_id)` rather than in every provider.
 - **Retries:** `AiError::is_transient()` marks retryable failures for
   idempotent calls only; chat requests are never retried automatically.
-- **Tool calling** is represented in the capability model; its API arrives with
-  the agent system (Phase 5).
+- **Tool calling:** `chat_with_tools` carries native calls and results for
+  Ollama and OpenAI-compatible adapters. The agent selects it only when the
+  adapter and model support it. `ProviderConfig.nativeToolModels` declares
+  exact chat model IDs for OpenAI-compatible endpoints (editable on Models);
+  embedding-only models are never upgraded. Missing configuration defaults
+  to an empty list. Saving rebuilds providers and refreshes capabilities.
 
 Implementations ([ADR 0006](docs/decisions/0006-http-ai-providers.md)):
 
@@ -312,6 +316,8 @@ model reply ──parse──▶ tool call ──prepare (no side effects)──
             ├─ deny ─────────────▶ audit: policyDenied ─▶ result "refused" to the model
             ├─ approval ─▶ ApprovalBroker ─▶ UI dialog ─▶ approved / denied / timed out
             └─ allow ────────────▶ audit: allowed
+                                     ▼
+                              persist execution intent (FULL sync)
                                      ▼
                               Tool::run (re-checks scope / DNS) ─▶ audit: succeeded / failed
                                      ▼
@@ -820,9 +826,46 @@ must be granted by a capability; anything not granted is denied. See
 - Facts are saved explicitly; JARVIS does not extract them automatically.
 - Tools are not sandboxed: programs the user allowed and approved run with
   the user's rights. The policy limits what tools are asked to do.
-- Agents use a JSON text protocol, not native tool calling; small local
-  models follow it imperfectly (invalid replies end a task after three
-  tries).
+- Agents use native tool calling when both model capabilities and the provider
+  adapter support it. Otherwise they use the JSON text protocol; unknown
+  OpenAI-compatible model capabilities keep this fallback. Native calls are
+  normalized into the same policy/approval/audit path and persisted with
+  original tool names. Request-local aliases support plugin names, and
+  call/result pairs are reconstructed from the journal on resume without
+  replaying tools. Multiple or unadvertised calls are rejected as invalid
+  replies; three consecutive invalid replies fail the task. Live native
+  model validation remains pending.
+- Embedded runtime native tools are opt-in by exact local chat model ID in
+  `runtime.nativeToolModels`. On restart, selected chat models launch with
+  `--jinja`; the launch snapshot supplies `toolCalling` to the provider and UI.
+  Unselected models retain text mode and embedding slots always exclude tools.
+- The agent's per-run wall-clock deadline applies during planning, execution,
+  verification, pauses and approval waits. Expiry marks the task failed,
+  withdraws pending approvals and cancels tool work; interrupted actions stay
+  in the journal because their side effects may already have partly occurred.
+- Agent lifecycle transitions serialize storage reads and writes for starts,
+  resumes and cancellation of inactive tasks. An owned reservation releases the
+  concurrency slot on a failed save, dropped launch or completed/unwound run.
+  Active tasks remain directly cancellable while another transition waits on
+  storage. Recovery refuses to rewrite tasks while runs are active, and a
+  manager that has begun shutdown rejects new launches.
+- A journal or audit write error latches a failure for that run. No further
+  model/tool action is allowed; an already completed action remains in the
+  terminal journal. Failed checkpoints are retained in a session-local cache
+  used by task reads/listings, preventing stale persisted states from appearing
+  resumable. Clearing finished tasks first persists inactive cached failures;
+  if storage still rejects writes, the cache is retained and an error returned.
+  Cached failures do not survive process exit. Each tool execution first saves
+  an `inProgress` journal entry identified by task UUID and step index. The
+  result replaces that entry. Recovery converts an unfinished intent to
+  `unknown`, fails the task and blocks resume: users must inspect its effects
+  before starting a new task. SQLite uses FULL synchronization for durable
+  commits; no exactly-once guarantee is claimed for external effects.
+- Unavailable or malformed answer verification yields the terminal
+  `unverified` task status and a warning while retaining the candidate answer.
+  A rejected answer may be corrected once; that correction is also checked,
+  and a second rejection fails the task. Schema migration 4 adds `unverified`
+  without changing existing task journals or audit entries.
 - The audit log detects changes but cannot stop someone with access to the
   database from rewriting it entirely.
 - UI text is English; the assistant language sets the language of replies
@@ -836,9 +879,8 @@ must be granted by a capability; anything not granted is denied. See
   screenshot; local vision models answer a screenshot in about a minute on
   a CPU. The camera works where the WebView offers one (not WebKitGTK).
 - Plugins: a plugin process runs with the user's rights and is not
-  sandboxed; on Windows, programs left behind by a server that exited on
-  its own are not stopped (no job objects; a stuck server is stopped with
-  its process tree); only stdio servers, only tools (no resources,
+  sandboxed. Windows Job Objects and Unix process groups own descendants,
+  including when the root exits first; only stdio servers, only tools (no resources,
   prompts, sampling or elicitation); plugin tools are used by agents, not
   by plain chat.
 - Linux builds are verified in CI only (not on the development machine).
@@ -849,10 +891,10 @@ must be granted by a capability; anything not granted is denied. See
 See [ROADMAP.md](ROADMAP.md) for phases. Key future boundaries:
 
 - `jarvis-security`: process isolation for tools.
-- `jarvis-tools`: native tool calling where providers support it.
+- `jarvis-ai`: automatic capability discovery for OpenAI-compatible tools.
 - `jarvis-plugins`: HTTP MCP servers, resources and prompts, sandboxed
-  plugin processes, job objects on Windows.
-- CI: `cargo audit` (RustSec) and `npm audit` run on every push; known
+  plugin processes.
+- CI: `cargo audit` (RustSec) and `pnpm audit --prod` run on every push; known
   vulnerabilities fail the build.
 - `jarvis-voice`: echo cancellation, optional cloud speech, a dedicated
   wake-word model.

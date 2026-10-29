@@ -5,9 +5,9 @@
 | Tool | Version used | Notes |
 | --- | --- | --- |
 | Rust | stable 1.98 (MSRV declared: 1.90) | `rustup component add rustfmt clippy` |
-| Node.js | 24 LTS (22.22+ supported) | npm 11 |
-| Tauri CLI | 2.12 (npm `@tauri-apps/cli`, no global install needed) | |
-| Angular | 22.2, TypeScript 6.0 | Angular CLI via `npx ng` |
+| Node.js | 24 LTS (22.22+ supported) | pnpm 12.16.1 |
+| Tauri CLI | 2.12 (`@tauri-apps/cli`, no global install needed) | |
+| Angular | 22.2, TypeScript 6.0 | Angular CLI via `pnpm exec ng` |
 
 ### Windows 10/11
 
@@ -33,35 +33,35 @@ limits (screen capture, global shortcuts) matter from Phase 6 on.
 
 ## Common tasks
 
-All npm commands run in `apps/desktop`; cargo commands in the repository root.
+All pnpm commands run in `apps/desktop`; cargo commands in the repository root.
 
 ```bash
 # install frontend dependencies
-cd apps/desktop && npm ci
+cd apps/desktop && pnpm install --frozen-lockfile
 
 # run the desktop app with hot reload (starts `ng serve` automatically)
-npm run tauri dev
+pnpm run tauri dev
 
 # frontend only (no IPC: the UI shows "Core offline")
-npm start
+pnpm run start
 
 # frontend unit tests (Vitest)
-npm run test:ci
+pnpm run test:ci
 
-# frontend formatting (Prettier; .prettierignore lists what it skips)
-npm run format:check   # or: npm run format
+# frontend formatting (Oxfmt)
+pnpm run format:check   # or: pnpm run format
 
-# frontend lint: ESLint with angular-eslint (TypeScript + templates, incl.
-# accessibility; OnPush and standalone enforced) and Stylelint for SCSS
-npm run lint
-npm run lint:styles    # or: npx stylelint "src/**/*.scss" --fix
+# frontend lint: Oxlint for JS/TS correctness, angular-eslint for Angular
+# components/templates, and Stylelint for SCSS
+pnpm run lint
+pnpm exec stylelint "src/**/*.scss" --fix
 
 # release binary without installers
-npm run tauri -- build --no-bundle
+pnpm run tauri build --no-bundle
 
 # installers (NSIS/MSI on Windows; deb/rpm/AppImage on Linux). The first
 # Windows run downloads the NSIS and WiX tools; AppImage downloads linuxdeploy.
-npm run tauri build
+pnpm run tauri build
 
 # smoke test of a built binary (fresh temporary profile; see docs/RELEASE.md)
 node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugins/text-tools/server.mjs
@@ -192,7 +192,7 @@ Tests: `cargo test -p jarvis-security -p jarvis-tools -p jarvis-agent`
 orchestrator) and `cargo test -p jarvis-core --test agent_tasks` (settings,
 privacy, approvals, protected folders, restarts).
 
-`npm run test:ci` also runs `agent-ipc.integration.spec.ts`: the real Angular
+`pnpm run test:ci` also runs `agent-ipc.integration.spec.ts`: the real Angular
 components, `AgentsStore`, `JarvisApi`, `TauriBridge` and Tauri JavaScript SDK
 exercise chat task creation, event delivery, allow/deny decisions and recovery
 after an IPC failure. Only the native transport is replaced with Tauri's
@@ -200,7 +200,7 @@ after an IPC failure. Only the native transport is replaced with Tauri's
 or ACL test, and the simulated result does not prove that a filesystem tool ran.
 The Rust `agent_tasks` suite separately covers actual policy and tool execution.
 
-For a native smoke check, launch `npm run tauri dev`, select a working model,
+For a native smoke check, launch `pnpm run tauri dev`, select a working model,
 and use a dedicated temporary workspace with a disposable file. Start a task
 from Chat that requests a file change; verify that its task link opens the same
 journal, deny the action and check the file is unchanged. Repeat with approval
@@ -291,8 +291,8 @@ used by the release smoke test and for portable use. The WebView cache
 
 ## Debugging
 
-- Verbose logs: `RUST_LOG=debug npm run tauri dev` (PowerShell:
-  `$env:RUST_LOG='debug'; npm run tauri dev`). `RUST_LOG` overrides the log
+- Verbose logs: `RUST_LOG=debug pnpm run tauri dev` (PowerShell:
+  `$env:RUST_LOG='debug'; pnpm run tauri dev`). `RUST_LOG` overrides the log
   level from settings.
 - WebView DevTools: right-click → *Inspect* in debug builds.
 - If the settings file is broken, JARVIS starts with defaults, shows a
@@ -304,19 +304,18 @@ used by the release smoke test and for portable use. The WebView cache
   test binaries need the Common Controls v6 manifest. `build.rs` embeds it via
   linker flags for all targets; if you changed `build.rs`, make sure
   `embed_windows_manifest_via_linker` still runs.
-- **npm warns about install scripts** (`esbuild`, `lmdb`, …): npm 11 does not
-  run dependency install scripts unless approved. The build does not need
-  them (esbuild ships platform binaries as optional dependencies; `lmdb` and
-  `msgpackr-extract` are optional caches).
+- **pnpm rejects an unreviewed dependency build:** `strictDepBuilds` is enabled.
+  Review the exact package and version, then record an explicit decision in
+  `pnpm-workspace.yaml`; never enable `dangerouslyAllowAllBuilds`.
 - **Blank window on Linux under some GPU drivers, and always under WSLg**
   (WSL on Windows 11): WebKitGTK cannot use DMA-BUF buffers there
   (`libEGL warning: failed to get driver name`, `ZINK: failed to choose
   pdev`). Start JARVIS with `WEBKIT_DISABLE_DMABUF_RENDERER=1`, e.g.
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1 npm run tauri dev`.
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm run tauri dev`.
 - **Running the Linux build from WSL**: build in WSL with its own target
-  folder and the UI built on Windows, so the shared `node_modules` is not
-  replaced with Linux binaries:
-  `npm run build` (Windows), then in WSL
+  folder and build dependencies installed independently in WSL; do not share
+  one pnpm `node_modules` tree between Windows and Linux:
+  `pnpm run build` (Windows), then in WSL
   `CARGO_TARGET_DIR=~/jarvis-target cargo build -p jarvis-desktop --features tauri/custom-protocol`
   and `WEBKIT_DISABLE_DMABUF_RENDERER=1 ~/jarvis-target/debug/jarvis-desktop`.
   Models on the Windows disk can be imported in place from `/mnt/c/...`

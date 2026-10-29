@@ -135,11 +135,13 @@ impl Slot {
     /// What the served model can do: a server started with `--embedding`
     /// only embeds, a chat server cannot embed.
     fn capabilities(&self) -> ModelCapabilities {
+        let state = self.state.borrow();
         match self.role {
             ServerRole::Chat => ModelCapabilities {
                 chat: true,
                 streaming: true,
-                vision: self.state.borrow().vision,
+                vision: state.vision,
+                tool_calling: state.tool_calling,
                 ..ModelCapabilities::default()
             },
             ServerRole::Embeddings => ModelCapabilities {
@@ -748,6 +750,8 @@ impl RuntimeManager {
             api_key: process::random_key(),
             embeddings,
             projector: projector.as_ref().map(|p| PathBuf::from(&p.path)),
+            native_tools: role == ServerRole::Chat
+                && settings.native_tool_models.contains(&model.id),
         };
         slot.logs.clear();
         let command = (self.command_factory)(&plan);
@@ -776,6 +780,7 @@ impl RuntimeManager {
             memory_bytes: None,
             error: None,
             vision: projector.is_some(),
+            tool_calling: plan.native_tools,
         });
         self.events.info(
             EventCategory::Runtime,

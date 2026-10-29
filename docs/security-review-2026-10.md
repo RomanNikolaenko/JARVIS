@@ -48,10 +48,10 @@ JARVIS. The review therefore checked that nothing can inject script:
 | # | Finding | Severity | Status |
 | --- | --- | --- | --- |
 | 1 | The event log (also written to the log files) recorded a plugin's full command line when it was added; users sometimes pass tokens as arguments. | Low | Fixed: the event names the program and the fingerprint only. |
-| 2 | Development dependencies: Vite 8.3.0 inside `@angular/build` (dev server: cross-origin script execution, file exposure) and `fast-uri` 3.1.8. Not part of the shipped app. | Medium (dev only) | Fixed: npm override to Vite 8.3.4, `fast-uri` 3.1.9; `npm audit` reports 0. |
+| 2 | Development dependencies: Vite 8.3.0 inside `@angular/build` (dev server: cross-origin script execution, file exposure) and `fast-uri` 3.1.8. Not part of the shipped app. | Medium (dev only) | Fixed: pnpm override to Vite 8.3.4, `fast-uri` 3.1.9; `pnpm audit --prod` reports 0. |
 | 3 | No installer, update or release pipeline: users would build from source or copy unsigned binaries. | Medium | Fixed: installers, a draft-release workflow with checksums, and signed updates bound to the version (ADR 0014). Authenticode signing of the installers needs a certificate (open). |
 | 4 | Rust dependencies against the RustSec advisory database: `rustls` 0.23.45 (4 advisories: TLS secrets in `Debug` output, data after ECH rejection, 1 GiB allocation before authentication, key exchange downgrade), `rustls-webpki` 0.103.15 (distrusted intermediates accepted) and `webpki-root-certs` 1.0.9 (distrusted emSign roots). | High | Fixed: updated to 0.23.46, 0.103.16 and 1.0.11 (no vulnerable versions left); `cargo audit` runs in CI. Informational only: `glib` 0.18 (unsound iterator), `proc-macro-error`, `zbus_names`, `zvariant` (unmaintained) come with Tauri/GTK and zbus. |
 | 5 | Plugins and agent programs run with the user's rights (no sandbox). | Accepted risk | Documented in SECURITY.md and on the Plugins screen. |
 | 6 | Programs started by a plugin server could keep running after the plugin was stopped. | Low | Fixed on Unix (process group, `SIGTERM` then `SIGKILL`); on Windows for servers that do not exit by themselves (process tree). Orphans of a server that exited on its own remain possible on Windows. |
 
-Production npm dependencies: `npm audit --omit=dev` — 0 vulnerabilities.
+Production Node.js dependencies: `pnpm audit --prod` — 0 vulnerabilities.

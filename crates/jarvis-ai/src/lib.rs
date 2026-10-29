@@ -22,6 +22,7 @@ mod ollama;
 mod openai;
 mod provider;
 mod registry;
+mod tool_calling;
 mod types;
 
 pub use anthropic::AnthropicProvider;
@@ -37,6 +38,7 @@ pub use ollama::OllamaProvider;
 pub use openai::OpenAiCompatibleProvider;
 pub use provider::{AiProvider, ChatStream};
 pub use registry::ProviderRegistry;
+pub use tool_calling::{ToolCall, ToolChatRequest, ToolChatResponse, ToolDefinition, ToolMessage};
 pub use types::{
     ChatChunk, ChatMessage, ChatRequest, ChatResponse, ChatRole, DataLocality, EmbeddingRequest,
     EmbeddingResponse, FinishReason, GenerationOptions, ImageData, ModelCapabilities, ModelInfo,

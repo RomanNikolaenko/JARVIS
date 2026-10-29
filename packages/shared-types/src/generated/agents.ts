@@ -4,7 +4,7 @@ export type AgentTask = { id: string, goal: string, status: TaskStatus, provider
 
 export type StepKind = "plan" | "action" | "answer" | "verification" | "note";
 
-export type StepOutcome = "succeeded" | "failed" | "denied" | "info";
+export type StepOutcome = "inProgress" | "unknown" | "unverified" | "succeeded" | "failed" | "denied" | "info";
 
 /**
  * Bounds of one task. There is no unbounded agent loop.
@@ -19,7 +19,7 @@ maxSteps: number,
  */
 maxDurationSecs: number, };
 
-export type TaskStatus = "pending" | "running" | "waitingForApproval" | "paused" | "completed" | "failed" | "cancelled";
+export type TaskStatus = "pending" | "running" | "waitingForApproval" | "paused" | "completed" | "unverified" | "failed" | "cancelled";
 
 /**
  * One entry of the task journal.

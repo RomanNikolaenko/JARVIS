@@ -220,10 +220,35 @@ struct CoreAgentModel {
     model: String,
     context_chars: usize,
     timeout: Duration,
+    native_tools: bool,
 }
 
 #[async_trait]
 impl AgentModel for CoreAgentModel {
+    fn supports_native_tools(&self) -> bool {
+        self.native_tools
+    }
+
+    async fn complete_tools(
+        &self,
+        messages: Vec<jarvis_ai::ToolMessage>,
+        tools: Vec<jarvis_ai::ToolDefinition>,
+    ) -> jarvis_agent::Result<jarvis_ai::ToolChatResponse> {
+        let request = jarvis_ai::ToolChatRequest {
+            model: self.model.clone(),
+            messages,
+            tools,
+            options: GenerationOptions {
+                temperature: Some(0.2),
+                max_output_tokens: Some(AGENT_MAX_OUTPUT_TOKENS),
+            },
+        };
+        match tokio::time::timeout(self.timeout, self.provider.chat_with_tools(request)).await {
+            Ok(result) => result.map_err(|err| AgentError::Model(err.to_string())),
+            Err(_) => Err(AgentError::Model("the model did not answer in time".into())),
+        }
+    }
+
     fn provider_id(&self) -> Option<String> {
         Some(self.provider_id.clone())
     }
@@ -305,6 +330,8 @@ impl JarvisCore {
         let context_chars =
             (window.saturating_sub(AGENT_MAX_OUTPUT_TOKENS).max(1024) as usize).saturating_mul(3);
         Ok(Arc::new(CoreAgentModel {
+            native_tools: resolved.capabilities.tool_calling
+                && resolved.provider.supports_native_tools(),
             provider: resolved.provider,
             provider_id: resolved.descriptor.id.to_string(),
             model: resolved.model,
@@ -518,6 +545,12 @@ impl JarvisCore {
                             ),
                         );
                     }
+                    jarvis_agent::TaskStatus::Unverified => {
+                        events.warning(
+                            EventCategory::Agents,
+                            format!("Agent answer could not be verified: {goal}"),
+                        );
+                    }
                     jarvis_agent::TaskStatus::Cancelled => {
                         events.info(
                             EventCategory::Agents,
@@ -557,5 +590,82 @@ fn clip(text: &str, max: usize) -> String {
     } else {
         let cut: String = text.chars().take(max).collect();
         format!("{cut}…")
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use jarvis_ai::{
+        AiError, ChatStream, ModelInfo, ProviderDescriptor, ToolChatRequest, ToolChatResponse,
+    };
+
+    #[derive(Debug)]
+    struct NativeProvider {
+        echo: jarvis_ai::EchoProvider,
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl AiProvider for NativeProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            self.echo.descriptor()
+        }
+        fn supports_native_tools(&self) -> bool {
+            true
+        }
+        async fn health_check(&self) -> Result<(), AiError> {
+            Ok(())
+        }
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
+            Ok(vec![])
+        }
+        async fn stream_chat(&self, _: ChatRequest) -> Result<ChatStream, AiError> {
+            panic!("native generation must not fall back to text")
+        }
+        async fn chat_with_tools(
+            &self,
+            request: ToolChatRequest,
+        ) -> Result<ToolChatResponse, AiError> {
+            assert_eq!(request.model, "native-model");
+            assert_eq!(
+                request.options.max_output_tokens,
+                Some(AGENT_MAX_OUTPUT_TOKENS)
+            );
+            assert_eq!(request.options.temperature, Some(0.2));
+            tokio::time::sleep(self.delay).await;
+            Ok(ToolChatResponse {
+                content: "done".into(),
+                calls: vec![],
+            })
+        }
+    }
+
+    fn model(delay: Duration) -> CoreAgentModel {
+        CoreAgentModel {
+            provider: Arc::new(NativeProvider {
+                echo: jarvis_ai::EchoProvider::new(),
+                delay,
+            }),
+            provider_id: "native".into(),
+            model: "native-model".into(),
+            context_chars: 4096,
+            timeout: Duration::from_secs(1),
+            native_tools: true,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn native_adapter_preserves_generation_options_and_returns_response() {
+        let result = model(Duration::ZERO).complete_tools(vec![], vec![]).await;
+        assert!(matches!(result, Ok(response) if response.content == "done"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn native_adapter_times_out_without_text_fallback() {
+        let result = model(Duration::from_secs(60))
+            .complete_tools(vec![], vec![])
+            .await;
+        assert!(matches!(result, Err(AgentError::Model(message)) if message.contains("in time")));
     }
 }

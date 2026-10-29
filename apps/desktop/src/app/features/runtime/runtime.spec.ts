@@ -60,6 +60,17 @@ describe('Runtime custom download form', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
+  it('saves and clears native tool model choices without enabling other models', async () => {
+    const store = TestBed.inject(RuntimeStore);
+    vi.mocked(store.saveSettings).mockResolvedValue(true);
+    page.runtimeForm.controls.nativeToolModels.setValue(['qwen-tools']);
+    await page.saveRuntime();
+    expect(store.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ nativeToolModels: ['qwen-tools'] }));
+    page.runtimeForm.controls.nativeToolModels.setValue([]);
+    await page.saveRuntime();
+    expect(store.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ nativeToolModels: [] }));
+  });
+
   it.each([true, false])('resets submitted values only on command success (%s)', async (succeeded) => {
     page.submit();
     expect(download).toHaveBeenCalledWith({ repo: 'owner/repo', file: 'model.gguf', revision: null });

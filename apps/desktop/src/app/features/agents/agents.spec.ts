@@ -97,6 +97,34 @@ describe('AgentsPage', () => {
     expect(store.subscriptionError()).toBeNull();
   });
 
+  it('shows an unverified answer as a warning without resume or cancel controls', async () => {
+    const { fixture, element } = await render();
+    const task = agentTask('unverified', 'unverified');
+    task.result = 'Candidate answer';
+    task.error = 'The answer could not be verified. Review it before relying on it.';
+    task.steps[0].kind = 'verification';
+    task.steps[0].outcome = 'unverified';
+    TestBed.inject(AgentsStore).selected.set(task);
+    fixture.detectChanges();
+    expect(element.querySelector('.detail-meta')?.textContent).toContain('Answer unverified');
+    expect(element.querySelector('.notice.warning')?.textContent).toContain('could not be verified');
+    expect(element.querySelector('.result')?.textContent).toContain('Candidate answer');
+    expect(element.querySelector('.chip.warning')?.textContent).toContain('unverified');
+    expect(element.querySelector('.controls')?.textContent?.trim()).toBe('');
+  });
+
+  it('shows an unknown action result and requires manual review', async () => {
+    const { fixture, element } = await render();
+    const task = agentTask('recovered', 'failed');
+    task.error = 'Operation recovered:0 has no durable result. Check its effects manually.';
+    task.steps[0].outcome = 'unknown';
+    TestBed.inject(AgentsStore).selected.set(task);
+    fixture.detectChanges();
+    expect(element.querySelector('.notice.danger')?.textContent).toContain('Check its effects manually');
+    expect(element.querySelector('.chip.warning')?.textContent).toContain('unknown');
+    expect(element.querySelector('.controls')?.textContent?.trim()).toBe('');
+  });
+
   it('starts a task with the goal and limits', async () => {
     const { fixture, element } = await render();
     const goal = element.querySelector('textarea') as HTMLTextAreaElement;

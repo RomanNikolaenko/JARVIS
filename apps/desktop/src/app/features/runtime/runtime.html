@@ -249,6 +249,12 @@
               <dt>Context</dt>
               <dd>{{ entry.state.contextSize }} tokens</dd>
             </div>
+            @if (entry.role === 'chat') {
+              <div>
+                <dt>Agent tools</dt>
+                <dd>{{ entry.state.toolCalling ? 'Native tools enabled' : 'Text mode' }}</dd>
+              </div>
+            }
             <div>
               <dt>GPU layers</dt>
               <dd>
@@ -532,7 +538,19 @@
           <span class="field-label">Startup timeout (s)</span>
           <input type="number" min="10" max="1800" formControlName="startupTimeoutSecs" />
         </label>
+        <label class="field">
+          <span class="field-label">Chat models with native tools</span>
+          <select multiple formControlName="nativeToolModels" aria-describedby="native-tools-hint">
+            @for (model of chatModels(); track model.id) {
+              <option [value]="model.id">{{ model.displayName }}</option>
+            }
+          </select>
+        </label>
       </div>
+      <p class="hint" id="native-tools-hint">
+        Select only models with a tool-compatible chat template. Hold Ctrl to select or deselect multiple models. No selection
+        keeps the text-based agent mode. Save and restart the chat model to apply changes.
+      </p>
       <p class="hint">
         Larger contexts need more memory. The context size applies to chat models; the embedding model uses up to 2048 tokens per
         text. Changes apply the next time a model starts. JARVIS refuses to start a model that does not fit into free memory.

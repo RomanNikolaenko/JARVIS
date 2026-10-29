@@ -6,6 +6,7 @@
 //! (the core chooses provider and model and applies the privacy rules).
 
 mod error;
+mod native_protocol;
 mod orchestrator;
 mod protocol;
 mod store;

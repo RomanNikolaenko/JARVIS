@@ -175,7 +175,12 @@ autostartEmbeddingModel: string | null,
 /**
  * Maximum time to load a model.
  */
-startupTimeoutSecs: number, };
+startupTimeoutSecs: number, 
+/**
+ * Exact local chat model IDs whose templates support native tool calls.
+ * Applied on the next server start; empty keeps the text protocol.
+ */
+nativeToolModels: Array<string>, };
 
 /**
  * Everything the Runtime screen shows.
@@ -217,4 +222,8 @@ memoryBytes: number | null, error: string | null,
 /**
  * Started with a vision projector: the model can see images.
  */
-vision: boolean, };
+vision: boolean, 
+/**
+ * Native tools were explicitly enabled for this running chat model.
+ */
+toolCalling: boolean, };

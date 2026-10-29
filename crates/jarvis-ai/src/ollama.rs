@@ -91,6 +91,10 @@ impl OllamaProvider {
 
 #[async_trait]
 impl AiProvider for OllamaProvider {
+    fn supports_native_tools(&self) -> bool {
+        true
+    }
+
     fn descriptor(&self) -> &ProviderDescriptor {
         &self.descriptor
     }
@@ -163,6 +167,26 @@ impl AiProvider for OllamaProvider {
             return Err(http::status_error(response, Some(&request.model)).await);
         }
         Ok(http::decode_stream(response, NdjsonChatDecoder::default()))
+    }
+
+    async fn chat_with_tools(
+        &self,
+        request: crate::ToolChatRequest,
+    ) -> Result<crate::ToolChatResponse, AiError> {
+        let dialect = crate::tool_calling::Dialect::Ollama;
+        let body = request.body(dialect, message_json)?;
+        let response = self
+            .http
+            .get()?
+            .post(self.url("api/chat")?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| http::map_transport_error(&err))?;
+        if !response.status().is_success() {
+            return Err(http::status_error(response, Some(&request.model)).await);
+        }
+        crate::tool_calling::read_response(response, dialect).await
     }
 
     async fn embeddings(&self, request: EmbeddingRequest) -> Result<EmbeddingResponse, AiError> {

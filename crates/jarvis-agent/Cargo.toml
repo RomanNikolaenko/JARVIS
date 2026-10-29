@@ -24,7 +24,11 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "native-agent-probe"
+test = true

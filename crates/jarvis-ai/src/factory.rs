@@ -56,7 +56,8 @@ impl ProviderFactory for HttpProviderFactory {
         Ok(match config.backend {
             ProviderBackend::Ollama => Arc::new(OllamaProvider::new(descriptor, url, http)),
             ProviderBackend::OpenAiCompatible | ProviderBackend::OpenAi => {
-                let mut provider = OpenAiCompatibleProvider::new(descriptor, url, http);
+                let mut provider = OpenAiCompatibleProvider::new(descriptor, url, http)
+                    .with_native_tool_models(config.native_tool_models.clone());
                 if let Some(key) = api_key {
                     provider = provider.with_api_key(key);
                 }
@@ -97,6 +98,7 @@ mod tests {
         let cloud = factory
             .create(
                 &ProviderConfig {
+                    native_tool_models: vec![],
                     id: ProviderId::new("remote"),
                     backend: ProviderBackend::OpenAiCompatible,
                     display_name: " Remote ".into(),
@@ -112,6 +114,7 @@ mod tests {
         let anthropic = factory
             .create(
                 &ProviderConfig {
+                    native_tool_models: vec![],
                     id: ProviderId::new("anthropic"),
                     backend: ProviderBackend::Anthropic,
                     display_name: "Anthropic".into(),
@@ -126,6 +129,7 @@ mod tests {
         let gemini = factory
             .create(
                 &ProviderConfig {
+                    native_tool_models: vec![],
                     id: ProviderId::new("gemini"),
                     backend: ProviderBackend::Gemini,
                     display_name: "Gemini".into(),

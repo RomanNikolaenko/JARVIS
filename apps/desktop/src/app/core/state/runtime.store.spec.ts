@@ -40,6 +40,7 @@ function server(phase: ServerPhase, model: string): ServerState {
     memoryBytes: null,
     error: null,
     vision: false,
+    toolCalling: false,
   };
 }
 

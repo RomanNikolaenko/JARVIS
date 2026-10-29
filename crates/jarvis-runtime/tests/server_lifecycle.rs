@@ -130,6 +130,64 @@ async fn wait_gone(pid: u32) -> bool {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
+async fn native_tools_follow_exact_model_selection_and_reset_on_restart() {
+    let plans = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = plans.clone();
+    let factory = fake_command("slow");
+    let h = harness_with(Arc::new(move |plan| {
+        observed.lock().unwrap().push(plan.clone());
+        factory(plan)
+    }))
+    .await;
+    let mut config = settings(30);
+    for (ids, enabled) in [
+        (vec![format!("{}-other", h.model_id)], false),
+        (vec![h.model_id.clone()], true),
+        (Vec::new(), false),
+    ] {
+        config.native_tool_models = ids;
+        h.manager.start(CHAT, &h.model_id, &config).await.unwrap();
+        let state = h.manager.wait_settled(CHAT, Duration::from_secs(30)).await;
+        assert_eq!(state.phase, ServerPhase::Running, "{state:?}");
+        assert_eq!(state.tool_calling, enabled);
+        assert_eq!(plans.lock().unwrap().last().unwrap().native_tools, enabled);
+        let provider = h.manager.provider(CHAT).unwrap();
+        assert!(provider.supports_native_tools());
+        assert_eq!(
+            provider.list_models().await.unwrap()[0]
+                .capabilities
+                .tool_calling,
+            enabled
+        );
+    }
+    config.native_tool_models = vec![h.embedding_model_id.clone()];
+    h.manager
+        .start(EMBEDDINGS, &h.embedding_model_id, &config)
+        .await
+        .unwrap();
+    let state = h
+        .manager
+        .wait_settled(EMBEDDINGS, Duration::from_secs(30))
+        .await;
+    assert_eq!(state.phase, ServerPhase::Running, "{state:?}");
+    assert!(!state.tool_calling);
+    assert!(!plans.lock().unwrap().last().unwrap().native_tools);
+    assert!(
+        !h.manager
+            .provider(EMBEDDINGS)
+            .unwrap()
+            .list_models()
+            .await
+            .unwrap()[0]
+            .capabilities
+            .tool_calling
+    );
+    h.manager.stop(CHAT).await;
+    h.manager.stop(EMBEDDINGS).await;
+    assert!(!h.manager.server_state(CHAT).tool_calling);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn starts_serves_with_the_api_key_and_stops() {
     let h = harness("slow").await;
     assert!(h.manager.provider(CHAT).is_none());

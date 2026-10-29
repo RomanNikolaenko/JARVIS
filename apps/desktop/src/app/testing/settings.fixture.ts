@@ -12,6 +12,7 @@ export const SETTINGS = {
         backend: 'ollama',
         displayName: 'Ollama',
         baseUrl: 'http://127.0.0.1:11434',
+        nativeToolModels: [],
         enabled: true,
       },
     ],
@@ -34,6 +35,7 @@ export const SETTINGS = {
     autostartModel: null,
     autostartEmbeddingModel: null,
     startupTimeoutSecs: 180,
+    nativeToolModels: [],
   },
   memory: {
     enabled: true,

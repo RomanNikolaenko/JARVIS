@@ -19,13 +19,18 @@ pub enum TaskStatus {
     WaitingForApproval,
     Paused,
     Completed,
+    /// An answer is available, but verification was unavailable or invalid.
+    Unverified,
     Failed,
     Cancelled,
 }
 
 impl TaskStatus {
     pub fn is_finished(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed | Self::Unverified | Self::Failed | Self::Cancelled
+        )
     }
 
     pub(crate) fn as_str(self) -> &'static str {
@@ -35,6 +40,7 @@ impl TaskStatus {
             Self::WaitingForApproval => "waitingForApproval",
             Self::Paused => "paused",
             Self::Completed => "completed",
+            Self::Unverified => "unverified",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
@@ -47,6 +53,7 @@ impl TaskStatus {
             "waitingForApproval" => Self::WaitingForApproval,
             "paused" => Self::Paused,
             "completed" => Self::Completed,
+            "unverified" => Self::Unverified,
             "cancelled" => Self::Cancelled,
             _ => Self::Failed,
         }
@@ -93,6 +100,12 @@ pub enum StepKind {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "agents.ts")]
 pub enum StepOutcome {
+    /// Durable intent saved before the tool starts; task ID + index identifies the operation.
+    InProgress,
+    /// Execution may have happened, but no durable result exists. Never replay automatically.
+    Unknown,
+    /// The verifier did not return a usable verdict.
+    Unverified,
     Succeeded,
     Failed,
     /// Refused by the policy or the user.

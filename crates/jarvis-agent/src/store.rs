@@ -1,5 +1,5 @@
 //! Tasks in the database: the whole task (plan and journal as JSON) is
-//! saved after every step, so a task survives a restart.
+//! saved before tool execution and after every step, so a task survives a restart.
 
 use jarvis_storage::rusqlite::{self, OptionalExtension, Row, params};
 use jarvis_storage::{Database, StorageError};
@@ -136,7 +136,7 @@ impl TaskStore {
             .db
             .call(|conn| {
                 Ok::<_, StorageError>(conn.execute(
-                    "DELETE FROM agent_tasks WHERE status IN ('completed', 'failed', 'cancelled')",
+                    "DELETE FROM agent_tasks WHERE status IN ('completed', 'unverified', 'failed', 'cancelled')",
                     [],
                 )?)
             })

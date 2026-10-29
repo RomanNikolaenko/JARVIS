@@ -19,6 +19,48 @@ use support::{MockServer, Reply, Request, unused_addr};
 
 const WORDS: [&str; 4] = ["Привіт", ", ", "JARVIS", "!"];
 
+#[tokio::test]
+async fn configured_native_tools_apply_only_to_exact_chat_model_ids() {
+    let server = MockServer::start(|_| {
+        Reply::Json(
+            200,
+            json!({"data":[
+                {"id":"chat-a"}, {"id":"chat-a-extra"}, {"id":"bge-embed"}
+            ]}),
+        )
+    })
+    .await;
+    let config = ProviderConfig {
+        id: ProviderId::new("native-test"),
+        backend: ProviderBackend::OpenAiCompatible,
+        display_name: "Native test".into(),
+        base_url: server.url("/v1"),
+        enabled: true,
+        native_tool_models: vec!["chat-a".into(), "bge-embed".into()],
+    };
+    let factory = HttpProviderFactory::new();
+    let provider = factory.create(&config, None).unwrap();
+    let models = provider.list_models().await.unwrap();
+    assert!(models[0].capabilities.tool_calling);
+    assert!(!models[1].capabilities.tool_calling);
+    assert!(!models[2].capabilities.tool_calling);
+    assert!(models[2].capabilities.embeddings);
+    assert!(provider.capabilities("chat-a").await.unwrap().tool_calling);
+    let cleared = ProviderConfig {
+        native_tool_models: vec![],
+        ..config
+    };
+    assert!(
+        !factory
+            .create(&cleared, None)
+            .unwrap()
+            .capabilities("chat-a")
+            .await
+            .unwrap()
+            .tool_calling
+    );
+}
+
 #[derive(Debug, Clone, Default)]
 struct Scenario {
     /// Respond to chat requests with this status and an error body.
@@ -224,6 +266,7 @@ fn provider_at(backend: &Backend, base_url: String) -> Arc<dyn AiProvider> {
     HttpProviderFactory::new()
         .create(
             &ProviderConfig {
+                native_tool_models: vec![],
                 id: ProviderId::new("test"),
                 backend: backend.kind,
                 display_name: "Test".into(),
@@ -583,6 +626,7 @@ async fn cloud_providers_propagate_model_listing_and_health_errors() {
             let provider = HttpProviderFactory::new()
                 .create(
                     &ProviderConfig {
+                        native_tool_models: vec![],
                         id: ProviderId::new("cloud-test"),
                         backend,
                         display_name: "Cloud test".into(),
@@ -605,6 +649,7 @@ async fn cloud_providers_propagate_model_listing_and_health_errors() {
         let provider = HttpProviderFactory::new()
             .create(
                 &ProviderConfig {
+                    native_tool_models: vec![],
                     id: ProviderId::new("offline-test"),
                     backend,
                     display_name: "Offline".into(),

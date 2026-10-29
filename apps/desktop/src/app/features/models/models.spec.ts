@@ -1,4 +1,4 @@
-import type { ModelRouting } from '@jarvis/shared-types';
+import type { ModelRouting, Settings } from '@jarvis/shared-types';
 import { TestBed } from '@angular/core/testing';
 import { JarvisApi } from '../../core/ipc/jarvis-api';
 import { SettingsStore } from '../../core/state/settings.store';
@@ -33,6 +33,61 @@ describe('Models page helpers', () => {
 });
 
 describe('Provider credentials form', () => {
+  it('edits, persists and clears per-model native tool support', async () => {
+    const api = {
+      listAiModels: vi.fn(async () => []),
+      getModelRoutes: vi.fn(async () => []),
+      updateSettings: vi.fn(async (settings) => settings),
+      hasProviderApiKey: vi.fn(async () => false),
+    };
+    TestBed.configureTestingModule({ providers: [{ provide: JarvisApi, useValue: api }] });
+    const settings: Settings = structuredClone(SETTINGS);
+    settings.ai.providers[0] = { ...settings.ai.providers[0], backend: 'openAiCompatible', nativeToolModels: ['old-model'] };
+    const store = TestBed.inject(SettingsStore);
+    store.settings.set(settings);
+    const fixture = TestBed.createComponent(Models);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+    const click = async (label: string) => {
+      const button = [...element.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)!;
+      button.click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      await vi.waitFor(() => {
+        fixture.detectChanges();
+        expect(element.querySelector('fieldset')?.disabled ?? false).toBe(false);
+      });
+    };
+    await click('Edit');
+    const fill = (value: string) => {
+      const input = element.querySelector<HTMLTextAreaElement>('textarea[formControlName="nativeToolModels"]')!;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+    };
+    expect(element.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('old-model');
+    fill(' model-a\n\nmodel-a\nmodel-b ');
+    await click('Save');
+    expect(store.settings()!.ai.providers[0].nativeToolModels).toEqual(['model-a', 'model-b']);
+    await click('Edit');
+    fill('x'.repeat(257));
+    await click('Save');
+    expect(api.updateSettings).toHaveBeenCalledTimes(1);
+    fill('');
+    await click('Save');
+    expect(store.settings()!.ai.providers[0].nativeToolModels).toEqual([]);
+    await click('Edit');
+    fill('model-c');
+    const backend = element.querySelector<HTMLSelectElement>('select[formControlName="backend"]')!;
+    backend.value = 'ollama';
+    backend.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(element.querySelector('textarea[formControlName="nativeToolModels"]')).toBeNull();
+    await click('Save');
+    expect(store.settings()!.ai.providers[0].nativeToolModels).toEqual([]);
+  });
+
   it('keeps keys out of settings and retries a failed key save without duplicating the provider', async () => {
     const api = {
       listAiModels: vi.fn(async () => []),

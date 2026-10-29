@@ -100,6 +100,19 @@
                 [placeholder]="hasStoredKey() ? 'Leave blank to keep the saved key' : 'Optional for local servers'" />
               <span class="hint">Stored in your operating system's credential vault.</span>
             </label>
+            @if (form.controls.backend.value === 'openAiCompatible' || form.controls.backend.value === 'openAi') {
+              <label class="field wide">
+                <span class="field-label">Models with native tool support</span>
+                <textarea formControlName="nativeToolModels" rows="3" spellcheck="false"></textarea>
+                <span class="hint"
+                  >Enter exact model IDs, one per line, only for models your server supports with native tools. Other models keep
+                  the text protocol. Leave blank to use the text protocol for all models.</span
+                >
+                @if (form.controls.nativeToolModels.invalid) {
+                  <span class="field-error">Use up to 128 model IDs, each at most 256 bytes, without control characters.</span>
+                }
+              </label>
+            }
             @if (hasStoredKey()) {
               <button type="button" class="danger small" (click)="deleteKey()">Delete saved API key</button>
             }

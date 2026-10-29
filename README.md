@@ -88,8 +88,8 @@ Prerequisites: Rust (stable, ≥ 1.90), Node.js 24 LTS (or 22.22+), and the
 
 ```bash
 cd apps/desktop
-npm ci
-npm run tauri dev
+pnpm install --frozen-lockfile
+pnpm run tauri dev
 ```
 
 To chat with a real model, either open **Runtime** in JARVIS, install the
@@ -133,7 +133,7 @@ JARVIS is licensed under either of
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), or
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
-at your option. The licenses of the Rust crates and npm packages it ships
+at your option. The licenses of the Rust crates and Node.js packages it ships
 are in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt), which the
 installers include.
 

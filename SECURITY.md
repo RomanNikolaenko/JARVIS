@@ -75,7 +75,7 @@ without sending conversation content, including when cloud chat is disabled.
 
 The latest review: [docs/security-review-2026-10.md](docs/security-review-2026-10.md).
 
-Dependency advisory checks (`cargo audit` and production `npm audit`) run in CI.
+Dependency advisory checks (`cargo audit` and `pnpm audit --prod`) run in CI.
 
 ## Planned controls (not implemented yet)
 
@@ -94,6 +94,10 @@ anything that changes data.
 
 ## Reporting a vulnerability
 
-Please do not open public issues for security problems. Contact the
-maintainers privately (a dedicated address will be published before the first
-release) with steps to reproduce and the affected version.
+Please do not open public issues for security problems. Report them
+privately through GitHub: the repository's **Security** tab → **Report a
+vulnerability**
+(<https://github.com/RomanNikolaenko/JARVIS/security/advisories/new>), with
+steps to reproduce and the affected version (Settings → Updates shows it).
+Only the maintainers see the report; a fix is released before the advisory
+is published.

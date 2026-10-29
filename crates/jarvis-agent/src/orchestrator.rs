@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use jarvis_ai::ChatMessage;
@@ -19,6 +19,7 @@ use jarvis_security::{
 };
 use jarvis_tools::{ProcessRegistry, ToolContext, ToolLimits, ToolRegistry};
 use tokio::sync::{broadcast, watch};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -50,6 +51,18 @@ pub trait AgentModel: Send + Sync {
     /// room for the answer).
     fn context_chars(&self) -> usize;
     async fn complete(&self, messages: Vec<ChatMessage>) -> Result<String>;
+
+    fn supports_native_tools(&self) -> bool {
+        false
+    }
+
+    async fn complete_tools(
+        &self,
+        _messages: Vec<jarvis_ai::ToolMessage>,
+        _tools: Vec<jarvis_ai::ToolDefinition>,
+    ) -> Result<jarvis_ai::ToolChatResponse> {
+        Err(AgentError::Model("native tools are unavailable".into()))
+    }
 }
 
 /// Settings read before every step, so changes apply to running tasks.
@@ -88,6 +101,10 @@ struct Control {
 
 pub struct AgentManager {
     env: AgentEnvironment,
+    /// Serialize read/modify/save lifecycle transitions across await points.
+    transitions: tokio::sync::Mutex<()>,
+    /// Failed checkpoints remain visible even while the database rejects writes.
+    unsaved: Mutex<HashMap<Uuid, AgentTask>>,
     running: Mutex<HashMap<Uuid, Control>>,
     updates: broadcast::Sender<AgentTask>,
     /// Cancelled on shutdown: running tasks pause instead of failing.
@@ -122,6 +139,8 @@ impl AgentManager {
     pub fn new(env: AgentEnvironment) -> Arc<Self> {
         Arc::new(Self {
             env,
+            transitions: tokio::sync::Mutex::new(()),
+            unsaved: Mutex::default(),
             running: Mutex::default(),
             updates: broadcast::channel(64).0,
             shutdown: CancellationToken::new(),
@@ -132,18 +151,47 @@ impl AgentManager {
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn unsaved(&self) -> MutexGuard<'_, HashMap<Uuid, AgentTask>> {
+        self.unsaved.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Every change of a task (status, new step).
     pub fn subscribe(&self) -> broadcast::Receiver<AgentTask> {
         self.updates.subscribe()
     }
 
-    /// Marks tasks that were running when JARVIS stopped as paused.
+    /// Pauses interrupted tasks, or fails them when a tool has no durable result.
     pub async fn recover(&self) -> Result<usize> {
-        let unfinished = self.env.store.unfinished().await?;
+        let _transition = self.transitions.lock().await;
+        if !self.running().is_empty() {
+            return Err(AgentError::Invalid(
+                "cannot recover tasks while agents are running".into(),
+            ));
+        }
+        let unfinished: Vec<_> = self
+            .env
+            .store
+            .unfinished()
+            .await?
+            .into_iter()
+            .filter(|task| !self.unsaved().contains_key(&task.id))
+            .collect();
         for mut task in unfinished.iter().cloned() {
             task.status = TaskStatus::Paused;
             task.error =
                 Some("JARVIS was closed while the task ran; resume it to continue".to_owned());
+            for step in &mut task.steps {
+                if step.outcome == StepOutcome::InProgress {
+                    step.outcome = StepOutcome::Unknown;
+                    step.output = Some(format!(
+                        "Operation {}:{} has no durable result. It may have completed or partly happened. Check its effects manually before starting a new task; this task cannot be resumed.",
+                        task.id, step.index
+                    ));
+                    task.error = step.output.clone();
+                    task.status = TaskStatus::Failed;
+                    task.finished_at_ms = Some(now_ms());
+                }
+            }
             task.updated_at_ms = now_ms();
             self.env.store.save(&task).await?;
         }
@@ -184,13 +232,23 @@ impl AgentManager {
             updated_at_ms: now,
             finished_at_ms: None,
         };
+        let _transition = self.transitions.lock().await;
         self.launch(task.clone(), model).await?;
         Ok(task)
     }
 
     async fn launch(self: &Arc<Self>, task: AgentTask, model: Arc<dyn AgentModel>) -> Result<()> {
+        // Caller holds transitions across any read that selected this task.
+        if self.shutdown.is_cancelled() {
+            return Err(AgentError::Invalid(
+                "the agent manager is shutting down".into(),
+            ));
+        }
         let control = {
             let mut running = self.running();
+            if running.contains_key(&task.id) {
+                return Err(AgentError::Invalid("the task is already running".into()));
+            }
             if running.len() >= self.env.max_concurrent {
                 return Err(AgentError::LimitExceeded(format!(
                     "at most {} tasks can run at the same time",
@@ -205,25 +263,38 @@ impl AgentManager {
             running.insert(task.id, control);
             handles
         };
+        // Covers failed saves and dropped launch futures, then moves into
+        // the spawned run so panic/unwind also releases the reservation.
+        let reservation = RunningReservation {
+            manager: Arc::clone(self),
+            id: task.id,
+        };
         self.env.store.save(&task).await?;
         let _ = self.updates.send(task.clone());
         let manager = Arc::clone(self);
         tokio::spawn(async move {
-            let id = task.id;
+            let _reservation = reservation;
             let mut run = Run::new(Arc::clone(&manager), task, model, control.0, control.1);
             run.execute().await;
-            manager.running().remove(&id);
         });
         Ok(())
     }
 
     /// Stops a task. A paused task that is not running is marked cancelled.
     pub async fn cancel(&self, id: Uuid) -> Result<bool> {
+        // Active work must remain cancellable even while another lifecycle
+        // operation is waiting on storage. Recheck after locking for a run
+        // that may have started in the meantime.
         if let Some(control) = self.running().get(&id) {
             control.cancel.cancel();
             return Ok(true);
         }
-        let mut task = self.env.store.get(id).await?;
+        let _transition = self.transitions.lock().await;
+        if let Some(control) = self.running().get(&id) {
+            control.cancel.cancel();
+            return Ok(true);
+        }
+        let mut task = self.get(id).await?;
         if task.status.is_finished() {
             return Ok(false);
         }
@@ -244,11 +315,21 @@ impl AgentManager {
 
     /// Continues a paused task (also one interrupted by a restart).
     pub async fn resume(self: &Arc<Self>, id: Uuid, model: Arc<dyn AgentModel>) -> Result<()> {
+        let _transition = self.transitions.lock().await;
         if let Some(control) = self.running().get(&id) {
             control.pause.send_replace(false);
             return Ok(());
         }
-        let mut task = self.env.store.get(id).await?;
+        let mut task = self.get(id).await?;
+        if task
+            .steps
+            .iter()
+            .any(|step| matches!(step.outcome, StepOutcome::InProgress | StepOutcome::Unknown))
+        {
+            return Err(AgentError::Invalid(
+                "An action has an unknown result. Check its effects manually before starting a new task; it cannot be resumed.".into(),
+            ));
+        }
         if task.status != TaskStatus::Paused {
             return Err(AgentError::Invalid(
                 "only paused tasks can be resumed".to_owned(),
@@ -261,14 +342,37 @@ impl AgentManager {
     }
 
     pub async fn get(&self, id: Uuid) -> Result<AgentTask> {
-        self.env.store.get(id).await
+        if let Some(task) = self.unsaved().get(&id).cloned() {
+            return Ok(task);
+        }
+        let saved = self.env.store.get(id).await;
+        // A checkpoint may have failed while this read was in flight.
+        self.unsaved().get(&id).cloned().map(Ok).unwrap_or(saved)
     }
 
     pub async fn list(&self, limit: u32) -> Result<Vec<TaskSummary>> {
-        self.env.store.list(limit).await
+        let mut tasks = self.env.store.list(limit).await?;
+        for task in self.unsaved().values() {
+            tasks.retain(|row| row.id != task.id);
+            tasks.push(TaskSummary::from(task));
+        }
+        tasks.sort_by_key(|task| std::cmp::Reverse(task.updated_at_ms));
+        tasks.truncate(limit.clamp(1, 500) as usize);
+        Ok(tasks)
     }
 
     pub async fn delete_finished(&self) -> Result<usize> {
+        let _transition = self.transitions.lock().await;
+        let unsaved: Vec<_> = self.unsaved().values().cloned().collect();
+        for task in unsaved {
+            if self.running().contains_key(&task.id) {
+                continue;
+            }
+            // Persist the terminal snapshot before clearing it. If storage
+            // still fails, retain it and return the error to the caller.
+            self.env.store.save(&task).await?;
+            self.unsaved().remove(&task.id);
+        }
         self.env.store.delete_finished().await
     }
 
@@ -289,11 +393,24 @@ impl AgentManager {
     }
 }
 
+struct RunningReservation {
+    manager: Arc<AgentManager>,
+    id: Uuid,
+}
+
+impl Drop for RunningReservation {
+    fn drop(&mut self) {
+        self.manager.running().remove(&self.id);
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 enum Stop {
     Cancelled,
     Shutdown,
+    TimedOut,
+    PersistenceFailed,
 }
 
 struct Run {
@@ -305,6 +422,7 @@ struct Run {
     /// Model replies and the observations that answered them.
     history: Vec<(String, String)>,
     started: Instant,
+    persistence_error: Option<String>,
 }
 
 impl Run {
@@ -324,6 +442,7 @@ impl Run {
             pause,
             history,
             started: Instant::now(),
+            persistence_error: None,
         }
     }
 
@@ -333,10 +452,30 @@ impl Run {
 
     async fn checkpoint(&mut self) {
         self.task.updated_at_ms = now_ms();
+        self.apply_persistence_failure();
         if let Err(err) = self.env().store.save(&self.task).await {
             tracing::warn!("cannot save agent task {}: {err}", self.task.id);
+            self.persistence_error
+                .get_or_insert_with(|| format!("Cannot save the task journal: {err}"));
+            self.apply_persistence_failure();
+            self.manager
+                .unsaved()
+                .insert(self.task.id, self.task.clone());
+        } else {
+            self.manager.unsaved().remove(&self.task.id);
         }
         let _ = self.manager.updates.send(self.task.clone());
+    }
+
+    fn apply_persistence_failure(&mut self) {
+        if let Some(error) = &self.persistence_error {
+            self.task.status = TaskStatus::Failed;
+            self.task.result = None;
+            self.task.error = Some(format!(
+                "{error}. The task stopped; completed or partial actions must be checked before retrying."
+            ));
+            self.task.finished_at_ms = Some(now_ms());
+        }
     }
 
     fn push_step(&mut self, mut step: TaskStep) {
@@ -371,17 +510,39 @@ impl Run {
     }
 
     fn stop_requested(&self) -> Option<Stop> {
-        if self.cancel.is_cancelled() {
+        if self.persistence_error.is_some() {
+            Some(Stop::PersistenceFailed)
+        } else if self.cancel.is_cancelled() {
             Some(Stop::Cancelled)
         } else if self.manager.shutdown.is_cancelled() {
             Some(Stop::Shutdown)
+        } else if Instant::now() >= self.deadline() {
+            Some(Stop::TimedOut)
         } else {
             None
         }
     }
 
+    fn deadline(&self) -> Instant {
+        self.started + Duration::from_secs(u64::from(self.task.limits.max_duration_secs))
+    }
+
     async fn stopped(&mut self, stop: Stop) {
         match stop {
+            Stop::PersistenceFailed => {
+                self.finish(TaskStatus::Failed, None, None).await;
+            }
+            Stop::TimedOut => {
+                self.finish(
+                    TaskStatus::Failed,
+                    None,
+                    Some(format!(
+                        "The time limit ({} s) was reached",
+                        self.task.limits.max_duration_secs
+                    )),
+                )
+                .await;
+            }
             Stop::Cancelled => {
                 self.note("Cancelled by the user");
                 self.finish(TaskStatus::Cancelled, None, None).await;
@@ -408,8 +569,6 @@ impl Run {
             }
         }
 
-        let deadline =
-            self.started + Duration::from_secs(u64::from(self.task.limits.max_duration_secs));
         let (mut model_errors, mut invalid, mut failed_actions, mut verifications) = (0, 0, 0, 0);
         loop {
             if let Some(stop) = self.stop_requested() {
@@ -437,19 +596,8 @@ impl Run {
                     )
                     .await;
             }
-            if Instant::now() >= deadline {
-                let secs = self.task.limits.max_duration_secs;
-                return self
-                    .finish(
-                        TaskStatus::Failed,
-                        None,
-                        Some(format!("The time limit ({secs} s) was reached")),
-                    )
-                    .await;
-            }
-
             let started = Instant::now();
-            let reply = match self.ask(self.messages()).await {
+            let reply = match self.ask_action().await {
                 Ok(reply) => {
                     model_errors = 0;
                     reply
@@ -503,15 +651,29 @@ impl Run {
                         duration_ms: started.elapsed().as_millis() as u64,
                     });
                     self.checkpoint().await;
-                    if verifications >= MAX_VERIFICATION_ROUNDS {
-                        return self.finish(TaskStatus::Completed, Some(answer), None).await;
-                    }
                     verifications += 1;
                     match self.verify(&answer).await {
                         Ok(None) => {
+                            if self
+                                .task
+                                .steps
+                                .last()
+                                .is_some_and(|step| step.outcome == StepOutcome::Unverified)
+                            {
+                                return self.finish(TaskStatus::Unverified, Some(answer), Some("The answer could not be verified. Review it before relying on it.".into())).await;
+                            }
                             return self.finish(TaskStatus::Completed, Some(answer), None).await;
                         }
                         Ok(Some(feedback)) => {
+                            if verifications > MAX_VERIFICATION_ROUNDS {
+                                return self
+                                    .finish(
+                                        TaskStatus::Failed,
+                                        Some(answer),
+                                        Some(format!("Answer verification failed: {feedback}")),
+                                    )
+                                    .await;
+                            }
                             let reply = serde_json::json!({"thought": thought, "final": answer})
                                 .to_string();
                             self.history.push((
@@ -531,7 +693,8 @@ impl Run {
                     let reply =
                         serde_json::json!({"thought": thought, "tool": tool, "input": input})
                             .to_string();
-                    let (step, stop) = self.act(thought, &tool, &input, started).await;
+                    let action_index = self.task.steps.len();
+                    let (mut step, stop) = self.act(thought, &tool, &input, started).await;
                     let status = match step.outcome {
                         StepOutcome::Succeeded => "ok",
                         StepOutcome::Denied => "denied",
@@ -547,7 +710,12 @@ impl Run {
                     } else {
                         failed_actions += 1;
                     }
-                    self.push_step(step);
+                    if self.task.steps.len() > action_index {
+                        step.index = action_index as u32;
+                        self.task.steps[action_index] = step;
+                    } else {
+                        self.push_step(step);
+                    }
                     self.history.push((reply, observed));
                     self.checkpoint().await;
                     // The interrupted action stays in the journal, so a
@@ -639,13 +807,14 @@ impl Run {
             Err(Err(stop)) => return Err(stop),
         };
         let (outcome, output, feedback) = match verdict {
-            Some((true, _)) | None => (
+            Some((true, _)) => (
                 StepOutcome::Succeeded,
-                if verdict.is_some() {
-                    "The answer was checked".to_owned()
-                } else {
-                    "The answer could not be checked".to_owned()
-                },
+                "The answer was checked".to_owned(),
+                None,
+            ),
+            None => (
+                StepOutcome::Unverified,
+                "The answer could not be checked".to_owned(),
                 None,
             ),
             Some((false, feedback)) => {
@@ -689,7 +858,7 @@ impl Run {
             kind: StepKind::Action,
             thought,
             tool: Some(tool_name.to_owned()),
-            input: Some(clip(&input.to_string(), MAX_STEP_TEXT)),
+            input: Some(input.to_string()),
             summary: None,
             decision: None,
             outcome: StepOutcome::Failed,
@@ -713,13 +882,17 @@ impl Run {
             settings.tool_limits,
             Arc::clone(&self.env().processes),
         );
-        // Cancelled by the user's cancel and by shutdown.
+        // Cancelled by the user, shutdown or the overall task deadline.
         ctx.cancel = self.cancel.child_token();
         let _shutdown_guard = {
             let shutdown = self.manager.shutdown.clone();
             let token = ctx.cancel.clone();
+            let deadline = self.deadline();
             AbortOnDrop(tokio::spawn(async move {
-                shutdown.cancelled().await;
+                tokio::select! {
+                    () = shutdown.cancelled() => {},
+                    () = tokio::time::sleep_until(deadline) => {},
+                }
                 token.cancel();
             }))
         };
@@ -767,6 +940,16 @@ impl Run {
             PolicyDecision::RequireApproval { reason } => {
                 self.task.status = TaskStatus::WaitingForApproval;
                 self.checkpoint().await;
+                if let Some(stop) = self.stop_requested() {
+                    return (
+                        finish(
+                            step,
+                            StepOutcome::Denied,
+                            "Not run: the task stopped before approval".into(),
+                        ),
+                        Some(stop),
+                    );
+                }
                 let request = ApprovalRequest {
                     task_id: Some(self.task.id),
                     tool: action.tool.clone(),
@@ -788,6 +971,11 @@ impl Run {
                     ApprovalOutcome::Approved => (AuditEvent::Approved, "approved by you"),
                     ApprovalOutcome::Denied => (AuditEvent::Denied, "denied by you"),
                     ApprovalOutcome::TimedOut => (AuditEvent::TimedOut, "not approved in time"),
+                    ApprovalOutcome::Cancelled
+                        if matches!(self.stop_requested(), Some(Stop::TimedOut)) =>
+                    {
+                        (AuditEvent::TimedOut, "task time limit reached")
+                    }
                     ApprovalOutcome::Cancelled => (AuditEvent::Cancelled, "cancelled"),
                 };
                 self.record(audit(event, reason)).await;
@@ -820,7 +1008,46 @@ impl Run {
             }
         }
 
-        let result = tokio::time::timeout(TOOL_RUN_TIMEOUT, tool.run(&prepared, &ctx)).await;
+        // A late approval must never start work after cancellation or expiry.
+        if let Some(stop) = self.stop_requested() {
+            self.record(audit(
+                if matches!(&stop, Stop::TimedOut) {
+                    AuditEvent::TimedOut
+                } else {
+                    AuditEvent::Cancelled
+                },
+                "stopped before execution".into(),
+            ))
+            .await;
+            return (
+                finish(
+                    step,
+                    StepOutcome::Denied,
+                    "Not run: the task was stopped before execution".into(),
+                ),
+                Some(stop),
+            );
+        }
+        // Save authorization and intent before any tool effects. The stable
+        // operation identity is (task.id, step.index); replace this entry when
+        // the outcome is known instead of appending a second action.
+        step.index = self.task.steps.len() as u32;
+        step.outcome = StepOutcome::InProgress;
+        step.output = Some("Execution intent saved; no result recorded yet".into());
+        self.push_step(step.clone());
+        self.checkpoint().await;
+        if let Some(stop) = self.stop_requested() {
+            return (
+                finish(
+                    step,
+                    StepOutcome::Denied,
+                    "Not run: the task stopped before execution".into(),
+                ),
+                Some(stop),
+            );
+        }
+        let deadline = self.deadline().min(Instant::now() + TOOL_RUN_TIMEOUT);
+        let result = tokio::time::timeout_at(deadline, tool.run(&prepared, &ctx)).await;
         match result {
             Ok(Ok(output)) => {
                 self.record(audit(AuditEvent::Succeeded, output.summary.clone()))
@@ -845,31 +1072,68 @@ impl Run {
                 (finish(step, StepOutcome::Failed, err.to_string()), None)
             }
             Err(_) => {
+                ctx.cancel.cancel();
                 self.record(audit(AuditEvent::Failed, "timed out".to_owned()))
                     .await;
-                let output = "The tool did not finish in time".to_owned();
-                (finish(step, StepOutcome::Failed, output), None)
+                let output =
+                    "The tool did not finish in time; it may have partly happened".to_owned();
+                (
+                    finish(step, StepOutcome::Failed, output),
+                    self.stop_requested(),
+                )
             }
         }
     }
 
-    async fn record(&self, entry: NewAuditEntry) {
+    async fn record(&mut self, entry: NewAuditEntry) {
         if let Some(audit) = &self.env().audit
             && let Err(err) = audit.record(entry).await
         {
             tracing::warn!("cannot write the audit log: {err}");
+            self.persistence_error
+                .get_or_insert_with(|| format!("Cannot write the audit log: {err}"));
         }
     }
 
     /// `Err(Ok(error))`: the model failed; `Err(Err(stop))`: the task stopped.
+    async fn ask_action(
+        &self,
+    ) -> std::result::Result<String, std::result::Result<AgentError, Stop>> {
+        if let Some(stop) = self.stop_requested() {
+            return Err(Err(stop));
+        }
+        if !self.model.supports_native_tools() {
+            return self.ask(self.messages()).await;
+        }
+        let specs = self.enabled_specs();
+        let settings = (self.env().settings)();
+        let turn = crate::native_protocol::NativeTurn::new(&specs);
+        let system = protocol::native_system_prompt(&turn.specs, settings.policy.scope().roots());
+        let messages = turn.messages(self.messages_with_system(system, turn.schema_chars()));
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => Err(Err(Stop::Cancelled)),
+            () = self.manager.shutdown.cancelled() => Err(Err(Stop::Shutdown)),
+            () = tokio::time::sleep_until(self.deadline()) => Err(Err(Stop::TimedOut)),
+            reply = self.model.complete_tools(messages, turn.definitions()) => {
+                reply.map(|response| turn.normalize(response)).map_err(Ok)
+            },
+        }
+    }
+
     async fn ask(
         &self,
         messages: Vec<ChatMessage>,
     ) -> std::result::Result<String, std::result::Result<AgentError, Stop>> {
+        if let Some(stop) = self.stop_requested() {
+            return Err(Err(stop));
+        }
         tokio::select! {
-            reply = self.model.complete(messages) => reply.map_err(Ok),
+            biased;
             () = self.cancel.cancelled() => Err(Err(Stop::Cancelled)),
             () = self.manager.shutdown.cancelled() => Err(Err(Stop::Shutdown)),
+            () = tokio::time::sleep_until(self.deadline()) => Err(Err(Stop::TimedOut)),
+            reply = self.model.complete(messages) => reply.map_err(Ok),
         }
     }
 
@@ -878,14 +1142,19 @@ impl Run {
         self.note("Paused by the user");
         self.checkpoint().await;
         while *self.pause.borrow() {
+            if let Some(stop) = self.stop_requested() {
+                return Err(stop);
+            }
             tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => return Err(Stop::Cancelled),
+                () = self.manager.shutdown.cancelled() => return Err(Stop::Shutdown),
+                () = tokio::time::sleep_until(self.deadline()) => return Err(Stop::TimedOut),
                 changed = self.pause.changed() => {
                     if changed.is_err() {
                         break;
                     }
                 }
-                () = self.cancel.cancelled() => return Err(Stop::Cancelled),
-                () = self.manager.shutdown.cancelled() => return Err(Stop::Shutdown),
             }
         }
         self.task.status = TaskStatus::Running;
@@ -910,9 +1179,13 @@ impl Run {
         let settings = (self.env().settings)();
         let system =
             protocol::system_prompt(&self.enabled_specs(), settings.policy.scope().roots());
+        self.messages_with_system(system, 0)
+    }
+
+    fn messages_with_system(&self, system: String, schema_chars: usize) -> Vec<ChatMessage> {
         let goal = protocol::goal_message(&self.task.goal, &self.task.plan);
         let budget = self.model.context_chars();
-        let mut used = system.len() + goal.len();
+        let mut used = system.len() + goal.len() + schema_chars;
         let mut kept = Vec::new();
         for (reply, observation) in self.history.iter().rev() {
             let size = reply.len() + observation.len();

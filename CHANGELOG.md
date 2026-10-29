@@ -2,6 +2,77 @@
 
 All notable changes to JARVIS. Versions follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+
+- Agent tools now persist an authorized execution intent before running, using
+  the task ID and journal index as the operation identity. Recovery marks an
+  unfinished intent as an unknown result and stops the task; users must inspect
+  its effects before starting new work. SQLite now uses FULL synchronization
+  so acknowledged journal commits survive power loss on supported storage.
+- Invalid or unavailable answer verification produces an explicit `unverified`
+  terminal status and UI warning, preserving the candidate answer. Corrected
+  answers are checked again; a second rejection fails the task. Schema migration
+  4 preserves existing tasks and audit history while adding the new status.
+- Journal or audit write failures now stop an agent before another action.
+  A failed approval checkpoint prevents execution even if the user approved.
+  Unsaved terminal snapshots remain visible through task reads and listings;
+  recovery cannot resume their stale database rows in the same session.
+  Clearing finished tasks retains these snapshots if storage still rejects
+  writes. This in-memory fallback does not survive application exit.
+- Failed or cancelled initial task saves no longer leak agent concurrency
+  slots. Lifecycle transitions serialize resume/cancel persistence, concurrent
+  resumes cannot launch duplicate runs, and shutdown rejects new launches.
+  A reservation guard also releases slots when a run unwinds.
+- The agent's wall-clock deadline now interrupts planning, text/native model
+  generation, verification, pauses, pending approvals and running tools.
+  Previously it was checked only between steps. Expired approvals are withdrawn,
+  late approvals cannot start a tool, and interrupted actions retain their
+  journal/audit record with a warning that they may have partly happened.
+
+### Added
+
+- Core-level native tool regression tests now exercise both Ollama and
+  OpenAI-compatible HTTP adapters with persisted settings and real scoped file
+  tools: approval/denial, HTTP and approval cancellation, late approval,
+  invalid calls, verifier failure and completed-journal recovery. These use
+  scripted local servers; live model and desktop end-to-end validation remain
+  separate checks.
+- The embedded llama.cpp runtime can opt individual chat models into native
+  agent tools. Select models under Runtime → Inference settings, save and
+  restart the chat server. Selected models launch with `--jinja` and advertise
+  tool calling; other chat models retain the text protocol, and embeddings
+  never advertise tools. The runtime panel shows the active mode.
+- A local-only `native-agent-probe` diagnostic exercises the real agent and
+  HTTP provider pipeline with a temporary read-only fixture, deadlines, journal
+  and audit checks. Scripted HTTP tests cover Ollama/OpenAI-compatible protocols
+  and reject answers that skip the tool. Usage is documented in
+  `docs/NATIVE-TOOLS-VALIDATION.md`.
+- The provider editor accepts exact model IDs with native tool support for
+  OpenAI-compatible endpoints. Overrides are validated, persisted and applied
+  after saving; other models retain conservative capability detection. Old
+  configurations default to an empty override list.
+- Native non-streaming tool transport for Ollama and OpenAI-compatible
+  providers, including tool schemas, calls and result history. Responses are
+  size-bounded and malformed or truncated calls are rejected.
+- Agents select native tool calling when both the model and provider adapter
+  support it, retaining the text protocol otherwise. Native actions pass
+  through existing policy, approvals and audit; journal recovery rebuilds
+  call/result pairs without replaying actions. Plugin names use request-local
+  aliases, and multiple or unadvertised calls are rejected before execution.
+
+### Changed
+
+- Centralized observation of an owned process's root exit in the platform
+  layer. MCP servers retain ownership of descendants until cleanup, including
+  when the root process exits first.
+
+### Tests
+
+- Added process-tree regression tests for live-root disposal and root exit
+  with surviving descendants, plus subscription deadline/disposal tests.
+
 ## [0.1.1] — 2026-10-25
 
 ### Changed

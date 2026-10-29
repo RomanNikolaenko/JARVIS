@@ -40,10 +40,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "episode_cursor",
         sql: include_str!("../migrations/0003_episode_cursor.sql"),
     },
+    Migration {
+        version: 4,
+        name: "agent_verification",
+        sql: include_str!("../migrations/0004_agent_verification.sql"),
+    },
 ];
 
 /// Schema version this build creates.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// What happened while opening a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +211,53 @@ mod tests {
     }
 
     #[test]
+    fn agent_verification_upgrade_preserves_tasks_and_audit() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        migrate(&mut conn, None, &MIGRATIONS[..3]).expect("version 3");
+        conn.execute_batch(
+            "INSERT INTO agent_tasks VALUES ('task', 'goal', 'completed', NULL, NULL,
+                '{}', '[]', '[{\"outcome\":\"succeeded\"}]', 'answer', NULL, 1, 2, 3);
+             INSERT INTO audit_log (uid, occurred_at, task_id, tool, action, risk, event, detail, prev_hash, hash)
+                VALUES ('audit', 1, 'task', 'read_file', 'read', 'low', 'succeeded', '', '', 'hash');"
+        ).expect("existing data");
+        let before: (String, String) = conn
+            .query_row("SELECT steps, result FROM agent_tasks", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .expect("old task");
+        assert_eq!(
+            migrate(&mut conn, None, MIGRATIONS)
+                .expect("upgrade")
+                .applied,
+            vec![4]
+        );
+        let after: (String, String) = conn
+            .query_row("SELECT steps, result FROM agent_tasks", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .expect("preserved task");
+        assert_eq!(before, after);
+        let hash: String = conn
+            .query_row("SELECT hash FROM audit_log", [], |row| row.get(0))
+            .expect("audit");
+        assert_eq!(hash, "hash");
+        conn.execute("UPDATE agent_tasks SET status = 'unverified'", [])
+            .expect("new status");
+        assert!(
+            conn.execute("UPDATE agent_tasks SET status = 'invalid'", [])
+                .is_err()
+        );
+        let indexes: u32 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'agent_tasks_by_update'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("index");
+        assert_eq!(indexes, 1);
+    }
+
+    #[test]
     fn episode_cursor_upgrade_preserves_existing_history_and_creates_index() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("history.db");
@@ -216,7 +268,7 @@ mod tests {
             ["00000000-0000-0000-0000-000000000001"],
         ).expect("old history");
         let report = migrate(&mut conn, Some(&path), MIGRATIONS).expect("upgrade");
-        assert_eq!(report.applied, vec![3]);
+        assert_eq!(report.applied, vec![3, 4]);
         assert!(report.backup.is_some());
         let summary: String = conn
             .query_row("SELECT summary FROM episodes", [], |row| row.get(0))

@@ -136,6 +136,7 @@ async fn main() -> ExitCode {
         }
     };
     let config = ProviderConfig {
+        native_tool_models: vec![],
         id: ProviderId::new("probe"),
         backend,
         display_name: "Probe".to_owned(),

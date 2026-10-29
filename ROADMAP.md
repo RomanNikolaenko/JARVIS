@@ -95,7 +95,8 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   audit log with integrity check, approval dialog on every screen
 - ✅ Cloud models for agents behind a separate permission
 - ⬜ Process isolation for programs (AppContainer / bubblewrap / Landlock)
-- ⬜ Native tool calling for providers that support it
+- ✅ Native tool calling when the model and provider adapter report support;
+  text fallback for unknown capabilities (live model validation pending)
 - ✅ Tools from MCP servers and plugins (Phase 7)
 - ✅ Agents started from chat: composer action uses the selected model and
   opens the saved task journal; conversation history is not sent
@@ -152,10 +153,10 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ Tool list changes of modern servers through `subscriptions/listen`
   (checked with `server-everything`'s `trigger-list-changed`)
 - ⬜ HTTP (remote) MCP servers, resources and prompts
-- ✅ Stopping a plugin stops what its server started: process group with
-  `SIGTERM` → `SIGKILL` on Unix, process tree of a stuck server on Windows
-- ⬜ Sandboxed plugin processes; job objects on Windows (programs left
-  behind by a server that exited on its own)
+- ✅ Owned plugin and tool processes: Windows Job Objects and Unix process
+  groups terminate descendants on stop or disposal, including after root exit.
+  Regression tests exercise both live roots and descendants of exited roots.
+- ⬜ Sandboxed plugin processes (filesystem/network access restrictions)
 - ✅ Interoperability with the official reference servers
   (`@modelcontextprotocol/server-everything` and `server-filesystem` 2.0.1,
   protocol 2026-07-28): tools listed and called, images and resource links
@@ -168,7 +169,7 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ Security review ([docs/security-review-2026-10.md](docs/security-review-2026-10.md)):
   IPC surface, CSP and rendering of model output, downloads, secrets, plugin
   event log fixed (no command arguments), development dependencies patched
-  (`npm audit`: 0)
+  (`pnpm audit --prod`: 0)
 - ✅ Installers: NSIS (current user, no administrator rights) and MSI on
   Windows; deb, rpm and AppImage on Linux (ALSA dependency declared)
 - ✅ Release workflow: installers on Windows and Ubuntu 22.04, release smoke
@@ -191,10 +192,10 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ⬜ Authenticode-signed Windows installers (needs a certificate)
 - ✅ RustSec scan: 6 advisories in the TLS stack fixed (`rustls` 0.23.46,
   `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11); `cargo audit` and
-  `npm audit` in CI on every push
+  `pnpm audit --prod` in CI on every push
 - ✅ License: MIT OR Apache-2.0; all dependencies are compatible (no GPL);
   `THIRD-PARTY-NOTICES.txt` with the licenses of the 447 shipped crates and
-  npm packages, in every installer, checked in CI
+  Node.js packages, in every installer, checked in CI
 - ✅ ARM64 builds (Windows 11 ARM and Linux) in CI and the Release workflow,
   with the release smoke test (CI green on all four desktop targets, run
   40177361213) and `aarch64` update feed entries
@@ -235,13 +236,30 @@ against protocol mocks only.
   finding the conversation
 - ⬜ LM Studio app itself; context window and tool support of
   OpenAI-compatible servers (no discovery API)
-- ⬜ Native tool calling for agents (Ollama and OpenAI-compatible tools APIs,
-  text protocol kept as the fallback)
+- ✅ Native tool transport for Ollama and OpenAI-compatible providers:
+  schemas, structured calls, result history, cancellation and bounded responses;
+  validated against scripted HTTP servers
+- ✅ Connect native tool transport to the agent's policy, journal and resume
+  flow; retain the text fallback (scripted model tests)
+- ✅ Configure exact chat model IDs with native tool support in the provider
+  editor for OpenAI-compatible servers; unlisted models retain the fallback
+- ✅ Opt individual embedded runtime chat models into native tools, launch
+  with Jinja and expose the active capability after restart; lifecycle tests
+  cover exact selection, disabling and embedding isolation
+- ⬜ Verify native agent turns with live models; OpenAI-compatible servers
+  with unknown tool capabilities still use the text fallback
+- ✅ Core HTTP integration contracts for both protocols: real file writes
+  behind approval, denial, cancellation, invalid calls, verifier failures and
+  persisted results after reopening the core (scripted servers)
+- ✅ Reproducible native agent probe with a temporary file and journal/audit
+  assertions; both HTTP protocols tested against scripted servers. See
+  [validation instructions](docs/NATIVE-TOOLS-VALIDATION.md). Standard local
+  endpoints were unavailable on 2026-10-28; no live model pass is claimed.
 
 ## Next iteration
 
-Phase 9: native tool calling for agents, checked live with Ollama and the
-llama.cpp server.
+Phase 9: live validation of native agent tool calling with Ollama and explicitly
+configured OpenAI-compatible models, including llama.cpp.
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
 voice, third-party MCP servers, the Linux Secret Service integration, cloud
 providers with real keys.

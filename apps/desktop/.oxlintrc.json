@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "plugins": ["eslint", "typescript", "oxc"],
+  "env": {
+    "browser": true,
+    "es2026": true
+  },
+  "ignorePatterns": [".angular/**", "coverage/**", "dist/**", "node_modules/**", "public/**", "src-tauri/**"],
+  "options": {
+    "maxWarnings": 0
+  },
+  "rules": {
+    "no-underscore-dangle": ["error", { "allow": ["__TAURI_INTERNALS__"] }]
+  },
+  "overrides": [
+    {
+      "files": ["e2e/**/*.mjs", "*.config.js", "*.config.mjs", "*.config.ts"],
+      "env": {
+        "browser": false,
+        "node": true
+      }
+    },
+    {
+      "files": ["**/*.spec.ts", "**/*.test.ts"],
+      "env": {
+        "vitest": true
+      }
+    }
+  ]
+}

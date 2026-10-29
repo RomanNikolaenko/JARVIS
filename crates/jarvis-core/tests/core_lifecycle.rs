@@ -407,6 +407,7 @@ async fn configured_providers_follow_settings() {
     let mut settings = test.core.settings();
     settings.ai.providers[1].enabled = false;
     settings.ai.providers.push(ProviderConfig {
+        native_tool_models: vec![],
         id: ProviderId::new("gpu-box"),
         backend: ProviderBackend::OpenAiCompatible,
         display_name: "GPU box".into(),
@@ -470,6 +471,7 @@ async fn provider_connection_test_reports_models_and_locality() {
     let result = test
         .core
         .test_provider(ProviderConfig {
+            native_tool_models: vec![],
             id: ProviderId::new("candidate"),
             backend: ProviderBackend::Ollama,
             display_name: "Candidate".into(),
@@ -485,6 +487,7 @@ async fn provider_connection_test_reports_models_and_locality() {
     let invalid = test
         .core
         .test_provider(ProviderConfig {
+            native_tool_models: vec![],
             id: ProviderId::new("candidate"),
             backend: ProviderBackend::Ollama,
             display_name: "Candidate".into(),
@@ -765,6 +768,7 @@ async fn unavailable_vault_keeps_local_servers_usable_and_reports_key_errors() {
     );
     let mut settings = core.settings();
     settings.ai.providers.push(ProviderConfig {
+        native_tool_models: vec![],
         id: ProviderId::new("cloud-test"),
         backend: ProviderBackend::Anthropic,
         display_name: "Cloud".into(),

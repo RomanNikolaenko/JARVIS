@@ -61,20 +61,23 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev libasound2-dev xvfb
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v3
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          working-directory: apps/desktop
+          runtime: node@24
+          cache: true
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+          install: false
       - name: Install frontend dependencies
         working-directory: apps/desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Build signed installers
         working-directory: apps/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri -- build --config src-tauri/tauri.release.conf.json
+        run: pnpm run tauri build --config src-tauri/tauri.release.conf.json
       # The runner is elevated, so WebView2 ignores the debugging port from
       # the environment; a machine policy sets it (docs/RELEASE.md).
       - name: WebView2 debugging port for the smoke test (runner only)

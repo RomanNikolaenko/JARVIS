@@ -107,6 +107,26 @@ export class Models {
   protected readonly confirmingRemoval = signal<string | null>(null);
 
   protected readonly form = new FormGroup({
+    nativeToolModels: new FormControl('', {
+      nonNullable: true,
+      validators: [
+        Validators.maxLength(32896),
+        (control) => {
+          const models = parseNativeToolModels(control.value as string);
+          return models.length > 128 ||
+            models.some(
+              (model) =>
+                new TextEncoder().encode(model).length > 256 ||
+                Array.from(model).some((character) => {
+                  const code = character.charCodeAt(0);
+                  return code < 32 || (code >= 127 && code <= 159);
+                })
+            )
+            ? { modelIds: true }
+            : null;
+        },
+      ],
+    }),
     apiKey: new FormControl('', { nonNullable: true, validators: [Validators.maxLength(8192)] }),
     displayName: new FormControl('', {
       nonNullable: true,
@@ -179,6 +199,7 @@ export class Models {
       displayName: config.displayName,
       backend: config.backend,
       baseUrl: config.baseUrl,
+      nativeToolModels: (config.nativeToolModels ?? []).join('\n'),
     });
     try {
       const present = await this.store.hasApiKey(config.id);
@@ -196,6 +217,9 @@ export class Models {
 
   protected onBackendChange(): void {
     const { backend, baseUrl } = this.form.getRawValue();
+    if (backend !== 'openAiCompatible' && backend !== 'openAi') {
+      this.form.controls.nativeToolModels.reset();
+    }
     // Swap the URL only if it is still one of the defaults.
     if (Object.values(DEFAULT_URLS).includes(baseUrl)) {
       this.form.controls.baseUrl.setValue(DEFAULT_URLS[backend]);
@@ -292,6 +316,8 @@ export class Models {
       displayName: value.displayName.trim(),
       baseUrl: value.baseUrl.trim(),
       enabled,
+      nativeToolModels:
+        value.backend === 'openAiCompatible' || value.backend === 'openAi' ? parseNativeToolModels(value.nativeToolModels) : [],
     };
   }
 
@@ -340,6 +366,17 @@ export class Models {
   protected discardRouting(): void {
     this.routingDraft.set(null);
   }
+}
+
+function parseNativeToolModels(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .split(/\r?\n/)
+        .map((model) => model.trim())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 /** Routing without explicit choices that point at `providerId`. */

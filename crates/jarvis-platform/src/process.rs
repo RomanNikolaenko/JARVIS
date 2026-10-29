@@ -29,6 +29,20 @@ pub struct OwnedProcess {
     child: Box<dyn process_wrap::tokio::ChildWrapper>,
 }
 
+impl OwnedProcess {
+    /// Observe the root's exit without waiting for descendants. Ownership of
+    /// the job/group remains here; dropping it then terminates survivors.
+    pub async fn wait_root(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        // spawn_owned installs exactly one child wrapper (job or group).
+        match (self.child.inner_mut() as &mut dyn std::any::Any)
+            .downcast_mut::<tokio::process::Child>()
+        {
+            Some(root) => root.wait().await,
+            None => Err(std::io::Error::other("missing native owned process")),
+        }
+    }
+}
+
 impl std::ops::Deref for OwnedProcess {
     type Target = dyn process_wrap::tokio::ChildWrapper;
     fn deref(&self) -> &Self::Target {

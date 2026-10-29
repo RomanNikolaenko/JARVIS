@@ -11,14 +11,11 @@
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace            # also regenerates packages/shared-types
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked   # also regenerates packages/shared-types
+cargo audit                       # install: cargo install cargo-audit --locked --version 0.22.2
 cd apps/desktop
-npm run format:check
-npm run lint
-npm run lint:styles
-npm run test:ci
-npm run build
+pnpm run quality                  # Oxfmt, Oxlint, angular-eslint, Stylelint, tests, build
 ```
 
 ## Rules
@@ -37,7 +34,7 @@ npm run build
 - **Dependencies:** add only what is needed, prefer well-maintained crates,
   check compatibility (MSRV 1.90, Angular/TypeScript peer ranges). Licenses
   must be compatible with MIT OR Apache-2.0 (no GPL in shipped code). After
-  changing `Cargo.lock` or the app's npm dependencies, regenerate the
+  changing `Cargo.lock` or the app's pnpm dependencies, regenerate the
   notices with `node .github/scripts/third-party-notices.mjs` (CI checks
   them).
 - **License:** contributions are dual licensed under MIT OR Apache-2.0

@@ -4,7 +4,7 @@
 //
 //   $env:TAURI_SIGNING_PRIVATE_KEY_PATH = "$HOME\.tauri\jarvis-updater.key"
 //   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<password>"
-//   cargo build -p jarvis-desktop --features tauri/custom-protocol   # after `npx ng build`
+//   cargo build -p jarvis-desktop --features tauri/custom-protocol   # after `pnpm run build`
 //   node e2e/update-test.mjs ../../target/debug/jarvis-desktop.exe
 //
 // A debug build is used because release builds accept only HTTPS feeds; the

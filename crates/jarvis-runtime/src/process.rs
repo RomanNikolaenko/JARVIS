@@ -37,6 +37,8 @@ pub struct LaunchPlan {
     pub embeddings: Option<EmbeddingOptions>,
     /// Vision projector (`--mmproj`) of a chat model.
     pub projector: Option<PathBuf>,
+    /// Opt-in native tools require llama.cpp's Jinja template engine.
+    pub native_tools: bool,
 }
 
 /// Options of an embedding server.
@@ -46,7 +48,8 @@ pub struct EmbeddingOptions {
 }
 
 /// Command-line arguments for `llama-server`. Only long-standing options are
-/// used, so older and newer builds accept them. The API key is not among
+/// used by default. Opt-in native tools require a build supporting `--jinja`.
+/// The API key is not among
 /// them: see [`apply_api_key`].
 pub fn server_args(plan: &LaunchPlan) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
@@ -72,6 +75,9 @@ pub fn server_args(plan: &LaunchPlan) -> Vec<OsString> {
         push("--batch-size", plan.context_size.to_string().into());
         push("--ubatch-size", plan.context_size.to_string().into());
         args.push("--embedding".into());
+    }
+    if plan.native_tools && plan.embeddings.is_none() {
+        args.push("--jinja".into());
     }
     args
 }
@@ -273,6 +279,7 @@ mod tests {
             api_key: "k".into(),
             embeddings: None,
             projector: None,
+            native_tools: false,
         }
     }
 
@@ -301,6 +308,18 @@ mod tests {
         assert_eq!(value("--alias").as_deref(), Some("q"));
         assert!(!args.iter().any(|a| a.contains("api-key") || a == "k"));
         assert!(!args.iter().any(|a| a == "--embedding" || a == "--pooling"));
+    }
+
+    #[test]
+    fn native_tools_enable_jinja_only_for_opted_in_chat_servers() {
+        assert!(!args(&plan()).contains(&"--jinja".into()));
+        let mut native = plan();
+        native.native_tools = true;
+        assert!(args(&native).contains(&"--jinja".into()));
+        native.embeddings = Some(EmbeddingOptions {
+            pooling: PoolingType::Cls,
+        });
+        assert!(!args(&native).contains(&"--jinja".into()));
     }
 
     #[test]

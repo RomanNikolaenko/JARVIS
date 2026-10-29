@@ -153,7 +153,9 @@ fn configure(connection: &Connection) -> Result<()> {
     connection.pragma_update(None, "secure_delete", true)?;
     let _mode: String =
         connection.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
-    connection.pragma_update(None, "synchronous", "NORMAL")?;
+    // Agent execution intents must reach durable storage before tools run,
+    // including across a power loss, not just a process crash.
+    connection.pragma_update(None, "synchronous", "FULL")?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
     let fts5: bool = connection.query_row(
         "SELECT sqlite_compileoption_used('ENABLE_FTS5')",
@@ -199,6 +201,18 @@ mod tests {
             .expect("pragmas");
         assert!(foreign_keys);
         assert_eq!(journal.to_ascii_lowercase(), "wal");
+        let synchronous: u32 = db
+            .call(|conn| {
+                Ok::<_, StorageError>(
+                    conn.pragma_query_value(None, "synchronous", |row| row.get(0))?,
+                )
+            })
+            .await
+            .expect("durability");
+        assert_eq!(
+            synchronous, 2,
+            "FULL sync protects execution intents across power loss"
+        );
         assert!(db.size_bytes().await > 0);
         drop(db);
 
