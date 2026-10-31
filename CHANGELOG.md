@@ -4,6 +4,12 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-31
+
+Your ChatGPT or Claude subscription as a model (through the Codex CLI or
+Claude Code), fixes for the Anthropic and OpenAI APIs, and more robust
+agents, model library and chat privacy checks.
+
 ### Fixed
 
 - Anthropic requests no longer fail on current models: JARVIS sends API version

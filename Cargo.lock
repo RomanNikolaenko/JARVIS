@@ -2294,7 +2294,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jarvis-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "jarvis-ai",
@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-ai"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2333,7 +2333,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -2365,7 +2365,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jarvis-ai",
  "jarvis-core",
@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-events"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2400,7 +2400,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-memory"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "jarvis-ai",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-platform"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "process-wrap",
  "serde",
@@ -2433,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-plugins"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-runtime"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "flate2",
  "futures",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-security"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jarvis-storage",
  "keyring",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-storage"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "rusqlite",
  "sha2",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-tools"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "jarvis-platform",
@@ -2532,7 +2532,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-vision"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ashpd",
  "async-trait",
@@ -2550,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "jarvis-voice"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "cpal",
