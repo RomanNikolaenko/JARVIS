@@ -25,7 +25,7 @@ leading to privileged IPC calls, secrets leaking into logs or files.
 | `freezePrototype` and no global Tauri object (`withGlobalTauri: false`). | `tauri.conf.json` |
 | UI has no file system, shell, HTTP or OS access; it only calls typed commands. No Tauri plugins with broad permissions are installed. | architecture |
 | Input validation and limits in the core (message count/size, temperature, timeouts, concurrency, UI error size and rate). | `jarvis-core` |
-| Privacy policy enforced in the core: cloud AI providers are blocked unless the user enables them; blocked attempts are logged as security events. | `jarvis-core::chat` |
+| Privacy policy enforced in the core: cloud AI providers are blocked unless the user enables them; discovery and each dispatch recheck current permissions against the actual provider handle. Images, saved facts/recalls and embedding batches also require their respective sharing permissions. Automatic summaries obey current cloud-chat permission. Blocked chat attempts are logged as security events. | `jarvis-core::chat`, `jarvis-core::memory`, `jarvis-core::routing` |
 | No `unsafe` code (`unsafe_code = "forbid"`), no `unwrap`/`expect` outside tests (clippy). | `Cargo.toml` |
 | Settings writes are atomic; invalid files are backed up, never silently overwritten. | `jarvis-core::config` |
 | AI servers are classified by URL: loopback = on device, private/LAN = local network, anything else = cloud (blocked unless allowed). Provider URLs with credentials, queries or non-HTTP schemes are rejected. | `jarvis-ai::config` |

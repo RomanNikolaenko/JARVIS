@@ -16,6 +16,9 @@ import { JarvisApi } from '../ipc/jarvis-api';
 import { withRequestDeadline } from '../ipc/request-deadline';
 import { SettingsStore } from './settings.store';
 
+export const MODEL_SUBSCRIPTION_TIMEOUT_MS = 30_000;
+export const MODEL_TEST_TIMEOUT_MS = 30_000;
+
 export interface ModelOption {
   readonly provider: ProviderDescriptor;
   readonly model: ModelInfo;
@@ -49,12 +52,88 @@ export class ModelsStore {
   private refreshing: Promise<void> | null = null;
   private readonly destroyRef = inject(DestroyRef);
   private refreshEpoch = 0;
+  private started = false;
+  private starting: Promise<void> | null = null;
+  private disconnect: (() => void) | null = null;
+  private readonly requestError = signal<IpcError | null>(null);
+  private readonly providerMutation = signal(false);
 
   readonly providers = signal<readonly ProviderModels[]>([]);
   readonly routes = signal<readonly RouteResolution[]>([]);
   readonly loading = signal(false);
   readonly loaded = signal(false);
-  readonly error = signal<IpcError | null>(null);
+  readonly subscriptionError = signal<IpcError | null>(null);
+  readonly error = computed(() => this.subscriptionError() ?? this.requestError());
+  readonly connecting = signal(false);
+  /** Provider settings, key writes and their catalog refresh share one guard. */
+  readonly providerMutationPending = this.providerMutation.asReadonly();
+
+  constructor() {
+    this.destroyRef.onDestroy(() => this.disconnect?.());
+  }
+
+  /** Listen globally before refreshing so autostart and missed changes reach every screen. */
+  start(): Promise<void> {
+    if (this.destroyRef.destroyed) return Promise.resolve();
+    if (this.starting) return this.starting;
+    if (this.started) return Promise.resolve();
+    this.connecting.set(true);
+    const attempt = this.subscribe().finally(() => {
+      if (this.starting === attempt) {
+        this.starting = null;
+        this.connecting.set(false);
+      }
+    });
+    this.starting = attempt;
+    return attempt;
+  }
+
+  connectionLost(error: IpcError): void {
+    if (this.destroyRef.destroyed) return;
+    this.disconnect?.();
+    this.disconnect = null;
+    this.started = false;
+    this.starting = null;
+    this.connecting.set(false);
+    this.subscriptionError.set(error);
+    ++this.refreshEpoch;
+    this.refreshing = null;
+    this.loading.set(false);
+  }
+
+  private async subscribe(): Promise<void> {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    const dispose = () => {
+      active = false;
+      unlisten?.();
+      unlisten = null;
+    };
+    this.disconnect = dispose;
+    try {
+      await withRequestDeadline(
+        () =>
+          this.api
+            .onModelsChanged(() => {
+              if (active && this.started) void this.refresh(true);
+            })
+            .then((cleanup) => {
+              if (!active) cleanup();
+              else unlisten = cleanup;
+            }),
+        MODEL_SUBSCRIPTION_TIMEOUT_MS,
+        'AI model subscription',
+        this.destroyRef
+      );
+      if (!active) return;
+      this.started = true;
+      this.subscriptionError.set(null);
+      await this.refresh(true);
+    } catch (error) {
+      if (active) this.subscriptionError.set(IpcError.from(error));
+      dispose();
+    }
+  }
 
   /** Configured providers (including disabled ones) from settings. */
   readonly configured = computed<readonly ProviderConfig[]>(() => this.settingsStore.settings()?.ai.providers ?? []);
@@ -79,23 +158,31 @@ export class ModelsStore {
     }
     this.loading.set(true);
     const epoch = ++this.refreshEpoch;
-    const current = () => !this.destroyRef.destroyed && epoch === this.refreshEpoch;
+    let active = true;
+    const current = () => active && !this.destroyRef.destroyed && epoch === this.refreshEpoch;
     const run = (async () => {
       try {
-        const [providers, routes] = await withRequestDeadline(
-          () => Promise.all([this.api.listAiModels(force), this.api.getModelRoutes()]),
+        const snapshot = await withRequestDeadline(
+          async () => {
+            const providers = await this.api.listAiModels(force);
+            if (!current()) return null;
+            // Routes must resolve against the catalog that was just refreshed.
+            const routes = await this.api.getModelRoutes();
+            return { providers, routes };
+          },
           30_000,
           'AI models and routes',
           this.destroyRef
         );
-        if (!current()) return;
-        this.providers.set(providers);
-        this.routes.set(routes);
-        this.error.set(null);
+        if (!current() || !snapshot) return;
+        this.providers.set(snapshot.providers);
+        this.routes.set(snapshot.routes);
+        this.requestError.set(null);
         this.loaded.set(true);
       } catch (error) {
-        if (current()) this.error.set(IpcError.from(error));
+        if (current()) this.requestError.set(IpcError.from(error));
       } finally {
+        active = false;
         if (epoch === this.refreshEpoch) {
           this.loading.set(false);
           this.refreshing = null;
@@ -111,7 +198,23 @@ export class ModelsStore {
   }
 
   testProvider(config: ProviderConfig, apiKey?: string): Promise<ProviderTestResult> {
-    return this.api.testAiProvider(config, apiKey);
+    return withRequestDeadline(
+      () => this.api.testAiProvider(config, apiKey),
+      MODEL_TEST_TIMEOUT_MS,
+      'AI provider connection test',
+      this.destroyRef
+    );
+  }
+
+  /** Keeps the complete provider workflow exclusive even if its page is reopened. */
+  async withProviderMutation(action: () => Promise<boolean>): Promise<boolean> {
+    if (this.destroyRef.destroyed || this.providerMutation() || this.settingsStore.saving()) return false;
+    this.providerMutation.set(true);
+    try {
+      return await action();
+    } finally {
+      this.providerMutation.set(false);
+    }
   }
 
   hasApiKey(providerId: string): Promise<boolean> {
@@ -155,11 +258,7 @@ export class ModelsStore {
     }
     const saved = await this.settingsStore.save({ ...settings, ai: { ...settings.ai, routing } });
     if (saved) {
-      try {
-        this.routes.set(await this.api.getModelRoutes());
-      } catch (error) {
-        this.error.set(IpcError.from(error));
-      }
+      await this.refresh(true);
     }
     return saved;
   }

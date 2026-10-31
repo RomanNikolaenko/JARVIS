@@ -199,8 +199,103 @@ describe('ChatStore', () => {
 
   it('defaults to automatic routing and flags diagnostic-only mode', () => {
     expect(store.selected()).toBeNull();
+    expect(store.selection()).toBeNull();
+    expect(store.selectionUnavailable()).toBe(false);
     expect(store.automaticRoute()?.model).toBe('echo');
     expect(store.diagnosticOnly()).toBe(true);
+  });
+
+  it('refuses a vanished explicit model without creating a conversation or adding messages', async () => {
+    store.select(store.modelOptions()[0]);
+    api.listAiModels.mockResolvedValueOnce([]);
+    await store.loadModels(true);
+    expect(store.selection()).toEqual({ providerId: 'diagnostic-echo', model: 'echo' });
+    expect(store.selected()).toBeNull();
+    expect(store.selectionUnavailable()).toBe(true);
+    expect(store.acceptsInput()).toBe(false);
+
+    await store.send('Do not reroute this message');
+
+    expect(api.created).toEqual([]);
+    expect(api.turns).toEqual([]);
+    expect(store.entries()).toEqual([]);
+    expect(store.conversation()).toBeNull();
+    expect(store.phase()).toBe('idle');
+    expect(store.error()).toMatchObject({ code: 'unavailable' });
+    expect(store.error()?.message).toContain('select Automatic');
+  });
+
+  it('uses the retained explicit choice when the same model becomes available again', async () => {
+    store.select(store.modelOptions()[0]);
+    api.listAiModels.mockResolvedValueOnce([]);
+    await store.loadModels(true);
+    await store.send('Unavailable');
+    api.listAiModels.mockResolvedValueOnce([ECHO]);
+    await store.loadModels(true);
+
+    expect(store.selectionUnavailable()).toBe(false);
+    expect(store.acceptsInput()).toBe(true);
+    await store.send('Available again');
+    expect(api.turns).toHaveLength(1);
+    expect(api.turns[0]).toMatchObject({ providerId: 'diagnostic-echo', model: 'echo' });
+    expect(store.error()).toBeNull();
+  });
+
+  it('uses automatic routing only after the user explicitly selects it', async () => {
+    store.select(store.modelOptions()[0]);
+    api.listAiModels.mockResolvedValueOnce([]);
+    await store.loadModels(true);
+    await store.send('Unavailable');
+
+    store.select(null);
+
+    expect(store.selection()).toBeNull();
+    expect(store.selectionUnavailable()).toBe(false);
+    expect(store.error()).toBeNull();
+    await store.send('Use automatic routing');
+    expect(api.turns).toHaveLength(1);
+    expect(api.turns[0]).toMatchObject({ providerId: null, model: null });
+  });
+
+  it.each(['disappears', 'changes selection'] as const)(
+    'keeps the original explicit model if discovery %s while the conversation is being created',
+    async (change) => {
+      store.select(store.modelOptions()[0]);
+      const creation = deferred<Conversation>();
+      vi.spyOn(api, 'createConversation').mockReturnValueOnce(creation.promise);
+      const sending = store.send('Keep this model');
+      if (change === 'disappears') {
+        api.listAiModels.mockResolvedValueOnce([]);
+        await store.loadModels(true);
+      } else {
+        store.select(null);
+      }
+      creation.resolve(conversation('deferred'));
+      await sending;
+
+      expect(api.turns).toHaveLength(1);
+      expect(api.turns[0]).toMatchObject({
+        conversationId: 'deferred',
+        providerId: 'diagnostic-echo',
+        model: 'echo',
+      });
+    }
+  );
+
+  it('does not replace a busy turn or its existing error when its selected model vanishes', async () => {
+    store.select(store.modelOptions()[0]);
+    await store.send('First turn');
+    const existingError = new IpcError('io', 'An unrelated conversation operation failed');
+    store.error.set(existingError);
+    api.listAiModels.mockResolvedValueOnce([]);
+    await store.loadModels(true);
+
+    await store.send('Must not replace the running turn');
+
+    expect(api.turns).toHaveLength(1);
+    expect(store.entries()).toHaveLength(2);
+    expect(store.error()).toBe(existingError);
+    expect(store.phase()).toBe('connecting');
   });
 
   it.each(['resolve', 'reject'])('ignores an obsolete search %s after the newer search finishes', async (outcome) => {
@@ -395,6 +490,34 @@ describe('ChatStore', () => {
     ]);
   });
 
+  it.each([false, true])('waits for an opened conversation before sending (existing chat: %s)', async (existing) => {
+    if (existing) await store.open('current');
+    const previous = store.conversation();
+    const messages = store.entries();
+    const detail = await api.getConversation('next');
+    const response = deferred<ConversationDetail>();
+    vi.spyOn(api, 'getConversation').mockReturnValueOnce(response.promise);
+    const opening = store.open('next');
+
+    await store.send('For the next conversation');
+    expect(api.created).toEqual([]);
+    expect(api.turns).toEqual([]);
+    expect(store.conversation()).toBe(previous);
+    expect(store.entries()).toBe(messages);
+    expect(store.phase()).toBe('idle');
+    expect(store.loading()).toBe(true);
+    expect(store.acceptsInput()).toBe(false);
+
+    response.resolve(detail);
+    await opening;
+    expect(store.conversation()?.id).toBe('next');
+    expect(store.loading()).toBe(false);
+    await store.send('For the next conversation');
+    expect(api.turns).toHaveLength(1);
+    expect(api.turns[0].conversationId).toBe('next');
+    expect(api.created).toEqual([]);
+  });
+
   it('times out opening a conversation, preserves the current chat and permits retry', async () => {
     await store.open('current');
     const detail = await api.getConversation('next');
@@ -483,6 +606,33 @@ describe('ChatStore', () => {
 
     await store.setProject(null);
     expect(api.patches.at(-1)?.patch).toMatchObject({ clearProject: true, projectId: null });
+  });
+
+  it.each([false, true])('refuses note and project edits during a pending open (existing chat: %s)', async (existing) => {
+    if (existing) await store.open('current');
+    const previous = store.conversation();
+    const project = store.projectId();
+    const detail = await api.getConversation('next');
+    const response = deferred<ConversationDetail>();
+    vi.spyOn(api, 'getConversation').mockReturnValueOnce(response.promise);
+    const opening = store.open('next');
+
+    expect(await store.setPinnedNote('Must not be attached to the old chat')).toBe(false);
+    await store.setProject('next-project');
+    expect(api.created).toEqual([]);
+    expect(api.patches).toEqual([]);
+    expect(store.conversation()).toBe(previous);
+    expect(store.projectId()).toBe(project);
+    expect(store.loading()).toBe(true);
+    expect(store.savingNote()).toBe(false);
+
+    response.resolve(detail);
+    await opening;
+    expect(await store.setPinnedNote('Note for the new chat')).toBe(true);
+    await store.setProject('next-project');
+    expect(api.patches.map((patch) => patch.id)).toEqual(['next', 'next']);
+    expect(store.projectId()).toBe('next-project');
+    expect(api.created).toEqual([]);
   });
 
   it('does not attach a note-created conversation after switching chats', async () => {
@@ -818,11 +968,12 @@ describe('ChatStore', () => {
     expect(store.entries()).toEqual([]);
   });
 
-  it('does not let a pending conversation read overwrite a new turn', async () => {
+  it('does not let a pending conversation read overwrite an explicitly started new chat', async () => {
     const detail = await api.getConversation('old');
     const response = deferred<ConversationDetail>();
     vi.spyOn(api, 'getConversation').mockReturnValueOnce(response.promise);
     const opening = store.open('old');
+    store.startNew();
     await store.send('new turn');
     response.resolve(detail);
     await opening;

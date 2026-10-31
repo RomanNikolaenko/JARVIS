@@ -107,7 +107,7 @@ pub struct AgentManager {
     unsaved: Mutex<HashMap<Uuid, AgentTask>>,
     running: Mutex<HashMap<Uuid, Control>>,
     updates: broadcast::Sender<AgentTask>,
-    /// Cancelled on shutdown: running tasks pause instead of failing.
+    /// Cancelled on shutdown: safe work pauses; uncertain actions fail.
     shutdown: CancellationToken,
 }
 
@@ -181,13 +181,19 @@ impl AgentManager {
             task.error =
                 Some("JARVIS was closed while the task ran; resume it to continue".to_owned());
             for step in &mut task.steps {
-                if step.outcome == StepOutcome::InProgress {
-                    step.outcome = StepOutcome::Unknown;
-                    step.output = Some(format!(
+                if matches!(step.outcome, StepOutcome::InProgress | StepOutcome::Unknown) {
+                    let warning = format!(
                         "Operation {}:{} has no durable result. It may have completed or partly happened. Check its effects manually before starting a new task; this task cannot be resumed.",
                         task.id, step.index
-                    ));
-                    task.error = step.output.clone();
+                    );
+                    // An unknown outcome can be saved just before the terminal
+                    // task status. Preserve that diagnostic across a crash in
+                    // between those checkpoints, without making it resumable.
+                    if step.outcome == StepOutcome::InProgress {
+                        step.outcome = StepOutcome::Unknown;
+                        step.output = Some(warning.clone());
+                    }
+                    task.error = Some(warning);
                     task.status = TaskStatus::Failed;
                     task.finished_at_ms = Some(now_ms());
                 }
@@ -376,12 +382,33 @@ impl AgentManager {
         self.env.store.delete_finished().await
     }
 
+    /// Deletes only the journal explicitly selected after manual review.
+    /// Never clears active work or other unresolved tasks.
+    pub async fn delete_reviewed(&self, id: Uuid) -> Result<usize> {
+        let _transition = self.transitions.lock().await;
+        if self.running().contains_key(&id) {
+            return Err(AgentError::Invalid("the task is still running".into()));
+        }
+        let task = self.get(id).await?;
+        if !task.status.is_finished() {
+            return Err(AgentError::Invalid(
+                "only finished task journals can be deleted after review".into(),
+            ));
+        }
+        let unsaved = self.unsaved().get(&id).cloned();
+        if let Some(snapshot) = unsaved {
+            self.env.store.save(&snapshot).await?;
+            self.unsaved().remove(&id);
+        }
+        self.env.store.delete_reviewed(id).await
+    }
+
     pub fn running_count(&self) -> usize {
         self.running().len()
     }
 
-    /// Pauses running tasks (they can be resumed after a restart) and
-    /// waits briefly for them to save their state.
+    /// Stops running tasks and waits briefly for them to save their state.
+    /// Safe work pauses for recovery; actions with uncertain effects fail.
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
         for _ in 0..50 {
@@ -411,6 +438,7 @@ enum Stop {
     Shutdown,
     TimedOut,
     PersistenceFailed,
+    UnknownResult,
 }
 
 struct Run {
@@ -528,34 +556,43 @@ impl Run {
     }
 
     async fn stopped(&mut self, stop: Stop) {
-        match stop {
-            Stop::PersistenceFailed => {
-                self.finish(TaskStatus::Failed, None, None).await;
-            }
-            Stop::TimedOut => {
-                self.finish(
-                    TaskStatus::Failed,
-                    None,
-                    Some(format!(
-                        "The time limit ({} s) was reached",
-                        self.task.limits.max_duration_secs
-                    )),
-                )
-                .await;
-            }
+        let unknown = self
+            .task
+            .steps
+            .iter()
+            .rev()
+            .find(|step| step.outcome == StepOutcome::Unknown)
+            .map(|step| format!(
+                "Operation {}:{} has an unknown result. It may have completed or partly happened. Check its effects manually before starting a new task; this task cannot be resumed.",
+                self.task.id, step.index
+            ));
+        let (status, reason) = match stop {
+            Stop::PersistenceFailed | Stop::UnknownResult => (TaskStatus::Failed, None),
+            Stop::TimedOut => (
+                TaskStatus::Failed,
+                Some(format!(
+                    "The time limit ({} s) was reached",
+                    self.task.limits.max_duration_secs
+                )),
+            ),
             Stop::Cancelled => {
                 self.note("Cancelled by the user");
-                self.finish(TaskStatus::Cancelled, None, None).await;
+                (TaskStatus::Cancelled, None)
             }
-            Stop::Shutdown => {
-                self.finish(
-                    TaskStatus::Paused,
-                    None,
-                    Some("JARVIS was closed while the task ran; resume it to continue".to_owned()),
-                )
-                .await;
-            }
-        }
+            Stop::Shutdown if unknown.is_some() => (
+                TaskStatus::Failed,
+                Some("JARVIS was closed while an action was running".to_owned()),
+            ),
+            Stop::Shutdown => (
+                TaskStatus::Paused,
+                Some("JARVIS was closed while the task ran; resume it to continue".to_owned()),
+            ),
+        };
+        let error = match (reason, unknown) {
+            (Some(reason), Some(warning)) => Some(format!("{reason}. {warning}")),
+            (reason, warning) => reason.or(warning),
+        };
+        self.finish(status, None, error).await;
     }
 
     async fn execute(&mut self) {
@@ -928,6 +965,7 @@ impl Run {
             detail,
         };
 
+        let mut approved = false;
         let decision = settings.policy.evaluate(&action);
         match decision {
             PolicyDecision::Deny { reason } => {
@@ -981,7 +1019,7 @@ impl Run {
                 self.record(audit(event, reason)).await;
                 step.decision = Some(text.to_owned());
                 match outcome {
-                    ApprovalOutcome::Approved => {}
+                    ApprovalOutcome::Approved => approved = true,
                     ApprovalOutcome::Cancelled => {
                         let output =
                             "Not run: the task was stopped before the user decided".to_owned();
@@ -1046,41 +1084,107 @@ impl Run {
                 Some(stop),
             );
         }
+        // Approval and durable journal writes can take time. Honor revoked
+        // permissions and current limits, and never apply an old approval to
+        // a changed action (for example Create becoming Overwrite).
+        let current = (self.env().settings)();
+        ctx.scope = current.policy.scope().clone();
+        ctx.limits = current.tool_limits;
+        let refusal = match self.env().tools.get(tool_name) {
+            Some(active) if Arc::ptr_eq(&active, &tool) => match tool.prepare(input, &ctx) {
+                Ok(fresh) if fresh == prepared => match current.policy.evaluate(&fresh.action) {
+                    PolicyDecision::Deny { reason } => Some(reason),
+                    PolicyDecision::RequireApproval { .. } if !approved => Some(
+                        "security settings changed; this action requires a new approval".to_owned(),
+                    ),
+                    _ => None,
+                },
+                Ok(fresh) => Some(format!(
+                    "the action changed while waiting ({} -> {}); request it again for a fresh policy and approval check",
+                    prepared.action.summary, fresh.action.summary
+                )),
+                Err(err) => Some(format!("the action is no longer valid: {err}")),
+            },
+            _ => Some("the tool was removed or replaced while waiting".to_owned()),
+        };
+        if let Some(reason) = refusal {
+            self.record(audit(AuditEvent::PolicyDenied, reason.clone()))
+                .await;
+            step.decision = Some(format!("refused before execution: {reason}"));
+            return (
+                finish(step, StepOutcome::Denied, format!("Not run: {reason}")),
+                None,
+            );
+        }
+        if let Some(stop) = self.stop_requested() {
+            return (
+                finish(
+                    step,
+                    StepOutcome::Denied,
+                    "Not run: the task stopped before execution".into(),
+                ),
+                Some(stop),
+            );
+        }
         let deadline = self.deadline().min(Instant::now() + TOOL_RUN_TIMEOUT);
+        let interrupted_outcome = if tool.spec().idempotent {
+            StepOutcome::Failed
+        } else {
+            StepOutcome::Unknown
+        };
         let result = tokio::time::timeout_at(deadline, tool.run(&prepared, &ctx)).await;
         match result {
             Ok(Ok(output)) => {
                 self.record(audit(AuditEvent::Succeeded, output.summary.clone()))
                     .await;
                 let limit = (self.model.context_chars() / 4)
-                    .clamp(1000, settings.tool_limits.max_output_chars);
+                    .clamp(1000, current.tool_limits.max_output_chars);
                 let output = clip(&output.content, limit);
                 (finish(step, StepOutcome::Succeeded, output), None)
             }
             Ok(Err(jarvis_tools::ToolError::Cancelled)) => {
-                self.record(audit(AuditEvent::Failed, "interrupted".to_owned()))
-                    .await;
                 let output = "Interrupted: the task was stopped while this ran; \
                               it may have partly happened"
                     .to_owned();
-                let stop = self.stop_requested().unwrap_or(Stop::Cancelled);
-                (finish(step, StepOutcome::Failed, output), Some(stop))
+                self.record(audit(AuditEvent::Failed, output.clone())).await;
+                let stop = self.stop_requested().unwrap_or_else(|| {
+                    if interrupted_outcome == StepOutcome::Unknown {
+                        Stop::UnknownResult
+                    } else {
+                        Stop::Cancelled
+                    }
+                });
+                (finish(step, interrupted_outcome, output), Some(stop))
+            }
+            Ok(Err(err @ jarvis_tools::ToolError::TimedOut(_))) => {
+                let output = format!("{err}; it may have partly happened");
+                self.record(audit(AuditEvent::Failed, output.clone())).await;
+                let stop = self.stop_requested().or_else(|| {
+                    (interrupted_outcome == StepOutcome::Unknown).then_some(Stop::UnknownResult)
+                });
+                (finish(step, interrupted_outcome, output), stop)
             }
             Ok(Err(err)) => {
-                self.record(audit(AuditEvent::Failed, err.to_string()))
-                    .await;
-                (finish(step, StepOutcome::Failed, err.to_string()), None)
+                let output = if interrupted_outcome == StepOutcome::Unknown {
+                    format!("{err}; it may have partly happened")
+                } else {
+                    err.to_string()
+                };
+                self.record(audit(AuditEvent::Failed, output.clone())).await;
+                let stop = self.stop_requested().or_else(|| {
+                    (interrupted_outcome == StepOutcome::Unknown).then_some(Stop::UnknownResult)
+                });
+                (finish(step, interrupted_outcome, output), stop)
             }
             Err(_) => {
                 ctx.cancel.cancel();
-                self.record(audit(AuditEvent::Failed, "timed out".to_owned()))
-                    .await;
                 let output =
                     "The tool did not finish in time; it may have partly happened".to_owned();
-                (
-                    finish(step, StepOutcome::Failed, output),
-                    self.stop_requested(),
-                )
+                self.record(audit(AuditEvent::Failed, output.clone())).await;
+                let stop = self.stop_requested().or_else(|| {
+                    (interrupted_outcome == StepOutcome::Unknown).then_some(Stop::UnknownResult)
+                });
+                (finish(step, interrupted_outcome, output), stop)
             }
         }
     }

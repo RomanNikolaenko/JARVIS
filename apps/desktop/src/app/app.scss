@@ -140,6 +140,12 @@
   background: rgb(248 113 113 / 8%);
   color: var(--jv-danger);
   font-size: 13px;
+
+  &.warning {
+    border-color: rgb(251 191 36 / 40%);
+    background: rgb(251 191 36 / 8%);
+    color: var(--jv-warning);
+  }
 }
 
 .content {

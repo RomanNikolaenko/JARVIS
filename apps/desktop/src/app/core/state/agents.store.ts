@@ -27,6 +27,10 @@ export function isFinished(status: TaskStatus): boolean {
   return FINISHED.includes(status);
 }
 
+export function hasUnresolvedAction(task: Pick<AgentTask, 'steps'>): boolean {
+  return task.steps.some((step) => step.outcome === 'unknown' || step.outcome === 'inProgress');
+}
+
 /** Mirrors `TaskSummary::from(&AgentTask)` in the Rust core. */
 export function summarize(task: AgentTask): TaskSummary {
   return {
@@ -312,7 +316,17 @@ export class AgentsStore {
     return this.run(async () => {
       await this.api.clearFinishedAgentTasks();
       const selected = this.selected();
-      if (selected && isFinished(selected.status)) {
+      if (selected && isFinished(selected.status) && !hasUnresolvedAction(selected)) {
+        await this.select(null);
+      }
+      await this.loadTasks();
+    });
+  }
+
+  deleteReviewed(id: string): Promise<void> {
+    return this.run(async () => {
+      await this.api.deleteReviewedAgentTask(id);
+      if (this.selectedId() === id) {
         await this.select(null);
       }
       await this.loadTasks();

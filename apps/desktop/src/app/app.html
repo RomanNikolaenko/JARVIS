@@ -53,6 +53,13 @@
         <span>{{ error.message }}</span>
       </div>
     }
+    @if (!connectionError() && models.subscriptionError(); as error) {
+      <div class="banner warning" role="status">
+        <jv-icon name="warning" />
+        <span>Model changes could not be received. {{ error.message }}</span>
+        <button type="button" class="ghost small" (click)="models.start()">Retry model updates</button>
+      </div>
+    }
 
     <main class="content">
       <router-outlet />

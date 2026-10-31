@@ -215,6 +215,33 @@ export class RuntimePage {
     return !!this.store.installed() && model.available && !(isActive(server) && server?.modelId === model.id);
   }
 
+  protected canRestart(role: ServerRole, rendered: ServerState): boolean {
+    const current = role === 'chat' ? this.store.server() : this.store.embeddingServer();
+    return (
+      rendered.phase === 'running' &&
+      current?.phase === 'running' &&
+      !!current.modelId &&
+      current.modelId === rendered.modelId &&
+      current.pid === rendered.pid &&
+      current.port === rendered.port &&
+      !!this.store.installed() &&
+      !this.store.statusError() &&
+      !this.store.isPending(`server:${role}`) &&
+      !this.store.isPending(`model:${current.modelId}`) &&
+      !this.store.isPending('engine') &&
+      !this.runtimeDownloads().some((download) => !['completed', 'failed', 'cancelled'].includes(download.phase)) &&
+      !this.store.savingSettings() &&
+      !this.submittingSettings() &&
+      !this.settingsForm.dirty
+    );
+  }
+
+  protected restart(role: ServerRole, rendered: ServerState): void {
+    if (rendered.modelId && this.canRestart(role, rendered)) {
+      void this.store.start(rendered.modelId, role);
+    }
+  }
+
   protected downloadCustom(): void {
     if (this.store.isPending('custom-download')) return;
     if (this.customDownload.invalid) {

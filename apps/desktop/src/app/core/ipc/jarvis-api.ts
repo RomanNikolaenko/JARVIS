@@ -61,6 +61,8 @@ import { TauriBridge } from './tauri-bridge';
 
 /** Name of the event used by the core to push system events. */
 export const SYSTEM_EVENT = 'jarvis://system-event';
+/** Catalog/routes are ready after a provider or routing change. */
+export const MODELS_CHANGED_EVENT = 'jarvis://models-changed';
 /** Pushed with the whole task whenever an agent task changes. */
 export const AGENT_TASK_EVENT = 'jarvis://agent-task';
 /** Pushed with every pending approval whenever the list changes. */
@@ -330,6 +332,11 @@ export class JarvisApi {
     return this.bridge.invoke('clear_finished_agent_tasks');
   }
 
+  /** Deletes one unresolved journal after the user reviewed its real-world effects. */
+  deleteReviewedAgentTask(id: string): Promise<number> {
+    return this.bridge.invoke('clear_finished_agent_tasks', { reviewedTaskId: id });
+  }
+
   listPendingApprovals(): Promise<PendingApproval[]> {
     return this.bridge.invoke('list_pending_approvals');
   }
@@ -366,6 +373,10 @@ export class JarvisApi {
 
   onSystemEvent(handler: (event: SystemEvent) => void): Promise<UnlistenFn> {
     return this.bridge.listen<SystemEvent>(SYSTEM_EVENT, handler);
+  }
+
+  onModelsChanged(handler: () => void): Promise<UnlistenFn> {
+    return this.bridge.listen<null>(MODELS_CHANGED_EVENT, handler);
   }
 
   // ---- Updates ----

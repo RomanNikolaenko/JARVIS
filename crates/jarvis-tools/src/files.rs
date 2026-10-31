@@ -582,6 +582,11 @@ impl Tool for WriteFile {
             file.write_all(args.content.as_bytes())
                 .await
                 .map_err(|err| ToolError::io(format!("writing {}", shown(&path)), err))?;
+            // Tokio files can buffer a write in a background operation. Do not
+            // report success (or let the agent journal it) before it finishes.
+            file.flush()
+                .await
+                .map_err(|err| ToolError::io(format!("flushing {}", shown(&path)), err))?;
         }
         Ok(ToolOutput {
             summary: format!("Wrote {} ({} bytes)", shown(&path), args.content.len()),

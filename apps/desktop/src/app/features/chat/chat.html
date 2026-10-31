@@ -15,7 +15,7 @@
       <div class="controls">
         <label class="select">
           <span>Project</span>
-          <select [disabled]="store.busy() || store.readOnly()" (change)="onProject($event)">
+          <select [disabled]="store.busy() || store.loading() || store.readOnly()" (change)="onProject($event)">
             <option value="" [selected]="store.projectId() === null">None</option>
             @for (project of memory.projects(); track project.id) {
               <option [value]="project.id" [selected]="project.id === store.projectId()">
@@ -26,14 +26,17 @@
         </label>
         <label class="select model">
           <span>Model</span>
-          <select [disabled]="store.busy()" (change)="onModelChange($event)">
-            <option [value]="automatic" [selected]="selectedKey() === automatic">
+          <select [disabled]="store.busy()" [ngModel]="selectedKey()" (change)="onModelChange($event)">
+            <option [value]="automatic">
               {{ automaticLabel() }}
             </option>
+            @if (store.selectionUnavailable()) {
+              <option [value]="selectedKey()" disabled>Unavailable — {{ store.selection()?.model }}</option>
+            }
             @for (group of groups(); track group.label) {
               <optgroup [label]="group.label">
                 @for (option of group.options; track keyOf(option)) {
-                  <option [value]="keyOf(option)" [selected]="keyOf(option) === selectedKey()">
+                  <option [value]="keyOf(option)">
                     {{ option.model.displayName }}
                   </option>
                 }
@@ -74,7 +77,9 @@
           <button
             type="button"
             class="primary small"
-            [disabled]="store.busy() || store.savingNote() || noteDraft() === (store.conversation()?.pinnedNote ?? '')"
+            [disabled]="
+              store.busy() || store.loading() || store.savingNote() || noteDraft() === (store.conversation()?.pinnedNote ?? '')
+            "
             (click)="saveNote()">
             Save note
           </button>
@@ -82,6 +87,12 @@
       </div>
     }
 
+    @if (store.selectionUnavailable()) {
+      <div class="notice error" role="alert">
+        <jv-icon name="warning" [size]="16" />
+        <span>The selected model is unavailable. Choose another model or select Automatic to continue.</span>
+      </div>
+    }
     @if (store.diagnosticOnly()) {
       <div class="notice">
         <jv-icon name="warning" [size]="16" />
@@ -312,7 +323,7 @@
     <jv-chat-agent-action
       [text]="draft()"
       [model]="agentModel()"
-      [disabled]="store.busy() || store.readOnly()"
+      [disabled]="store.busy() || store.readOnly() || store.selectionUnavailable()"
       (busyChange)="agentStarting.set($event)"
       (started)="onAgentStarted($event)" />
     <footer class="composer">

@@ -1,8 +1,9 @@
 # Native agent smoke test
 
 For the embedded runtime, open **Runtime → Inference settings → Chat models
-with native tools**, select a compatible model, save, then restart the chat
-model. The server panel must show **Native tools enabled**. This setting is
+with native tools**, select a compatible model, save, then click **Restart** in
+the running chat model's server panel. The panel must show **Native tools enabled**.
+This setting is
 opt-in per local model ID; embeddings are excluded. Clearing the selection
 and restarting restores the text protocol.
 

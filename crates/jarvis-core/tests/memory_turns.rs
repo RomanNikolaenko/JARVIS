@@ -16,8 +16,14 @@ use jarvis_core::jarvis_memory::{FactInput, MessageRole, MessageStatus, SearchQu
 use jarvis_core::{
     AppPaths, ChatStreamEvent, ChatTurnRequest, CoreOptions, ErrorCode, JarvisCore, SinkClosed,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
+
+#[derive(Debug, Default)]
+struct CapabilityGate {
+    entered: Notify,
+    release: Notify,
+}
 
 /// Records every request and replies with a fixed text.
 #[derive(Debug)]
@@ -26,6 +32,8 @@ struct Recorder {
     window: Option<u32>,
     delay: Duration,
     requests: Mutex<Vec<ChatRequest>>,
+    capability_gate: Mutex<Option<Arc<CapabilityGate>>>,
+    reply_gate: Mutex<Option<Arc<CapabilityGate>>>,
 }
 
 impl Recorder {
@@ -44,6 +52,8 @@ impl Recorder {
             window: None,
             delay: Duration::ZERO,
             requests: Mutex::default(),
+            capability_gate: Mutex::default(),
+            reply_gate: Mutex::default(),
         })
     }
 
@@ -90,12 +100,17 @@ impl AiProvider for Recorder {
         let summary = request.messages[0].content.contains("running summary");
         self.requests.lock().unwrap().push(request);
         let delay = self.delay;
+        let gate = self.reply_gate.lock().unwrap().take();
         let reply = if summary {
             "Summary: the user asked many questions."
         } else {
             "<think>pondering</think>Recorded reply"
         };
         Ok(stream::once(async move {
+            if let Some(gate) = gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
             tokio::time::sleep(delay).await;
             Ok(ChatChunk::Delta(reply.to_owned()))
         })
@@ -106,6 +121,22 @@ impl AiProvider for Recorder {
             })
         }))
         .boxed())
+    }
+
+    async fn capabilities(&self, model: &str) -> Result<ModelCapabilities, AiError> {
+        let gate = self.capability_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        self.list_models()
+            .await?
+            .into_iter()
+            .find(|info| info.id == model)
+            .map(|info| info.capabilities)
+            .ok_or_else(|| AiError::ModelNotFound {
+                model: model.to_owned(),
+            })
     }
 }
 
@@ -321,6 +352,65 @@ async fn saved_memory_is_not_shared_with_cloud_models() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn revoking_memory_sharing_during_preparation_keeps_the_turn_unsaved() {
+    let provider = Recorder::new(DataLocality::ThirdPartyCloud);
+    let test = start(Arc::clone(&provider)).await;
+    let mut settings = test.core.settings();
+    settings.privacy.allow_cloud_providers = true;
+    settings.privacy.share_memory_with_cloud = true;
+    test.core.update_settings(settings).await.unwrap();
+    test.core
+        .save_fact(fact("Confidential project codename: Andromeda", true))
+        .await
+        .unwrap();
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    let before = test
+        .core
+        .memory()
+        .conversation(conversation.id)
+        .await
+        .unwrap();
+    let gate = Arc::new(CapabilityGate::default());
+    *provider.capability_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let core = Arc::clone(&test.core);
+    let pending = tokio::spawn(async move {
+        let mut request = turn(conversation.id, "What is the project codename?");
+        request.provider_id = Some(ProviderId::new("recorder"));
+        request.model = Some("recorder-model".into());
+        core.send_message(request, |_| Ok(())).await
+    });
+    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+        .await
+        .expect("model discovery reached the controlled pause");
+    let mut settings = test.core.settings();
+    settings.privacy.share_memory_with_cloud = false;
+    test.core.update_settings(settings).await.unwrap();
+    gate.release.notify_one();
+    let err = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PermissionDenied);
+    assert!(provider.requests().is_empty());
+    let after = test
+        .core
+        .memory()
+        .conversation(conversation.id)
+        .await
+        .unwrap();
+    assert_eq!(after.messages, before.messages);
+    assert_eq!(after.summary, before.summary);
+    assert_eq!(test.core.chat().active_requests(), 0);
+
+    // Retrying uses the current policy: the chat is allowed, but the fact is omitted.
+    send(&test.core, conversation.id, "What is the project codename?").await;
+    assert!(!provider.last_system_prompt().contains("Andromeda"));
+    assert_eq!(provider.requests().len(), 1);
+    test.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn with_saving_off_nothing_is_written() {
     let provider = Recorder::new(DataLocality::OnDevice);
     let test = start(Arc::clone(&provider)).await;
@@ -403,6 +493,222 @@ async fn long_conversations_are_summarized() {
     assert!(context.summarized_messages >= 2, "{context:?}");
     assert!(context.used_tokens <= context.budget_tokens);
     assert!(provider.last_system_prompt().contains("Summary:"));
+    test.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn long_unicode_messages_are_summarized_without_overwriting_original_history() {
+    use jarvis_core::jarvis_memory::{
+        ContextWindow, NewMessage,
+        context::KEEP_RECENT_MESSAGES,
+        text::{MESSAGE_OVERHEAD_TOKENS, estimate_tokens},
+    };
+
+    let mut provider = Recorder::new(DataLocality::OnDevice);
+    Arc::get_mut(&mut provider).unwrap().window = Some(1024);
+    let test = start(Arc::clone(&provider)).await;
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    for index in 0..12 {
+        test.core
+            .memory()
+            .append_message(
+                conversation.id,
+                NewMessage {
+                    id: Uuid::new_v4(),
+                    role: if index % 2 == 0 {
+                        MessageRole::User
+                    } else {
+                        MessageRole::Assistant
+                    },
+                    content: format!(
+                        "{index}: {}",
+                        "Рішення про запуск у Києві: субота, важливі домовленості. 🛰️🙂 "
+                            .repeat(50)
+                    ),
+                    status: MessageStatus::Complete,
+                    provider_id: None,
+                    model: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let original = test
+        .core
+        .memory()
+        .conversation(conversation.id)
+        .await
+        .unwrap()
+        .messages;
+
+    let events = send(&test.core, conversation.id, "What did we agree?").await;
+    assert!(matches!(
+        events.first(),
+        Some(ChatStreamEvent::Started { context: Some(context), .. }) if context.needs_compaction
+    ));
+    let saved = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let detail = test
+                .core
+                .memory()
+                .conversation(conversation.id)
+                .await
+                .unwrap();
+            if detail.summary.is_some() {
+                break detail;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("long messages must produce a stored summary");
+    let summary = saved.summary.as_ref().unwrap();
+    assert!(summary.covered_messages >= 2);
+    let recent_boundary = saved.messages[saved.messages.len() - KEEP_RECENT_MESSAGES - 1].seq;
+    assert!(summary.covers_until <= recent_boundary);
+    assert_eq!(&saved.messages[..original.len()], original.as_slice());
+
+    let requests = provider.requests();
+    let summaries: Vec<_> = requests
+        .iter()
+        .filter(|request| request.messages[0].content.contains("running summary"))
+        .collect();
+    assert!(!summaries.is_empty());
+    let window = ContextWindow::new(Some(1024), None, None);
+    for request in summaries {
+        let prompt_tokens = request
+            .messages
+            .iter()
+            .map(|message| estimate_tokens(&message.content) + MESSAGE_OVERHEAD_TOKENS)
+            .sum::<u32>();
+        assert!(prompt_tokens <= window.budget());
+        assert!(prompt_tokens + request.options.max_output_tokens.unwrap() <= 1024);
+        assert!(request.messages[1].content.contains('…'));
+    }
+
+    let events = send(&test.core, conversation.id, "Recall the earlier decisions.").await;
+    assert!(matches!(
+        events.first(),
+        Some(ChatStreamEvent::Started { context: Some(context), .. })
+            if context.summarized_messages >= summary.covered_messages
+    ));
+    assert!(provider.last_system_prompt().contains(&summary.content));
+    let after = test
+        .core
+        .memory()
+        .conversation(conversation.id)
+        .await
+        .unwrap();
+    assert_eq!(&after.messages[..original.len()], original.as_slice());
+    test.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_cloud_access_during_a_reply_blocks_its_deferred_summary() {
+    let mut provider = Recorder::new(DataLocality::ThirdPartyCloud);
+    Arc::get_mut(&mut provider).unwrap().window = Some(1024);
+    let test = start(Arc::clone(&provider)).await;
+    let mut settings = test.core.settings();
+    settings.privacy.allow_cloud_providers = true;
+    test.core.update_settings(settings).await.unwrap();
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    for index in 0..12 {
+        test.core
+            .memory()
+            .append_message(
+                conversation.id,
+                jarvis_core::jarvis_memory::NewMessage {
+                    id: Uuid::new_v4(),
+                    role: if index % 2 == 0 {
+                        MessageRole::User
+                    } else {
+                        MessageRole::Assistant
+                    },
+                    content: format!(
+                        "{index}: {}",
+                        "Detailed private conversation history. ".repeat(4)
+                    ),
+                    status: MessageStatus::Complete,
+                    provider_id: None,
+                    model: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    // Confirm a summary is needed before testing its deferred privacy check.
+    assert!(
+        test.core
+            .memory()
+            .compaction_plan(
+                conversation.id,
+                jarvis_core::jarvis_memory::ContextWindow::new(Some(1024), None, None),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let gate = Arc::new(CapabilityGate::default());
+    *provider.reply_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let mut system_events = test.core.events().subscribe();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    test.core
+        .send_message(
+            turn(conversation.id, "Continue the discussion"),
+            move |event| tx.send(event).map_err(|_| SinkClosed),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+        .await
+        .expect("original reply is in flight");
+    let started = rx.recv().await.expect("started event");
+    assert!(
+        matches!(started, ChatStreamEvent::Started { context: Some(ref context), .. } if context.needs_compaction)
+    );
+    assert_eq!(provider.requests().len(), 1);
+
+    let mut settings = test.core.settings();
+    settings.privacy.allow_cloud_providers = false;
+    test.core.update_settings(settings).await.unwrap();
+    gate.release.notify_one();
+    let reply_events = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .expect("original reply finishes normally");
+    assert!(
+        reply_events
+            .iter()
+            .any(|event| matches!(event, ChatStreamEvent::Finished { .. }))
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = system_events.recv().await.expect("system event");
+            if event.message.starts_with("Blocked a conversation summary:") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("deferred summary checks the revoked permission");
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "no summary request reached the cloud"
+    );
+    let saved = test
+        .core
+        .memory()
+        .conversation(conversation.id)
+        .await
+        .unwrap();
+    assert!(saved.summary.is_none());
+    assert_eq!(saved.messages.last().unwrap().role, MessageRole::Assistant);
     test.core.shutdown().await;
 }
 

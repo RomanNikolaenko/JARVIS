@@ -13,7 +13,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use jarvis_agent::{
     AgentEnvironment, AgentError, AgentManager, AgentModel, AgentTask, NewTask, SettingsSource,
-    TaskLimits, TaskStore, TaskSummary,
+    StepOutcome, TaskLimits, TaskStatus, TaskStore, TaskSummary,
 };
 use jarvis_ai::{
     AiProvider, ChatMessage, ChatRequest, DataLocality, GenerationOptions, ProviderId,
@@ -197,7 +197,11 @@ pub(crate) fn agent_settings(
         .collect();
     jarvis_agent::AgentSettings {
         policy: SecurityPolicy::new(PolicyConfig {
-            enabled_tools: tools.enabled.iter().chain(plugin_tools).cloned().collect(),
+            enabled_tools: if settings.agents.enabled {
+                tools.enabled.iter().chain(plugin_tools).cloned().collect()
+            } else {
+                BTreeSet::new()
+            },
             scope,
             allowed_programs,
             allow_network: tools.allow_network,
@@ -215,12 +219,39 @@ pub(crate) fn agent_settings(
 /// A chat model used by an agent.
 #[derive(Debug)]
 struct CoreAgentModel {
+    config: Arc<ConfigStore>,
     provider: Arc<dyn AiProvider>,
     provider_id: String,
     model: String,
     context_chars: usize,
     timeout: Duration,
     native_tools: bool,
+}
+
+impl CoreAgentModel {
+    /// The adapter can outlive registry replacement while a task is paused.
+    /// Authorize its own destination, not the current provider sharing its ID.
+    fn authorize_request(&self) -> jarvis_agent::Result<()> {
+        let settings = self.config.current();
+        if !settings.agents.enabled {
+            return Err(AgentError::Model(
+                "Agents are turned off in settings".into(),
+            ));
+        }
+        if self.provider.descriptor().locality == DataLocality::ThirdPartyCloud {
+            if !settings.privacy.allow_cloud_providers {
+                return Err(AgentError::Model(
+                    "Sending data to cloud providers is disabled in privacy settings".into(),
+                ));
+            }
+            if !settings.privacy.allow_cloud_agents {
+                return Err(AgentError::Model(
+                    "Cloud models for agents are disabled in privacy settings".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -234,6 +265,7 @@ impl AgentModel for CoreAgentModel {
         messages: Vec<jarvis_ai::ToolMessage>,
         tools: Vec<jarvis_ai::ToolDefinition>,
     ) -> jarvis_agent::Result<jarvis_ai::ToolChatResponse> {
+        self.authorize_request()?;
         let request = jarvis_ai::ToolChatRequest {
             model: self.model.clone(),
             messages,
@@ -262,6 +294,7 @@ impl AgentModel for CoreAgentModel {
     }
 
     async fn complete(&self, messages: Vec<ChatMessage>) -> jarvis_agent::Result<String> {
+        self.authorize_request()?;
         let request = ChatRequest {
             model: self.model.clone(),
             messages,
@@ -283,6 +316,15 @@ impl AgentModel for CoreAgentModel {
 impl JarvisCore {
     fn agents(&self) -> &AgentSystem {
         &self.agents
+    }
+
+    fn require_agents_enabled(&self) -> Result<(), CoreError> {
+        if !self.config.current().agents.enabled {
+            return Err(CoreError::PermissionDenied(
+                "Agents are turned off in settings".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// Chooses the model for an agent and applies the privacy rules: agents
@@ -309,6 +351,17 @@ impl JarvisCore {
                     .await?
             }
         };
+        // Capability/catalog discovery can wait for the server. Check the
+        // current switches again before this adapter can receive a journal.
+        self.require_agents_enabled()?;
+        let settings = self.config.current();
+        crate::routing::check_privacy(&resolved.descriptor, settings.privacy.allow_cloud_providers)
+            .inspect_err(|err| {
+                self.events.warning(
+                    EventCategory::Security,
+                    format!("Blocked an agent task: {err}"),
+                );
+            })?;
         if resolved.descriptor.locality == DataLocality::ThirdPartyCloud
             && !settings.privacy.allow_cloud_agents
         {
@@ -330,6 +383,7 @@ impl JarvisCore {
         let context_chars =
             (window.saturating_sub(AGENT_MAX_OUTPUT_TOKENS).max(1024) as usize).saturating_mul(3);
         Ok(Arc::new(CoreAgentModel {
+            config: Arc::clone(&self.config),
             native_tools: resolved.capabilities.tool_calling
                 && resolved.provider.supports_native_tools(),
             provider: resolved.provider,
@@ -420,21 +474,39 @@ impl JarvisCore {
         Ok(task)
     }
 
-    /// Continues a paused task with the model it used (or the router's
-    /// choice if that model is gone).
+    /// Continues a paused task only with its recorded provider and model.
+    /// Its journal must never be sent to an automatically chosen replacement.
     pub async fn resume_agent_task(&self, id: Uuid) -> Result<(), CoreError> {
+        self.require_agents_enabled()?;
         let task = self.agents().manager.get(id).await?;
-        let provider_id = task.provider_id.as_deref().map(ProviderId::from);
-        let model = match self
-            .agent_model(provider_id.as_ref(), task.model.as_deref())
-            .await
+        if task
+            .steps
+            .iter()
+            .any(|step| matches!(step.outcome, StepOutcome::InProgress | StepOutcome::Unknown))
         {
-            Ok(model) => model,
-            Err(CoreError::PermissionDenied(message)) => {
-                return Err(CoreError::PermissionDenied(message));
-            }
-            Err(_) => self.agent_model(None, None).await?,
+            return Err(AgentError::Invalid(
+                "An action has an unknown result. Check its effects manually before starting a new task; it cannot be resumed.".into(),
+            ).into());
+        }
+        if task.status != TaskStatus::Paused {
+            return Err(AgentError::Invalid("only paused tasks can be resumed".into()).into());
+        }
+        let (Some(provider_id), Some(model_id)) = (
+            task.provider_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty()),
+            task.model.as_deref().filter(|id| !id.trim().is_empty()),
+        ) else {
+            return Err(CoreError::Validation(
+                "The task has no recorded provider and model. Review its journal and start a new task; it cannot be resumed automatically.".into(),
+            ));
         };
+        let model = self
+            .agent_model(Some(&ProviderId::from(provider_id)), Some(model_id))
+            .await?;
+        // Discovery may have waited for a model server while the user changed
+        // the agent switch. Recheck before the manager can unpause or launch.
+        self.require_agents_enabled()?;
         self.agents().manager.resume(id, model).await?;
         self.events.info(
             EventCategory::Agents,
@@ -459,12 +531,22 @@ impl JarvisCore {
         Ok(self.agents().manager.list(limit).await?)
     }
 
-    /// Deletes finished tasks (their audit entries stay).
+    /// Deletes finished tasks with known results (their audit entries stay).
     pub async fn clear_finished_agent_tasks(&self) -> Result<usize, CoreError> {
         let removed = self.agents().manager.delete_finished().await?;
         self.events.info(
             EventCategory::Agents,
             format!("{removed} finished agent task(s) deleted"),
+        );
+        Ok(removed)
+    }
+
+    /// A user explicitly reviewed the effects and selected this journal for deletion.
+    pub async fn delete_reviewed_agent_task(&self, id: Uuid) -> Result<usize, CoreError> {
+        let removed = self.agents().manager.delete_reviewed(id).await?;
+        self.events.info(
+            EventCategory::Agents,
+            format!("Reviewed agent task journal deleted: {id}"),
         );
         Ok(removed)
     }
@@ -597,19 +679,22 @@ fn clip(text: &str, max: usize) -> String {
 mod native_tests {
     use super::*;
     use jarvis_ai::{
-        AiError, ChatStream, ModelInfo, ProviderDescriptor, ToolChatRequest, ToolChatResponse,
+        AiError, ChatStream, ModelInfo, ProviderBackend, ProviderConfig, ProviderDescriptor,
+        ProviderKind, ToolChatRequest, ToolChatResponse,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Debug)]
     struct NativeProvider {
-        echo: jarvis_ai::EchoProvider,
+        descriptor: ProviderDescriptor,
         delay: Duration,
+        calls: Arc<AtomicUsize>,
     }
 
     #[async_trait]
     impl AiProvider for NativeProvider {
         fn descriptor(&self) -> &ProviderDescriptor {
-            self.echo.descriptor()
+            &self.descriptor
         }
         fn supports_native_tools(&self) -> bool {
             true
@@ -621,12 +706,14 @@ mod native_tests {
             Ok(vec![])
         }
         async fn stream_chat(&self, _: ChatRequest) -> Result<ChatStream, AiError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             panic!("native generation must not fall back to text")
         }
         async fn chat_with_tools(
             &self,
             request: ToolChatRequest,
         ) -> Result<ToolChatResponse, AiError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(request.model, "native-model");
             assert_eq!(
                 request.options.max_output_tokens,
@@ -643,9 +730,14 @@ mod native_tests {
 
     fn model(delay: Duration) -> CoreAgentModel {
         CoreAgentModel {
+            config: Arc::new(ConfigStore::in_memory(
+                std::env::temp_dir().join("jarvis-unused-agent-config.toml"),
+                Settings::default(),
+            )),
             provider: Arc::new(NativeProvider {
-                echo: jarvis_ai::EchoProvider::new(),
+                descriptor: jarvis_ai::EchoProvider::new().descriptor().clone(),
                 delay,
+                calls: Arc::default(),
             }),
             provider_id: "native".into(),
             model: "native-model".into(),
@@ -667,5 +759,90 @@ mod native_tests {
             .complete_tools(vec![], vec![])
             .await;
         assert!(matches!(result, Err(AgentError::Model(message)) if message.contains("in time")));
+    }
+
+    #[tokio::test]
+    async fn cached_adapters_recheck_their_own_destination_before_text_and_native_requests() {
+        for permission in ["agents", "cloud providers", "cloud agents"] {
+            let dir = tempfile::tempdir().expect("temporary settings");
+            let mut settings = Settings::default();
+            settings.privacy.allow_cloud_providers = true;
+            settings.privacy.allow_cloud_agents = true;
+            let config = Arc::new(ConfigStore::in_memory(
+                dir.path().join("config.toml"),
+                settings.clone(),
+            ));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mut cached = model(Duration::ZERO);
+            cached.config = Arc::clone(&config);
+            cached.provider = Arc::new(NativeProvider {
+                descriptor: ProviderDescriptor {
+                    id: ProviderId::new("native"),
+                    display_name: "Original cloud".into(),
+                    kind: ProviderKind::Cloud,
+                    locality: DataLocality::ThirdPartyCloud,
+                },
+                delay: Duration::ZERO,
+                calls: Arc::clone(&calls),
+            });
+            // The same configured ID now points locally. The cached model must
+            // still recognize that its own provider sends to the old cloud.
+            settings.ai.providers = vec![ProviderConfig {
+                id: ProviderId::new("native"),
+                backend: ProviderBackend::Ollama,
+                display_name: "Replacement local".into(),
+                base_url: "http://127.0.0.1:11434".into(),
+                enabled: true,
+                native_tool_models: vec![],
+            }];
+            match permission {
+                "agents" => settings.agents.enabled = false,
+                "cloud providers" => settings.privacy.allow_cloud_providers = false,
+                _ => settings.privacy.allow_cloud_agents = false,
+            }
+            config.update(settings).await.expect("revoke permission");
+            assert!(cached.complete(vec![]).await.is_err(), "{permission}");
+            assert!(
+                cached.complete_tools(vec![], vec![]).await.is_err(),
+                "{permission}"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "{permission}");
+        }
+    }
+
+    #[test]
+    fn disabled_agents_refuse_builtin_and_plugin_tools() {
+        use jarvis_security::{ActionRequest, Capability, PolicyDecision, RiskLevel};
+        let mut settings = Settings::default();
+        settings.tools.enabled = vec!["read_file".into()];
+        let plugins = BTreeSet::from(["plugin/tool".into()]);
+        let actions = [
+            ("read_file", Capability::FsRead),
+            ("plugin/tool", Capability::PluginTool),
+        ]
+        .map(|(tool, capability)| ActionRequest {
+            tool: tool.into(),
+            capabilities: vec![capability],
+            risk: RiskLevel::Low,
+            summary: "Check the agent switch".into(),
+            paths: vec![],
+            program: None,
+            url: None,
+        });
+        let enabled = agent_settings(&settings, &[], &plugins);
+        for action in &actions {
+            assert!(!matches!(
+                enabled.policy.evaluate(action),
+                PolicyDecision::Deny { .. }
+            ));
+        }
+        settings.agents.enabled = false;
+        let disabled = agent_settings(&settings, &[], &plugins);
+        for action in &actions {
+            assert!(matches!(
+                disabled.policy.evaluate(action),
+                PolicyDecision::Deny { .. }
+            ));
+        }
     }
 }

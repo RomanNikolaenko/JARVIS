@@ -1,6 +1,7 @@
 import { DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { FormControl, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import type {
   DataLocality,
   ModelRef,
@@ -82,7 +83,7 @@ export function providerIdFor(name: string, taken: readonly string[]): string {
 
 @Component({
   selector: 'jv-models',
-  imports: [DecimalPipe, ReactiveFormsModule, HudPanel, Icon, StatusBadge],
+  imports: [DecimalPipe, FormsModule, ReactiveFormsModule, HudPanel, Icon, StatusBadge],
   templateUrl: './models.html',
   styleUrl: './models.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -90,6 +91,9 @@ export function providerIdFor(name: string, taken: readonly string[]): string {
 export class Models {
   protected readonly store = inject(ModelsStore);
   private readonly settings = inject(SettingsStore);
+  private readonly destroyRef = inject(DestroyRef);
+  private editorGeneration = 0;
+  private testGeneration = 0;
 
   protected readonly categories = CATEGORIES;
   protected readonly backendLabels = BACKEND_LABELS;
@@ -100,6 +104,10 @@ export class Models {
   protected readonly editingId = signal<string | null>(null);
   protected readonly testing = signal(false);
   protected readonly saving = signal(false);
+  protected readonly savingRouting = signal(false);
+  protected readonly mutationBusy = computed(
+    () => this.saving() || this.savingRouting() || this.settings.saving() || this.store.providerMutationPending()
+  );
   protected readonly hasStoredKey = signal(false);
   protected readonly testResult = signal<ProviderTestResult | null>(null);
   protected readonly testError = signal<string | null>(null);
@@ -127,10 +135,29 @@ export class Models {
         },
       ],
     }),
-    apiKey: new FormControl('', { nonNullable: true, validators: [Validators.maxLength(8192)] }),
+    apiKey: new FormControl('', {
+      nonNullable: true,
+      validators: [
+        (control) => {
+          const key = control.value as string;
+          const controls = Array.from(key).some((character) => {
+            const code = character.charCodeAt(0);
+            return code < 32 || (code >= 127 && code <= 159);
+          });
+          return (key.length > 0 && !key.trim()) || new TextEncoder().encode(key).length > 8192 || controls
+            ? { apiKey: true }
+            : null;
+        },
+      ],
+    }),
     displayName: new FormControl('', {
       nonNullable: true,
-      validators: [Validators.required, Validators.maxLength(64)],
+      validators: [
+        (control) => {
+          const name = (control.value as string).trim();
+          return !name || Array.from(name).length > 64 ? { providerName: true } : null;
+        },
+      ],
     }),
     backend: new FormControl<ProviderBackend>('ollama', { nonNullable: true }),
     baseUrl: new FormControl(DEFAULT_URLS.ollama, {
@@ -151,6 +178,7 @@ export class Models {
   protected readonly routingDirty = computed(() => this.routingDraft() !== null);
 
   constructor() {
+    this.form.valueChanges.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.invalidateTest());
     void this.store.refresh();
   }
 
@@ -185,6 +213,9 @@ export class Models {
   // ---- Provider editing ------------------------------------------------
 
   protected startAdd(): void {
+    if (this.mutationBusy() || this.testing()) return;
+    ++this.editorGeneration;
+    this.invalidateTest();
     this.hasStoredKey.set(false);
     this.editingId.set('');
     this.resetTest();
@@ -192,6 +223,9 @@ export class Models {
   }
 
   protected async startEdit(config: ProviderConfig): Promise<void> {
+    if (this.mutationBusy() || this.testing()) return;
+    const editor = ++this.editorGeneration;
+    this.invalidateTest();
     this.hasStoredKey.set(false);
     this.editingId.set(config.id);
     this.resetTest();
@@ -201,21 +235,32 @@ export class Models {
       baseUrl: config.baseUrl,
       nativeToolModels: (config.nativeToolModels ?? []).join('\n'),
     });
+    const test = this.testGeneration;
     try {
       const present = await this.store.hasApiKey(config.id);
-      if (this.editingId() === config.id) this.hasStoredKey.set(present);
+      if (!this.destroyRef.destroyed && this.editorGeneration === editor) this.hasStoredKey.set(present);
     } catch (error) {
-      if (this.editingId() === config.id) this.testError.set(IpcError.from(error).message);
+      if (!this.destroyRef.destroyed && this.editorGeneration === editor && this.testGeneration === test) {
+        this.testError.set(IpcError.from(error).message);
+      }
     }
   }
 
   protected cancelEdit(): void {
+    if (this.mutationBusy()) return;
+    this.closeEditor();
+  }
+
+  private closeEditor(): void {
+    ++this.editorGeneration;
+    this.invalidateTest();
     this.form.controls.apiKey.reset();
     this.editingId.set(null);
     this.resetTest();
   }
 
   protected onBackendChange(): void {
+    this.invalidateTest();
     const { backend, baseUrl } = this.form.getRawValue();
     if (backend !== 'openAiCompatible' && backend !== 'openAi') {
       this.form.controls.nativeToolModels.reset();
@@ -228,29 +273,34 @@ export class Models {
   }
 
   protected async test(): Promise<void> {
+    if (this.testing() || this.mutationBusy() || this.editingId() === null) return;
     if (this.form.invalid) {
       this.form.markAllAsTouched();
       return;
     }
+    const request = ++this.testGeneration;
+    const current = () => !this.destroyRef.destroyed && this.testGeneration === request;
     this.testing.set(true);
     this.resetTest();
     try {
-      this.testResult.set(await this.store.testProvider(this.draftConfig(true), this.form.controls.apiKey.value || undefined));
+      const result = await this.store.testProvider(this.draftConfig(true), this.form.controls.apiKey.value || undefined);
+      if (current()) this.testResult.set(result);
     } catch (error) {
-      this.testError.set(IpcError.from(error).message);
+      if (current()) this.testError.set(IpcError.from(error).message);
     } finally {
-      this.testing.set(false);
+      if (current()) this.testing.set(false);
     }
   }
 
   protected async saveProvider(): Promise<void> {
-    if (this.saving()) return;
+    if (this.mutationBusy() || this.testing()) return;
     if (this.form.invalid) {
       this.form.markAllAsTouched();
       return;
     }
     const editing = this.editingId();
     const draft = this.draftConfig(true);
+    const key = this.form.controls.apiKey.value;
     const current = this.store.configured();
     const next =
       editing === '' || editing === null
@@ -259,13 +309,14 @@ export class Models {
     this.saving.set(true);
     this.resetTest();
     try {
-      if (await this.store.saveProviders(next)) {
+      await this.store.withProviderMutation(async () => {
+        if (!(await this.store.saveProviders(next))) return false;
         // Retain the saved id on a keychain failure so retrying cannot add a duplicate.
         this.editingId.set(draft.id);
-        const key = this.form.controls.apiKey.value;
         if (key) await this.store.setApiKey(draft.id, key);
-        this.cancelEdit();
-      }
+        this.closeEditor();
+        return true;
+      });
     } catch (error) {
       this.testError.set(IpcError.from(error).message);
     } finally {
@@ -275,13 +326,18 @@ export class Models {
 
   protected async deleteKey(): Promise<void> {
     const id = this.editingId();
-    if (!id || this.saving()) return;
+    if (!id || this.mutationBusy() || this.testing()) return;
     this.saving.set(true);
     this.resetTest();
     try {
-      await this.store.deleteApiKey(id);
-      this.hasStoredKey.set(false);
-      this.form.controls.apiKey.reset();
+      const deleted = await this.store.withProviderMutation(async () => {
+        await this.store.deleteApiKey(id);
+        return true;
+      });
+      if (deleted) {
+        this.hasStoredKey.set(false);
+        this.form.controls.apiKey.reset();
+      }
     } catch (error) {
       this.testError.set(IpcError.from(error).message);
     } finally {
@@ -290,20 +346,38 @@ export class Models {
   }
 
   protected async toggle(config: ProviderConfig): Promise<void> {
-    await this.store.saveProviders(this.store.configured().map((p) => (p.id === config.id ? { ...p, enabled: !p.enabled } : p)));
+    if (this.mutationBusy() || this.testing()) return;
+    this.saving.set(true);
+    try {
+      await this.store.withProviderMutation(() =>
+        this.store.saveProviders(this.store.configured().map((p) => (p.id === config.id ? { ...p, enabled: !p.enabled } : p)))
+      );
+    } finally {
+      this.saving.set(false);
+    }
   }
 
   protected askRemove(config: ProviderConfig): void {
+    if (this.mutationBusy() || this.testing()) return;
     this.confirmingRemoval.set(config.id);
   }
 
   protected async remove(config: ProviderConfig): Promise<void> {
+    if (this.mutationBusy() || this.testing()) return;
     this.confirmingRemoval.set(null);
     const routing = this.store.routing();
-    await this.store.saveProviders(
-      this.store.configured().filter((p) => p.id !== config.id),
-      routing ? withoutProvider(routing, config.id) : undefined
-    );
+    this.saving.set(true);
+    try {
+      const saved = await this.store.withProviderMutation(() =>
+        this.store.saveProviders(
+          this.store.configured().filter((p) => p.id !== config.id),
+          routing ? withoutProvider(routing, config.id) : undefined
+        )
+      );
+      if (saved && this.editingId() === config.id) this.closeEditor();
+    } finally {
+      this.saving.set(false);
+    }
   }
 
   private draftConfig(enabled: boolean): ProviderConfig {
@@ -326,6 +400,13 @@ export class Models {
     this.testError.set(null);
   }
 
+  /** Cancels frontend waiting; the dispatched read-only request may still finish. */
+  private invalidateTest(): void {
+    ++this.testGeneration;
+    this.testing.set(false);
+    this.resetTest();
+  }
+
   // ---- Routing -----------------------------------------------------------
 
   protected optionsFor(category: TaskCategory) {
@@ -341,6 +422,11 @@ export class Models {
     return ref ? optionKey(ref.providerId, ref.model) : '';
   }
 
+  protected routeUnavailable(category: TaskCategory): boolean {
+    const key = this.selectedKey(category);
+    return key !== '' && !this.optionsFor(category).some((option) => optionKey(option.provider.id, option.model.id) === key);
+  }
+
   protected resolution(category: TaskCategory) {
     return this.store.routes().find((r) => r.category === category);
   }
@@ -351,19 +437,28 @@ export class Models {
     if (!base) {
       return;
     }
-    const option = this.store.options().find((o) => optionKey(o.provider.id, o.model.id) === key);
+    const option = this.optionsFor(category).find((o) => optionKey(o.provider.id, o.model.id) === key);
+    if (key !== '' && !option) return;
     const ref: ModelRef | null = option ? { providerId: option.provider.id, model: option.model.id } : null;
     this.routingDraft.set({ ...base, [ROUTING_KEYS[category]]: ref });
   }
 
   protected async saveRouting(): Promise<void> {
+    if (this.mutationBusy()) return;
     const draft = this.routingDraft();
-    if (draft && (await this.store.saveRouting(draft))) {
-      this.routingDraft.set(null);
+    if (!draft) return;
+    this.savingRouting.set(true);
+    try {
+      if ((await this.store.saveRouting(draft)) && !this.destroyRef.destroyed && this.routingDraft() === draft) {
+        this.routingDraft.set(null);
+      }
+    } finally {
+      this.savingRouting.set(false);
     }
   }
 
   protected discardRouting(): void {
+    if (this.mutationBusy()) return;
     this.routingDraft.set(null);
   }
 }

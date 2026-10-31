@@ -225,6 +225,20 @@ async fn file_tools_work_inside_the_workspace() {
     );
 }
 
+#[tokio::test]
+async fn a_successful_file_write_is_fully_visible_to_synchronous_readers() {
+    let w = workspace();
+    let content = "Завершений запис\n".repeat(8192);
+    for index in 0..4 {
+        let path = format!("write-{index}.txt");
+        w.call("write_file", json!({"path": path, "content": content}))
+            .await
+            .unwrap();
+        // No asynchronous read or yield should be needed after success.
+        assert_eq!(std::fs::read_to_string(w.root.join(path)).unwrap(), content);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn file_tools_refuse_escapes_binary_files_and_unknown_fields() {
     let w = workspace();

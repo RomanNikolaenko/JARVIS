@@ -12,9 +12,18 @@ use jarvis_ai::{
     AiError, AiProvider, ChatChunk, ChatRequest, ChatStream, DataLocality, FinishReason,
     ModelCapabilities, ModelInfo, ProviderDescriptor, ProviderId, ProviderKind,
 };
-use jarvis_core::jarvis_agent::{AgentTask, StepKind, StepOutcome, TaskStatus};
+use jarvis_core::jarvis_agent::{
+    AgentTask, StepKind, StepOutcome, TaskLimits, TaskStatus, TaskStep, TaskStore,
+};
 use jarvis_core::{AgentStartRequest, AppPaths, CoreOptions, ErrorCode, JarvisCore, Settings};
+use tokio::sync::Notify;
 use uuid::Uuid;
+
+#[derive(Debug, Default)]
+struct CapabilityGate {
+    entered: Notify,
+    release: Notify,
+}
 
 /// Plays the agent: plans, then sends the scripted agent turns in order.
 #[derive(Debug)]
@@ -23,6 +32,7 @@ struct AgentScript {
     turns: Mutex<Vec<String>>,
     delay: Duration,
     requests: Mutex<Vec<ChatRequest>>,
+    capability_gate: Option<Arc<CapabilityGate>>,
 }
 
 impl AgentScript {
@@ -45,6 +55,7 @@ impl AgentScript {
             turns: Mutex::new(turns.iter().rev().map(|t| (*t).to_owned()).collect()),
             delay,
             requests: Mutex::default(),
+            capability_gate: None,
         })
     }
 
@@ -84,6 +95,21 @@ impl AiProvider for AgentScript {
                 ..ModelCapabilities::default()
             },
         }])
+    }
+
+    async fn capabilities(&self, model: &str) -> Result<ModelCapabilities, AiError> {
+        if let Some(gate) = &self.capability_gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        self.list_models()
+            .await?
+            .into_iter()
+            .find(|info| info.id == model)
+            .map(|info| info.capabilities)
+            .ok_or_else(|| AiError::ModelNotFound {
+                model: model.to_owned(),
+            })
     }
 
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, AiError> {
@@ -130,6 +156,46 @@ async fn initialize(paths: &AppPaths, provider: Arc<AgentScript>) -> Arc<JarvisC
     )
     .await
     .unwrap()
+}
+
+/// A saved paused task has no live worker and must be authorized again on resume.
+async fn save_paused_task(core: &JarvisCore) -> AgentTask {
+    let task = AgentTask {
+        id: Uuid::new_v4(),
+        goal: "Continue the private journal".into(),
+        status: TaskStatus::Paused,
+        provider_id: Some("script".into()),
+        model: Some("script-model".into()),
+        limits: TaskLimits::default(),
+        plan: vec!["Review the notes".into()],
+        steps: vec![TaskStep {
+            index: 0,
+            kind: StepKind::Action,
+            thought: None,
+            tool: Some("read_file".into()),
+            input: Some(r#"{"path":"notes.txt"}"#.into()),
+            summary: Some("Private context saved before pausing".into()),
+            decision: None,
+            outcome: StepOutcome::Succeeded,
+            output: Some("Confidential journal contents for the original model".into()),
+            started_at_ms: 1,
+            duration_ms: 0,
+        }],
+        result: None,
+        error: Some("Paused for review".into()),
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        finished_at_ms: None,
+    };
+    save_task(core, &task).await;
+    task
+}
+
+async fn save_task(core: &JarvisCore, task: &AgentTask) {
+    TaskStore::new(core.memory().database().unwrap().clone())
+        .save(task)
+        .await
+        .unwrap();
 }
 
 /// A core whose workspace folder holds `notes.txt`; `write_file` is on.
@@ -387,4 +453,221 @@ async fn running_tasks_pause_on_exit_and_resume_after_a_restart() {
     let done = wait_for(&core, task.id, |t| t.status.is_finished()).await;
     assert_eq!(done.status, TaskStatus::Completed, "{done:#?}");
     core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paused_journal_never_falls_back_to_an_available_cloud_model() {
+    let original = AgentScript::new(DataLocality::OnDevice, &[FINAL]);
+    let t = start(original, |_| {}).await;
+    let paused = save_paused_task(&t.core).await;
+    t.core.shutdown().await;
+
+    let mut alternate = AgentScript::new(DataLocality::ThirdPartyCloud, &[FINAL]);
+    Arc::get_mut(&mut alternate).unwrap().descriptor.id = ProviderId::new("alternate-cloud");
+    let core = initialize(&t.paths, Arc::clone(&alternate)).await;
+    let mut settings = core.settings();
+    settings.privacy.allow_cloud_providers = true;
+    settings.privacy.allow_cloud_agents = true;
+    core.update_settings(settings).await.unwrap();
+
+    let err = core.resume_agent_task(paused.id).await.unwrap_err();
+    assert!(err.to_string().contains("script"), "{err}");
+    assert_eq!(core.agent_task(paused.id).await.unwrap(), paused);
+    assert!(alternate.requests.lock().unwrap().is_empty());
+    assert_eq!(core.agent_status().running_tasks, 0);
+    core.shutdown().await;
+
+    // Reconnecting the exact original model makes the same journal resumable.
+    let restored = AgentScript::new(DataLocality::OnDevice, &[FINAL]);
+    let core = initialize(&t.paths, Arc::clone(&restored)).await;
+    core.resume_agent_task(paused.id).await.unwrap();
+    let done = wait_for(&core, paused.id, |task| task.status.is_finished()).await;
+    assert_eq!(done.status, TaskStatus::Completed, "{done:#?}");
+    assert_eq!(done.provider_id, paused.provider_id);
+    assert_eq!(done.model, paused.model);
+    assert!(restored.requests.lock().unwrap().iter().any(|request| {
+        request.messages.iter().any(|message| {
+            message
+                .content
+                .contains("Confidential journal contents for the original model")
+        })
+    }));
+    assert!(alternate.requests.lock().unwrap().is_empty());
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabled_agents_cannot_resume_a_saved_task() {
+    let provider = AgentScript::new(DataLocality::OnDevice, &[FINAL]);
+    let t = start(Arc::clone(&provider), |_| {}).await;
+    let paused = save_paused_task(&t.core).await;
+    let mut settings = t.core.settings();
+    settings.agents.enabled = false;
+    t.core.update_settings(settings).await.unwrap();
+
+    let err = t.core.resume_agent_task(paused.id).await.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PermissionDenied);
+    assert_eq!(t.core.agent_task(paused.id).await.unwrap(), paused);
+    assert!(provider.requests.lock().unwrap().is_empty());
+    assert_eq!(t.core.agent_status().running_tasks, 0);
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_requires_a_complete_recorded_model_identity() {
+    let provider = AgentScript::new(DataLocality::OnDevice, &[FINAL]);
+    let t = start(Arc::clone(&provider), |_| {}).await;
+    for (provider_id, model) in [
+        (None, Some("script-model")),
+        (Some("script"), None),
+        (Some(" \t"), Some("script-model")),
+        (Some("script"), Some(" \n")),
+    ] {
+        let mut paused = save_paused_task(&t.core).await;
+        paused.provider_id = provider_id.map(str::to_owned);
+        paused.model = model.map(str::to_owned);
+        save_task(&t.core, &paused).await;
+
+        let err = t.core.resume_agent_task(paused.id).await.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Validation, "{err}");
+        assert_eq!(t.core.agent_task(paused.id).await.unwrap(), paused);
+    }
+    assert!(provider.requests.lock().unwrap().is_empty());
+    assert_eq!(t.core.agent_status().running_tasks, 0);
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_refuses_unfinished_actions_without_changing_their_journal() {
+    let provider = AgentScript::new(DataLocality::OnDevice, &[FINAL]);
+    let t = start(Arc::clone(&provider), |_| {}).await;
+    for outcome in [StepOutcome::InProgress, StepOutcome::Unknown] {
+        let mut paused = save_paused_task(&t.core).await;
+        paused.steps[0].kind = StepKind::Action;
+        paused.steps[0].tool = Some("write_file".into());
+        paused.steps[0].outcome = outcome;
+        save_task(&t.core, &paused).await;
+
+        let err = t.core.resume_agent_task(paused.id).await.unwrap_err();
+        assert!(err.to_string().contains("unknown result"), "{err}");
+        assert_eq!(t.core.agent_task(paused.id).await.unwrap(), paused);
+    }
+    assert!(provider.requests.lock().unwrap().is_empty());
+    assert_eq!(t.core.agent_status().running_tasks, 0);
+    t.core.shutdown().await;
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RevokedPermission {
+    Agents,
+    CloudProviders,
+    CloudAgents,
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabling_agents_while_an_approval_is_pending_prevents_the_write() {
+    let provider = AgentScript::new(DataLocality::OnDevice, &[WRITE_SUMMARY, FINAL]);
+    let t = start(Arc::clone(&provider), |_| {}).await;
+    let task = t
+        .core
+        .start_agent_task(goal("Write a summary after approval"))
+        .await
+        .unwrap();
+    wait_for(&t.core, task.id, |task| {
+        task.status == TaskStatus::WaitingForApproval
+    })
+    .await;
+    let pending = t.core.pending_approvals();
+    assert_eq!(pending.len(), 1);
+
+    let mut settings = t.core.settings();
+    settings.agents.enabled = false;
+    t.core.update_settings(settings).await.unwrap();
+    assert!(t.core.resolve_approval(pending[0].id, true));
+
+    let done = wait_for(&t.core, task.id, |task| task.status.is_finished()).await;
+    assert!(!t.workspace.join("summary.txt").exists());
+    let action = done
+        .steps
+        .iter()
+        .find(|step| step.tool.as_deref() == Some("write_file"))
+        .unwrap();
+    assert_eq!(action.outcome, StepOutcome::Denied, "{done:#?}");
+    assert!(
+        action
+            .output
+            .as_deref()
+            .is_some_and(|output| output.contains("Not run")),
+        "{action:#?}"
+    );
+    // Planning and the original action were sent before revocation; no later turn is.
+    assert_eq!(provider.requests.lock().unwrap().len(), 2);
+    t.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn permissions_revoked_during_model_discovery_block_start_and_resume() {
+    for resume in [false, true] {
+        for permission in [
+            RevokedPermission::Agents,
+            RevokedPermission::CloudProviders,
+            RevokedPermission::CloudAgents,
+        ] {
+            let gate = Arc::new(CapabilityGate::default());
+            let mut provider = AgentScript::new(DataLocality::ThirdPartyCloud, &[FINAL]);
+            Arc::get_mut(&mut provider).unwrap().capability_gate = Some(Arc::clone(&gate));
+            let t = start(Arc::clone(&provider), |settings| {
+                settings.privacy.allow_cloud_providers = true;
+                settings.privacy.allow_cloud_agents = true;
+            })
+            .await;
+            let paused = if resume {
+                Some(save_paused_task(&t.core).await)
+            } else {
+                None
+            };
+            let core = Arc::clone(&t.core);
+            let paused_id = paused.as_ref().map(|task| task.id);
+            let pending = tokio::spawn(async move {
+                if let Some(id) = paused_id {
+                    core.resume_agent_task(id).await
+                } else {
+                    let mut request = goal("Private task awaiting model discovery");
+                    request.provider_id = Some(ProviderId::new("script"));
+                    request.model = Some("script-model".into());
+                    core.start_agent_task(request).await.map(|_| ())
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+                .await
+                .expect("model discovery should reach the controlled pause");
+            let mut settings = t.core.settings();
+            match permission {
+                RevokedPermission::Agents => settings.agents.enabled = false,
+                RevokedPermission::CloudProviders => settings.privacy.allow_cloud_providers = false,
+                RevokedPermission::CloudAgents => settings.privacy.allow_cloud_agents = false,
+            }
+            t.core.update_settings(settings).await.unwrap();
+            gate.release.notify_one();
+
+            let err = tokio::time::timeout(Duration::from_secs(5), pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                ErrorCode::PermissionDenied,
+                "resume={resume}, revoked={permission:?}: {err}"
+            );
+            if let Some(paused) = paused {
+                assert_eq!(t.core.agent_task(paused.id).await.unwrap(), paused);
+            } else {
+                assert!(t.core.list_agent_tasks(10).await.unwrap().is_empty());
+            }
+            assert!(provider.requests.lock().unwrap().is_empty());
+            assert_eq!(t.core.agent_status().running_tasks, 0);
+            t.core.shutdown().await;
+        }
+    }
 }

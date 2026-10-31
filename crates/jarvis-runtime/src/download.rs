@@ -241,6 +241,11 @@ async fn fetch_inner(
 ) -> Result<()> {
     let cancel = handle.cancel_token();
     let part = part_path(dest);
+    if let Some(size) = verified_existing(dest, expected, cancel).await? {
+        handle.phase(DownloadPhase::Verifying);
+        handle.progress(size, Some(size), 0);
+        return Ok(());
+    }
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -358,9 +363,118 @@ async fn fetch_inner(
             actual,
         });
     }
-    tokio::fs::rename(&part, dest)
-        .await
-        .map_err(|err| RuntimeError::io("finishing the download", err))
+    publish_verified(&part, dest, expected, cancel).await
+}
+
+/// A completed file may belong to another model or to an imported file. Reuse
+/// it only after checking its actual bytes; never replace it based on its name.
+async fn verified_existing(
+    dest: &Path,
+    expected: &Expected,
+    cancel: &CancellationToken,
+) -> Result<Option<u64>> {
+    if cancel.is_cancelled() {
+        return Err(RuntimeError::Cancelled);
+    }
+    let metadata = match tokio::fs::symlink_metadata(dest).await {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(RuntimeError::io("checking the download destination", err)),
+    };
+    let conflict = || {
+        RuntimeError::InvalidInput(format!(
+            "{} already exists and is not this verified download; move the existing file or remove its model and file before downloading a different file with the same name",
+            dest.display()
+        ))
+    };
+    if !metadata.file_type().is_file() || expected.size.is_some_and(|size| metadata.len() != size) {
+        return Err(conflict());
+    }
+    let mut hasher = Sha256::new();
+    hash_file_into(dest, &mut hasher, cancel).await?;
+    if hex(&hasher.finalize()) != expected.sha256.to_ascii_lowercase() {
+        return Err(conflict());
+    }
+    Ok(Some(metadata.len()))
+}
+
+/// A hard link publishes the verified file without replacing an existing path.
+/// File systems without hard links use an exclusive create and copy instead.
+async fn publish_verified(
+    part: &Path,
+    dest: &Path,
+    expected: &Expected,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Err(RuntimeError::Cancelled);
+    }
+    match tokio::fs::hard_link(part, dest).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            require_verified_existing(dest, expected, cancel).await?;
+        }
+        Err(_) => {
+            // create_new is the no-overwrite boundary even if another program
+            // put a file at this path while the HTTP transfer was in flight.
+            let opened = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dest)
+                .await;
+            let mut output = match opened {
+                Ok(output) => output,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    require_verified_existing(dest, expected, cancel).await?;
+                    let _ = tokio::fs::remove_file(part).await;
+                    return Ok(());
+                }
+                Err(err) => return Err(RuntimeError::io("finishing the download", err)),
+            };
+            let copied = async {
+                let mut input = tokio::fs::File::open(part)
+                    .await
+                    .map_err(|err| RuntimeError::io("reading the verified download", err))?;
+                tokio::select! {
+                    () = cancel.cancelled() => return Err(RuntimeError::Cancelled),
+                    result = tokio::io::copy(&mut input, &mut output) => {
+                        result.map_err(|err| RuntimeError::io("finishing the download", err))?;
+                    }
+                }
+                output
+                    .flush()
+                    .await
+                    .map_err(|err| RuntimeError::io("finishing the download", err))?;
+                output
+                    .sync_all()
+                    .await
+                    .map_err(|err| RuntimeError::io("finishing the download", err))
+            }
+            .await;
+            drop(output);
+            if let Err(err) = copied {
+                let _ = tokio::fs::remove_file(dest).await;
+                return Err(err);
+            }
+        }
+    }
+    let _ = tokio::fs::remove_file(part).await;
+    Ok(())
+}
+
+async fn require_verified_existing(
+    dest: &Path,
+    expected: &Expected,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    verified_existing(dest, expected, cancel)
+        .await?
+        .ok_or_else(|| {
+            RuntimeError::Download(
+                "the destination changed while finishing the download; retry the download".into(),
+            )
+        })?;
+    Ok(())
 }
 
 async fn hash_file_into(

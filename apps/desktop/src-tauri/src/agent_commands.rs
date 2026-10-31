@@ -62,10 +62,16 @@ pub async fn resume_agent_task(state: State<'_, AppState>, id: Uuid) -> CommandR
     Ok(state.core().resume_agent_task(id).await?)
 }
 
-/// Deletes finished tasks; returns how many.
+/// Clears known finished tasks, or explicitly deletes one reviewed journal.
 #[tauri::command]
-pub async fn clear_finished_agent_tasks(state: State<'_, AppState>) -> CommandResult<u32> {
-    let removed = state.core().clear_finished_agent_tasks().await?;
+pub async fn clear_finished_agent_tasks(
+    state: State<'_, AppState>,
+    reviewed_task_id: Option<Uuid>,
+) -> CommandResult<u32> {
+    let removed = match reviewed_task_id {
+        Some(id) => state.core().delete_reviewed_agent_task(id).await?,
+        None => state.core().clear_finished_agent_tasks().await?,
+    };
     Ok(u32::try_from(removed).unwrap_or(u32::MAX))
 }
 

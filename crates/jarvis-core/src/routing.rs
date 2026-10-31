@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::catalog::ProviderModels;
+use crate::config::PrivacySettings;
 use crate::error::CoreError;
 
 /// Kinds of work JARVIS routes to models. Speech categories arrive with the
@@ -274,6 +275,32 @@ pub(crate) fn check_privacy(
             "Sending data to the cloud provider \"{}\" is disabled in privacy settings",
             provider.display_name
         )));
+    }
+    Ok(())
+}
+
+/// Checks the permissions for the data actually included in a request.
+/// Call at dispatch with current settings and the destination's own descriptor.
+pub(crate) fn check_data_privacy(
+    provider: &ProviderDescriptor,
+    privacy: &PrivacySettings,
+    shares_memory: bool,
+    shares_captures: bool,
+) -> Result<(), CoreError> {
+    check_privacy(provider, privacy.allow_cloud_providers)?;
+    if provider.locality != DataLocality::ThirdPartyCloud {
+        return Ok(());
+    }
+    if shares_memory && !privacy.share_memory_with_cloud {
+        return Err(CoreError::PermissionDenied(
+            "Saved memory is not shared with cloud models unless allowed in Settings → Privacy"
+                .to_owned(),
+        ));
+    }
+    if shares_captures && !privacy.share_captures_with_cloud {
+        return Err(CoreError::PermissionDenied(
+            "Images are not sent to cloud models unless allowed in Settings → Privacy".to_owned(),
+        ));
     }
     Ok(())
 }

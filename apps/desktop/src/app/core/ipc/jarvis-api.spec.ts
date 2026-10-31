@@ -3,6 +3,7 @@ import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 
 import { IpcError } from './ipc-error';
 import { JarvisApi } from './jarvis-api';
+import { TauriBridge } from './tauri-bridge';
 
 describe('JarvisApi', () => {
   let api: JarvisApi;
@@ -32,6 +33,14 @@ describe('JarvisApi', () => {
 
     expect(api.connected).toBe(false);
     await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  it('subscribes to catalog invalidation without exposing model connection data', async () => {
+    const cleanup = vi.fn();
+    const listen = vi.spyOn(TestBed.inject(TauriBridge), 'listen').mockResolvedValue(cleanup);
+    const handler = vi.fn();
+    expect(await api.onModelsChanged(handler)).toBe(cleanup);
+    expect(listen).toHaveBeenCalledWith('jarvis://models-changed', handler);
   });
 
   it('invokes commands with the argument names expected by Rust', async () => {
@@ -69,6 +78,7 @@ describe('JarvisApi', () => {
     await api.resolveApproval('a-1', false);
     await api.getAuditLog(50, '12345678-1234-4234-8234-123456789012');
     await api.pauseAgentTask('t-1');
+    await api.deleteReviewedAgentTask('reviewed-t-1');
     await api.startAgentTask({
       goal: 'g',
       providerId: null,
@@ -81,6 +91,7 @@ describe('JarvisApi', () => {
       { cmd: 'resolve_approval', args: { id: 'a-1', approved: false } },
       { cmd: 'get_audit_log', args: { limit: 50, beforeId: '12345678-1234-4234-8234-123456789012' } },
       { cmd: 'pause_agent_task', args: { id: 't-1' } },
+      { cmd: 'clear_finished_agent_tasks', args: { reviewedTaskId: 'reviewed-t-1' } },
       {
         cmd: 'start_agent_task',
         args: {

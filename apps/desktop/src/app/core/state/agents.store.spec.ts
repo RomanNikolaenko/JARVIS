@@ -64,6 +64,7 @@ class FakeApi {
   }
   verifyAuditLog = vi.fn(async (): Promise<AuditVerification> => ({ entries: 102, intact: true, brokenAt: null }));
   clearFinishedAgentTasks = vi.fn(async () => 1);
+  deleteReviewedAgentTask = vi.fn(async (_id: string) => 1);
   addWorkspaceFolder = vi.fn(async () => ({
     ...SETTINGS,
     tools: { ...SETTINGS.tools, workspaceFolders: ['/new'] },
@@ -873,5 +874,40 @@ describe('AgentsStore', () => {
     await store.clearFinished();
     expect(store.selected()).toBeNull();
     expect(store.tasks()).toEqual([]);
+  });
+
+  it.each(['unknown', 'inProgress'] as const)('keeps a selected journal with an %s action after bulk clear', async (outcome) => {
+    const task = agentTask(`retained-${outcome}`, 'cancelled');
+    task.steps[0].outcome = outcome;
+    api.listAgentTasks.mockResolvedValue([summarize(task)]);
+    api.getAgentTask.mockResolvedValue(task);
+    await store.loadTasks();
+
+    await store.clearFinished();
+
+    expect(api.clearFinishedAgentTasks).toHaveBeenCalledOnce();
+    expect(store.selectedId()).toBe(task.id);
+    expect(store.selected()).toBe(task);
+    expect(store.tasks().map((entry) => entry.id)).toEqual([task.id]);
+  });
+
+  it('deletes only the reviewed journal and retains the other unresolved task', async () => {
+    const reviewed = agentTask('reviewed', 'cancelled', 20);
+    reviewed.steps[0].outcome = 'unknown';
+    const retained = agentTask('retained', 'failed', 10);
+    retained.steps[0].outcome = 'unknown';
+    api.listAgentTasks.mockResolvedValueOnce([summarize(reviewed), summarize(retained)]);
+    api.listAgentTasks.mockResolvedValueOnce([summarize(retained)]);
+    api.getAgentTask.mockImplementation(async (id: string) => (id === reviewed.id ? reviewed : retained));
+    await store.loadTasks();
+    expect(store.selectedId()).toBe(reviewed.id);
+
+    await store.deleteReviewed(reviewed.id);
+
+    expect(api.deleteReviewedAgentTask).toHaveBeenCalledOnce();
+    expect(api.deleteReviewedAgentTask).toHaveBeenCalledWith(reviewed.id);
+    expect(store.tasks().map((entry) => entry.id)).toEqual([retained.id]);
+    expect(store.selectedId()).toBe(retained.id);
+    expect(store.selected()).toBe(retained);
   });
 });

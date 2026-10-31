@@ -16,6 +16,9 @@
           <span class="field-label">Model</span>
           <select name="model" [ngModel]="modelKey()" (ngModelChange)="modelKey.set($event)">
             <option value="">Automatic</option>
+            @if (selectionUnavailable()) {
+              <option [value]="modelKey()" disabled>Selected model unavailable</option>
+            }
             @for (option of modelOptions(); track optionKey(option.provider.id, option.model.id)) {
               <option [value]="optionKey(option.provider.id, option.model.id)">
                 {{ option.model.displayName }} · {{ option.provider.displayName }}
@@ -46,6 +49,12 @@
             (ngModelChange)="maxMinutes.set($event)" />
         </label>
       </div>
+      @if (selectionUnavailable()) {
+        <p class="notice warning" role="status">
+          <jv-icon name="warning" [size]="14" />
+          The selected model is no longer available. Choose another model or select Automatic.
+        </p>
+      }
       <p class="hint">
         <jv-icon name="shield" [size]="14" />
         Text from files, pages and programs is treated as data, not as instructions. Changes wait for your approval unless you
@@ -60,8 +69,11 @@
     </form>
 
     <div class="list-header">
-      <h2>Tasks</h2>
-      <button type="button" class="ghost small" (click)="store.clearFinished()" [disabled]="!store.hasFinished()">
+      <div>
+        <h2>Tasks</h2>
+        <small class="dim">Journals with unknown action results are retained for manual review.</small>
+      </div>
+      <button type="button" class="ghost small" (click)="store.clearFinished()" [disabled]="!store.hasFinished() || store.busy()">
         Clear finished
       </button>
     </div>
@@ -107,7 +119,7 @@
             <button type="button" class="small" (click)="store.pause(task.id)">Pause</button>
           }
           @if (task.status === 'paused') {
-            <button type="button" class="small primary" (click)="store.resume(task.id)">Resume</button>
+            <button type="button" class="small primary" [disabled]="!canResume(task)" (click)="resume(task)">Resume</button>
           }
           @if (!finished()) {
             <button type="button" class="small danger" (click)="store.cancel(task.id)">
@@ -115,8 +127,59 @@
               Cancel
             </button>
           }
+          @if (canDeleteReviewed(task)) {
+            <button type="button" class="small danger" [disabled]="store.busy()" (click)="confirmDeleteId.set(task.id)">
+              Delete reviewed journal
+            </button>
+          }
         </div>
       </header>
+
+      @if (task.status === 'paused') {
+        @if (resumeBlock(task); as reason) {
+          <div class="notice warning resume-notice" role="status">
+            <jv-icon name="warning" [size]="15" />
+            @switch (reason) {
+              @case ('disabled') {
+                <span>Agents are turned off. Enable agents in Tools &amp; permissions to resume this task.</span>
+              }
+              @case ('unknownResult') {
+                <span>An action has an unknown result. Review its effects manually; this task cannot be resumed.</span>
+              }
+              @case ('missingIdentity') {
+                <span
+                  >This task has no complete record of its original model. Review its journal before starting a new task.</span
+                >
+              }
+              @case ('modelUnavailable') {
+                <span>
+                  Original model <span class="mono">{{ task.model }}</span> from <span class="mono">{{ task.providerId }}</span>
+                  is unavailable. Start or reconnect that model, then refresh models. Resuming keeps the original model.
+                </span>
+                <button type="button" class="ghost small" [disabled]="modelsLoading()" (click)="refreshModels()">
+                  Refresh models
+                </button>
+              }
+            }
+          </div>
+        }
+      }
+
+      @if (confirmDeleteId() === task.id) {
+        <div class="notice warning" role="alert">
+          <jv-icon name="warning" [size]="15" />
+          <span>
+            Delete only after you have checked the action's actual effects. This removes this journal only; its audit entries are
+            retained.
+          </span>
+          <button type="button" class="danger small" [disabled]="store.busy()" (click)="deleteReviewed(task.id)">
+            Delete journal
+          </button>
+          <button type="button" class="ghost small" [disabled]="store.busy()" (click)="confirmDeleteId.set(null)">
+            Keep journal
+          </button>
+        </div>
+      }
 
       @if (task.status === 'waitingForApproval') {
         <p class="notice warning">
@@ -131,7 +194,10 @@
         </div>
       }
       @if (task.error) {
-        <p class="notice" [class.danger]="task.status === 'failed'" [class.warning]="task.status === 'unverified'">
+        <p
+          class="notice"
+          [class.danger]="task.status === 'failed'"
+          [class.warning]="task.status === 'unverified' || task.status === 'cancelled'">
           <jv-icon name="warning" [size]="15" />
           {{ task.error }}
         </p>
@@ -162,12 +228,21 @@
                   <span class="chip">{{ step.decision }}</span>
                 }
                 @if (outcomeChip(step.outcome); as tone) {
-                  <span class="chip" [class]="tone">{{ step.outcome }}</span>
+                  <span class="chip" [class]="tone">{{ outcomeLabel(step.outcome) }}</span>
                 }
                 @if (step.durationMs > 0) {
                   <span class="dim">{{ (step.durationMs / 1000).toFixed(1) }} s</span>
                 }
               </div>
+              @if (step.outcome === 'unknown') {
+                <p class="notice warning" role="alert">
+                  <jv-icon name="warning" [size]="15" />
+                  <span>
+                    The result of operation <span class="mono">{{ task.id }}:{{ step.index }}</span> is unknown. It may have
+                    completed or partly happened. Check its effects manually before starting another task.
+                  </span>
+                </p>
+              }
               @if (step.thought) {
                 <p class="thought">{{ step.thought }}</p>
               }
@@ -179,7 +254,7 @@
                   </details>
                 }
                 @if (step.output) {
-                  <details>
+                  <details [open]="step.outcome === 'unknown' || step.outcome === 'failed' || step.outcome === 'denied'">
                     <summary>Output</summary>
                     <pre>{{ step.output }}</pre>
                   </details>

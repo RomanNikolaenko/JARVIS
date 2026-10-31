@@ -218,6 +218,20 @@ across network chunks. See also [ADR 0003](docs/decisions/0003-ai-provider-abstr
   [ADR 0007](docs/decisions/0007-model-routing.md).
 - **Reload:** saving settings with changed providers rebuilds the registry
   atomically; running chats keep their provider handle.
+  After replacement and catalog invalidation, the core notifies subscribers
+  through `subscribe_models_changed`; the desktop forwards a payload-free
+  `jarvis://models-changed` event. Routing and cloud-policy changes also notify
+  subscribers. The shell listens on every screen, including during runtime
+  autostart, and retries subscription after connection loss. Model refreshes
+  list the catalog before resolving routes under one deadline, avoiding route
+  reads against the pre-refresh cache.
+  Provider tests and registry construction share the credential-vault fallback:
+  lookup failures permit unauthenticated local/LAN providers and refuse cloud
+  providers. Explicit test keys bypass the vault and use the saved-key validator
+  (at most 8192 bytes, nonempty, no control characters). Frontend test waiting is
+  bounded to 30 seconds. Closing or changing the editor invalidates its pending
+  result without cancelling an already dispatched native read; late results and
+  saved-key presence responses cannot update another editor session.
 
 ### 4.2b Embedded runtime (`jarvis-runtime`)
 
@@ -242,6 +256,27 @@ component covering both servers; autostart happens only for
 first). Data lives in the local data directory: `runtime/` (engine, install
 record, pid files) and `models/`.
 
+Replacement starts validate the engine, target model file, vision projector
+and embedding pooling before stopping the current server. Refused targets
+leave its process and provider available. Memory is measured after a valid
+replacement stops the old server, so its released RAM can be reused.
+The Runtime screen offers Restart for a running role using the existing start
+command. It rechecks the displayed model and process identity against the latest
+status and blocks restart during pending commands, stale status or unsaved
+inference settings. Restart applies saved settings only; Stop remains available
+during startup.
+
+Library mutations serialize candidate construction, index persistence and
+publication. A failed index write keeps the committed live state. Removal saves
+the candidate before deleting weights; a failed file deletion restores the old
+index for retry, or reports the committed removal and remaining file if rollback
+also fails. Registering an exact download retry preserves its ID, projector and
+original timestamp; a different source/checksum cannot replace that path.
+Downloads reject indexed name conflicts before transferring weights. Existing
+files are reused only after size/hash verification. Final publication uses an
+exclusive hard link or exclusive file creation on other file systems, so a file
+appearing during transfer is never overwritten.
+
 ### 4.3 Chat orchestration (`jarvis-core::chat`)
 
 `ChatService::start(request, sink)`:
@@ -262,6 +297,16 @@ record, pid files) and `models/`.
 
 Every accepted request ends with exactly one `finished` (reason `stop`,
 `length` or `cancelled`) or `failed` event, unless the receiver disappears.
+
+Privacy is checked again after model discovery and immediately before dispatch
+against the actual retained provider handle and current settings. Cloud requests
+with images require capture sharing; assembled facts and recalls require memory
+sharing. A refusal before the user message is saved keeps the conversation and
+captures unchanged. A later refusal in an accepted background job emits the
+normal `failed` event and releases its request slot. Already dispatched requests
+retain their existing cancellation behavior. Embedding batches and automatic
+conversation summaries also check permissions before contacting their provider;
+summaries of the current conversation follow its chat permission.
 
 ### 4.3a Memory (`jarvis-storage`, `jarvis-memory`, `jarvis-core::memory`)
 
@@ -301,6 +346,12 @@ A conversation turn (`JarvisCore::send_message`):
 6. if older messages no longer fit, the same model writes a summary of the
    oldest uncovered ones in the background.
 
+Summary requests account for wrappers and message overhead within their token
+budget. Long messages and oversized previous summaries use bounded excerpts
+marked with an ellipsis, so a small window can still cover at least two
+consecutive old messages. Batches avoid leaving a single old message stranded;
+the six most recent messages and the stored original text are unchanged.
+
 Background tasks: the indexer embeds new facts and messages (batches of 32,
 on change and every 60 s), the recorder writes actions to the history every
 5 s and on shutdown, the pruner removes actions older than the retention.
@@ -330,23 +381,49 @@ model reply ──parse──▶ tool call ──prepare (no side effects)──
 | `write_file` (new file), `edit_file`, `copy_path`, `move_path`, `fetch_url`, `open_url` | medium | `fetch_url`: public http(s) only, DNS re-checked per redirect, text only |
 | `write_file` (overwrite), `delete_path` (file or empty folder), `run_command`, `launch_program`, `stop_program` | high | always need approval; programs from the allowlist, no shell, time limit; only programs JARVIS started can be stopped |
 
-**Settings** (`tools`, `agents`, `privacy.allowCloudAgents`) are read
-before every step, so a change applies to running tasks. Protected paths:
-JARVIS's config, data and log folders.
+**Tool permissions and limits** are read before every action. After approval
+and the durable intent checkpoint, the executor re-prepares the call with
+current scope and limits, verifies that
+the registered tool and prepared action have not changed, and re-evaluates
+the current policy before execution. A revoked permission, changed target,
+increased risk or replaced plugin tool refuses the call and is audited;
+the model must propose a fresh action to obtain a new approval. Protected
+paths: JARVIS's config, data and log folders.
 
 **Task lifecycle:** `pending → running ⇄ waitingForApproval`, `running ⇄
-paused`, then `completed | failed | cancelled`. The journal (`TaskStep`:
+paused`, then `completed | unverified | failed | cancelled`. The journal (`TaskStep`:
 plan, action, answer, verification, note — with thought, input, decision,
 outcome, output, duration) is saved to `agent_tasks` after every step and
 pushed to the UI (`jarvis://agent-task`). Pending approvals are pushed as a
 list (`jarvis://approvals`); a new request also asks the OS to draw
 attention to the window.
 
+If a started non-idempotent tool returns an error, or cancellation, shutdown
+or a timeout interrupts it, its effects are recorded as `unknown`. The task
+stops without another model turn: explicit user cancellation stays `cancelled`,
+while other uncertain outcomes become `failed`, never resumable. The journal
+names the operation and requires a manual check of its effects. Bulk clearing
+retains terminal tasks containing `unknown` or unfinished execution intents. After reviewing
+the actual effects, the user can explicitly delete one finished journal;
+its audit entries remain intact. Interrupted idempotent reads can still be
+paused on shutdown and resumed safely.
+
 **Model:** `AgentModel` is implemented in the core: explicit choice →
 `toolCalling` route → general route, the chat privacy check, plus
 `allowCloudAgents` for cloud models; temperature 0.2, at most 1 024 output
 tokens per turn, the request timeout from settings; the conversation sent
 to the model is trimmed to its context window (oldest steps first).
+
+Resume requires a paused task with a complete original provider/model identity
+and no unfinished or unknown action. The core resolves that exact identity;
+unavailability leaves the journal untouched and never selects another route.
+Agent and cloud permissions are re-read after model discovery. Each new text
+or native model request also checks current permissions against its own
+provider handle, so a cached paused connection cannot bypass a later policy
+change. Disabling agents yields an empty tool policy (including plugins) at
+the normal execution check. Requests already dispatched retain their existing
+cancellation behavior. The UI shows why Resume is unavailable, lets the user
+refresh models, and keeps Cancel and the journal available.
 
 ### 4.3c Voice and vision (`jarvis-voice`, `jarvis-vision`, `jarvis-core::voice`, `::vision`)
 
@@ -535,6 +612,22 @@ must be granted by a capability; anything not granted is denied. See
   `idle → connecting → streaming → idle`; "Automatic" lets the core route),
   `MemoryStore` (facts, projects, action history, search, data),
   `AgentsStore` (tasks, pushed task updates, approvals, tools, audit log).
+- Explicit chat selections retain their provider/model IDs independently of
+  catalog availability. Missing selections show an unavailable option and block
+  chat/agent submission; drafts and captures remain in place. Voice input checks
+  the same readiness guard before taking attachments. Only an explicit
+  Automatic choice clears the selection. Requests snapshot the chosen IDs
+  before asynchronous conversation creation; discovery changes cannot reroute
+  a pending turn. The agent task form also retains missing selections and
+  refuses submission until the model returns or the user chooses another route.
+  Routing selectors retain unavailable or category-incompatible saved references
+  and label them explicitly rather than visually defaulting to Automatic.
+- Model routing saves capture a draft snapshot and clear it only if no newer
+  draft replaced it. Inputs remain editable while Save/Discard are blocked.
+  Provider settings/key/catalog workflows share a root-store mutation guard,
+  including after navigation recreates the page. Provider controls cannot
+  remove a just-saved provider before its key write completes; key values are
+  captured before asynchronous work and deleted-provider editors are closed.
 - Chat stream callbacks and send acknowledgements are scoped to their local
   assistant entry. Finished, disconnected or disposed turns cannot change a
   later turn. A failed core health probe ends frontend waiting and preserves
@@ -573,7 +666,12 @@ must be granted by a capability; anything not granted is denied. See
   Opening a conversation has a 30-second frontend deadline. Failure retains the
   currently displayed chat; a later open can retry. Older timeouts cannot clear a
   newer open's loading state, and store destruction settles pending opens without
-  applying their late results.
+  applying their late results. While an open is pending, Send/Enter and note or
+  project changes are blocked in the component and store so they cannot target
+  the previous conversation; composer and note drafts are preserved.
+  Automatic navigation after a new chat's send acknowledgement also requires
+  the same input context and a live component; a late acknowledgement cannot
+  undo a subsequent conversation open or New chat action.
   Conversation search uses request generations, invalidated immediately on input
   changes, so even A → B → A edits during debounce cannot publish an old response.
   Reads have a 30-second frontend deadline and settle on store destruction.

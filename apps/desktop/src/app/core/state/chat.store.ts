@@ -6,13 +6,14 @@ import type {
   Conversation,
   ConversationPatch,
   ConversationSummary,
+  ModelRef,
   StoredMessage,
 } from '@jarvis/shared-types';
 
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
 import { withRequestDeadline } from '../ipc/request-deadline';
-import { type ModelOption, ModelsStore, optionKey } from './models.store';
+import { type ModelOption, ModelsStore } from './models.store';
 import { SettingsStore } from './settings.store';
 import { VisionStore } from './vision.store';
 
@@ -74,7 +75,8 @@ export class ChatStore {
   private cancelRequested = false;
   private cancellation: { entryId: string; promise: Promise<void> } | null = null;
   /** `null` = automatic: the core's model router decides. */
-  private readonly selectedKey = signal<string | null>(null);
+  private readonly selectedModel = signal<ModelRef | null>(null);
+  private selectionError: IpcError | null = null;
 
   readonly conversations = signal<readonly Conversation[]>([]);
   readonly conversationQuery = signal('');
@@ -102,6 +104,7 @@ export class ChatStore {
       !this.loading() &&
       !this.savingNote() &&
       !this.readOnly() &&
+      !this.selectionUnavailable() &&
       !this.deletingIds().includes(this.conversation()?.id ?? '')
   );
   readonly deletingIds = signal<readonly string[]>([]);
@@ -145,11 +148,17 @@ export class ChatStore {
   readonly modelOptions = this.models.chatOptions;
   readonly modelsError = this.models.error;
   readonly automaticRoute = this.models.generalRoute;
-  /** Explicitly selected model; `null` when automatic or no longer available. */
+  /** The user's explicit choice is retained even when discovery loses it. */
+  readonly selection = this.selectedModel.asReadonly();
+  /** Live metadata; unavailable explicit selections have no current option. */
   readonly selected = computed<ModelOption | null>(() => {
-    const key = this.selectedKey();
-    return key === null ? null : (this.modelOptions().find((o) => optionKey(o.provider.id, o.model.id) === key) ?? null);
+    const choice = this.selection();
+    return choice === null
+      ? null
+      : (this.modelOptions().find((option) => option.provider.id === choice.providerId && option.model.id === choice.model) ??
+          null);
   });
+  readonly selectionUnavailable = computed(() => this.selection() !== null && this.selected() === null);
   /** True when models are loaded and no real AI model is reachable. */
   readonly diagnosticOnly = computed(() => this.models.loaded() && !this.models.realModelAvailable());
 
@@ -159,7 +168,13 @@ export class ChatStore {
 
   /** Selects a model, or automatic routing with `null`. */
   select(option: ModelOption | null): void {
-    this.selectedKey.set(option ? optionKey(option.provider.id, option.model.id) : null);
+    this.clearSelectionError();
+    this.selectedModel.set(option ? Object.freeze({ providerId: option.provider.id, model: option.model.id }) : null);
+  }
+
+  private clearSelectionError(): void {
+    if (this.selectionError !== null && this.error() === this.selectionError) this.error.set(null);
+    this.selectionError = null;
   }
 
   /** Invalidate immediately, including the debounce interval and A → B → A edits. */
@@ -262,6 +277,7 @@ export class ChatStore {
     if (
       !content ||
       this.busy() ||
+      this.loading() ||
       this.savingNote() ||
       this.destroyRef.destroyed ||
       content.length > MAX_MESSAGE_LENGTH ||
@@ -269,6 +285,18 @@ export class ChatStore {
     ) {
       return;
     }
+    this.clearSelectionError();
+    if (this.selectionUnavailable()) {
+      this.selectionError = new IpcError(
+        'unavailable',
+        'The selected model is unavailable. Choose another model or select Automatic before sending.'
+      );
+      this.error.set(this.selectionError);
+      return;
+    }
+    // Snapshot the explicit choice before creating a conversation. Discovery
+    // changes or a selection for the next turn must not reroute this message.
+    const selection = this.selection();
     this.phase.set('connecting');
     this.resetCancellation();
     ++this.openRequest;
@@ -280,7 +308,6 @@ export class ChatStore {
     this.activeEntryId = assistantId;
     const current = () => this.activeEntryId === assistantId && !this.destroyRef.destroyed;
 
-    const selection = this.selected();
     try {
       let conversation = this.conversation();
       if (!conversation) {
@@ -292,8 +319,8 @@ export class ChatStore {
         {
           conversationId: conversation.id,
           content,
-          providerId: selection?.provider.id ?? null,
-          model: selection?.model.id ?? null,
+          providerId: selection?.providerId ?? null,
+          model: selection?.model ?? null,
           temperature: null,
           maxOutputTokens: null,
           speak,
@@ -385,6 +412,7 @@ export class ChatStore {
 
   /** Moves the open (or next) chat into a project. */
   async setProject(projectId: string | null): Promise<void> {
+    if (this.loading() || this.destroyRef.destroyed) return;
     const conversation = this.conversation();
     if (!conversation) {
       this.draftProjectId.set(projectId);
@@ -404,7 +432,7 @@ export class ChatStore {
 
   /** Sets the pinned note (working memory); creates the chat if needed. */
   async setPinnedNote(note: string): Promise<boolean> {
-    if (this.destroyRef.destroyed || this.savingNote() || this.busy() || this.readOnly()) return false;
+    if (this.destroyRef.destroyed || this.loading() || this.savingNote() || this.busy() || this.readOnly()) return false;
     this.savingNote.set(true);
     this.noteCreationId.set(null);
     const context = this.openRequest;

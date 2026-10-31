@@ -4,7 +4,8 @@
 // Test helpers outside `#[test]` functions may fail fast.
 #![allow(clippy::expect_used)]
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -526,6 +527,15 @@ async fn a_model_served_by_the_runtime_is_routed_and_unregistered_on_stop() {
     .await
     .expect("core");
 
+    let mut models_changed = core.subscribe_models_changed();
+    // Warm the pre-start cache. A model-change notification must invalidate it.
+    assert!(
+        !core
+            .list_models(false)
+            .await
+            .iter()
+            .any(|p| { p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID })
+    );
     let model_path = dir.path().join("tiny.gguf");
     std::fs::write(&model_path, testing::fake_gguf_bytes()).expect("model");
     let model = core
@@ -547,19 +557,15 @@ async fn a_model_served_by_the_runtime_is_routed_and_unregistered_on_stop() {
         "{state:?}"
     );
 
-    // The registry is rebuilt asynchronously after the state change.
-    let mut listed = false;
-    for _ in 0..50 {
-        let listing = core.list_models(true).await;
-        if listing.iter().any(|p| {
-            p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID && p.error.is_none()
-        }) {
-            listed = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(listed, "runtime provider must appear in the catalog");
+    // State readiness may precede the asynchronous registry rebuild. Clients
+    // receive the event only after a regular cached lookup is up to date.
+    tokio::time::timeout(Duration::from_secs(10), models_changed.changed())
+        .await
+        .expect("model notification")
+        .expect("core remains live");
+    assert!(core.list_models(false).await.iter().any(|p| {
+        p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID && p.error.is_none()
+    }));
 
     let runtime_component = core
         .health()
@@ -602,20 +608,65 @@ async fn a_model_served_by_the_runtime_is_routed_and_unregistered_on_stop() {
 
     core.shutdown().await;
     assert!(core.runtime().providers().is_empty());
-    let mut removed = false;
-    for _ in 0..50 {
-        if !core
-            .list_models(true)
+    tokio::time::timeout(Duration::from_secs(10), models_changed.changed())
+        .await
+        .expect("stop notification")
+        .expect("core remains live");
+    assert!(
+        !core
+            .list_models(false)
             .await
             .iter()
-            .any(|p| p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID)
-        {
-            removed = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(removed, "runtime provider must be unregistered after stop");
+            .any(|p| { p.provider.id.as_str() == jarvis_runtime::RUNTIME_PROVIDER_ID })
+    );
+}
+
+#[tokio::test]
+async fn model_notifications_follow_saved_routing_and_privacy_changes() {
+    let test = start_core(vec![Arc::new(EchoProvider::new())]).await;
+    let mut changes = test.core.subscribe_models_changed();
+    let mut settings = test.core.settings();
+    settings.ai.routing.general = Some(ModelRef {
+        provider_id: ProviderId::new("diagnostic-echo"),
+        model: "echo".into(),
+    });
+    test.core
+        .update_settings(settings)
+        .await
+        .expect("route saved");
+    assert!(changes.has_changed().expect("core live"));
+    changes.borrow_and_update();
+    let routes = test.core.resolve_routes().await;
+    assert!(
+        routes
+            .iter()
+            .any(|r| r.category == TaskCategory::General && !r.automatic)
+    );
+
+    let mut settings = test.core.settings();
+    settings.privacy.allow_cloud_providers = true;
+    test.core
+        .update_settings(settings)
+        .await
+        .expect("privacy saved");
+    assert!(changes.has_changed().expect("core live"));
+    changes.borrow_and_update();
+
+    // Re-saving identical settings or changing an unrelated preference does
+    // not make every UI model selector reload its catalog.
+    let mut settings = test.core.settings();
+    test.core
+        .update_settings(settings.clone())
+        .await
+        .expect("same settings");
+    assert!(!changes.has_changed().expect("core live"));
+    settings.runtime.context_size = 8192;
+    test.core
+        .update_settings(settings)
+        .await
+        .expect("runtime preference");
+    assert!(!changes.has_changed().expect("core live"));
+    test.core.shutdown().await;
 }
 
 #[tokio::test]
@@ -734,11 +785,14 @@ async fn native_vault_operations_run_off_the_async_executor() {
     core.shutdown().await;
 }
 
-#[derive(Debug)]
-struct UnavailableVault;
+#[derive(Debug, Default)]
+struct UnavailableVault {
+    reads: AtomicUsize,
+}
 
 impl jarvis_security::SecretStore for UnavailableVault {
     fn get_secret(&self, _key: &str) -> Result<Option<String>, jarvis_security::SecretError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         Err(jarvis_security::SecretError::Unavailable("locked".into()))
     }
     fn set_secret(&self, _key: &str, _secret: &str) -> Result<(), jarvis_security::SecretError> {
@@ -754,7 +808,7 @@ async fn unavailable_vault_keeps_local_servers_usable_and_reports_key_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
     let core = JarvisCore::initialize(
         CoreOptions::new(paths_in(&dir), "test")
-            .with_secrets(Arc::new(UnavailableVault))
+            .with_secrets(Arc::new(UnavailableVault::default()))
             .with_provider_factory(Some(Arc::new(KeyAwareFactory))),
     )
     .await
@@ -783,6 +837,128 @@ async fn unavailable_vault_keeps_local_servers_usable_and_reports_key_errors() {
             .iter()
             .any(|p| p.provider.id.as_str() == "cloud-test")
     );
+    core.shutdown().await;
+}
+
+#[derive(Debug, Default)]
+struct RecordingKeyFactory {
+    calls: Mutex<Vec<(ProviderId, Option<String>)>>,
+}
+
+impl ProviderFactory for RecordingKeyFactory {
+    fn create(
+        &self,
+        config: &ProviderConfig,
+        api_key: Option<&str>,
+    ) -> Result<Arc<dyn AiProvider>, AiError> {
+        self.calls
+            .lock()
+            .expect("factory calls")
+            .push((config.id.clone(), api_key.map(str::to_owned)));
+        FakeFactory.create(config, api_key)
+    }
+}
+
+#[tokio::test]
+async fn connection_tests_keep_local_fallback_and_require_cloud_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault = Arc::new(UnavailableVault::default());
+    let factory = Arc::new(RecordingKeyFactory::default());
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths_in(&dir), "test")
+            .with_secrets(vault.clone())
+            .with_provider_factory(Some(factory.clone())),
+    )
+    .await
+    .expect("core");
+    factory.calls.lock().expect("calls").clear();
+    let mut config = ProviderConfig::defaults().remove(1);
+    config.id = ProviderId::new("connection-probe");
+    config.display_name = "Connection probe".into();
+    for (url, locality) in [
+        ("http://127.0.0.1:1234/v1", DataLocality::OnDevice),
+        ("http://192.168.1.20:1234/v1", DataLocality::LocalNetwork),
+    ] {
+        config.base_url = url.into();
+        let result = core
+            .test_provider(config.clone())
+            .await
+            .expect("local test");
+        assert!(result.reachable);
+        assert_eq!(result.locality, locality);
+        assert_eq!(result.models.len(), 1);
+        assert_eq!(
+            factory.calls.lock().expect("calls").last(),
+            Some(&(config.id.clone(), None))
+        );
+    }
+    assert!(core.events().recent(100).iter().any(|event| {
+        event.category == EventCategory::Ai
+            && event.level == jarvis_events::EventLevel::Warning
+            && event.message.contains("Connection probe")
+            && event.message.contains("cannot load its API key")
+    }));
+
+    config.base_url = "https://api.example.com/v1".into();
+    let calls_before = factory.calls.lock().expect("calls").len();
+    let error = core
+        .test_provider(config.clone())
+        .await
+        .expect_err("locked cloud vault");
+    assert_eq!(error.code(), ErrorCode::Internal);
+    assert!(error.to_string().contains("locked"));
+    assert_eq!(factory.calls.lock().expect("calls").len(), calls_before);
+
+    let reads_before = vault.reads.load(Ordering::SeqCst);
+    let result = core
+        .test_provider_with_key(config.clone(), Some("explicit-test-key".into()))
+        .await
+        .expect("explicit key bypasses the locked vault");
+    assert!(result.reachable);
+    assert_eq!(result.locality, DataLocality::ThirdPartyCloud);
+    assert_eq!(vault.reads.load(Ordering::SeqCst), reads_before);
+    assert_eq!(
+        factory.calls.lock().expect("calls").last(),
+        Some(&(config.id, Some("explicit-test-key".into())))
+    );
+    assert!(
+        core.events()
+            .recent(100)
+            .iter()
+            .all(|event| !event.message.contains("explicit-test-key"))
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn connection_tests_validate_explicit_keys_before_using_vault_or_factory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vault = Arc::new(UnavailableVault::default());
+    let factory = Arc::new(RecordingKeyFactory::default());
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths_in(&dir), "test")
+            .with_secrets(vault.clone())
+            .with_provider_factory(Some(factory.clone())),
+    )
+    .await
+    .expect("core");
+    factory.calls.lock().expect("calls").clear();
+    let reads_before = vault.reads.load(Ordering::SeqCst);
+    let config = ProviderConfig::defaults().remove(1);
+    for invalid in ["é".repeat(4097), "key\nsuffix".into(), "key\u{7f}".into()] {
+        let error = core
+            .test_provider_with_key(config.clone(), Some(invalid.clone()))
+            .await
+            .expect_err("invalid test key");
+        assert_eq!(error.code(), ErrorCode::Validation);
+        let error = core
+            .set_provider_api_key(config.id.as_str(), &invalid)
+            .await
+            .expect_err("invalid saved key");
+        assert_eq!(error.code(), ErrorCode::Validation);
+    }
+    assert_eq!(vault.reads.load(Ordering::SeqCst), reads_before);
+    assert!(factory.calls.lock().expect("calls").is_empty());
     core.shutdown().await;
 }
 

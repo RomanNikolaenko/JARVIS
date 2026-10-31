@@ -106,6 +106,108 @@ async fn downloads_and_verifies_files() {
     assert!(downloads.begin_model("New transfer".into(), dest).is_ok());
 }
 
+#[tokio::test]
+async fn an_existing_file_is_reused_only_when_its_bytes_match() {
+    let data = content();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("model.gguf");
+    let downloads = Downloads::default();
+    // No HTTP request is needed to reuse an already verified completed file.
+    let offline = Url::parse("http://127.0.0.1:9/unavailable").unwrap();
+    std::fs::write(&dest, &data).unwrap();
+    let handle = downloads.begin_model("Reuse".into(), dest.clone()).unwrap();
+    let result = fetch_verified(&client(), &offline, &dest, &expected(&data), &handle).await;
+    handle.finish(&result);
+    result.unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), data);
+    assert_eq!(downloads.snapshot()[0].phase, DownloadPhase::Completed);
+    assert_eq!(downloads.snapshot()[0].received_bytes, data.len() as u64);
+
+    // An equal-length but different model must survive the attempted download.
+    let other: Vec<u8> = data.iter().map(|byte| byte ^ 0xff).collect();
+    std::fs::write(&dest, &other).unwrap();
+    let handle = downloads
+        .begin_model("Conflict".into(), dest.clone())
+        .unwrap();
+    let result = fetch_verified(&client(), &offline, &dest, &expected(&data), &handle).await;
+    handle.finish(&result);
+    assert!(matches!(result, Err(RuntimeError::InvalidInput(_))));
+    assert_eq!(std::fs::read(&dest).unwrap(), other);
+    assert!(!dir.path().join("model.gguf.part").exists());
+}
+
+#[tokio::test]
+async fn a_directory_at_the_destination_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("model.gguf");
+    std::fs::create_dir(&dest).unwrap();
+    std::fs::write(dest.join("keep.txt"), "Keep this directory").unwrap();
+    let handle = Downloads::default()
+        .begin_model("Conflict".into(), dest.clone())
+        .unwrap();
+    let result = fetch_verified(
+        &client(),
+        &Url::parse("http://127.0.0.1:9/unavailable").unwrap(),
+        &dest,
+        &expected(&content()),
+        &handle,
+    )
+    .await;
+    assert!(matches!(result, Err(RuntimeError::InvalidInput(_))));
+    assert_eq!(
+        std::fs::read_to_string(dest.join("keep.txt")).unwrap(),
+        "Keep this directory"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_appearing_during_transfer_is_never_overwritten() {
+    for identical in [false, true] {
+        let data = content();
+        let server = serve(data.clone(), true, true);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("model.gguf");
+        let part = dir.path().join("model.gguf.part");
+        let downloads = Downloads::default();
+        let handle = downloads.begin_model("Model".into(), dest.clone()).unwrap();
+        let wanted = expected(&data);
+        let output = dest.clone();
+        let pending = tokio::spawn(async move {
+            let result = fetch_verified(&client(), &server.url, &output, &wanted, &handle).await;
+            handle.finish(&result);
+            result
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if std::fs::metadata(&part).is_ok_and(|metadata| metadata.len() > 0) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("transfer starts before the destination is occupied");
+        let existing = if identical {
+            data.clone()
+        } else {
+            vec![42; data.len()]
+        };
+        std::fs::write(&dest, &existing).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        if identical {
+            result.unwrap();
+            assert!(!part.exists());
+        } else {
+            assert!(matches!(result, Err(RuntimeError::InvalidInput(_))));
+            assert_eq!(std::fs::read(&part).unwrap(), data);
+        }
+        assert_eq!(std::fs::read(&dest).unwrap(), existing);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn checksum_mismatches_are_rejected_and_cleaned_up() {
     let data = content();

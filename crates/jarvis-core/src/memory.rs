@@ -38,7 +38,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::chat::{ChatEventSink, ChatStreamEvent, PreparedChat, ResolvedModel, SinkClosed};
-use crate::config::Settings;
+use crate::config::{ConfigStore, Settings};
 use crate::error::CoreError;
 use crate::{JarvisCore, routing};
 
@@ -264,6 +264,7 @@ impl<S> Drop for RecordingSink<S> {
 // ---------------------------------------------------------------------------
 
 struct ProviderEmbedder {
+    config: Arc<ConfigStore>,
     provider: Arc<dyn AiProvider>,
     model: String,
     key: String,
@@ -276,6 +277,9 @@ impl Embedder for ProviderEmbedder {
     }
 
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>, MemoryError> {
+        let settings = self.config.current();
+        routing::check_data_privacy(self.provider.descriptor(), &settings.privacy, true, false)
+            .map_err(|err| MemoryError::Embedding(err.to_string()))?;
         self.provider
             .embeddings(EmbeddingRequest {
                 model: self.model.clone(),
@@ -412,6 +416,13 @@ impl JarvisCore {
                 "Saved memory is not shared with cloud models (Settings → Privacy)".to_owned(),
             );
         }
+        // Context preparation can wait for storage and semantic retrieval.
+        // Refuse newly revoked sharing permissions before recording this turn.
+        self.chat.authorize_request(
+            model.provider.as_ref(),
+            &assembled.messages,
+            Some(&assembled.report),
+        )?;
 
         // Images are not saved; the conversation keeps a note instead.
         let saved_content = if attachments.notes.is_empty() {
@@ -473,6 +484,7 @@ impl JarvisCore {
 
         let memory = Arc::clone(&self.memory);
         let state = Arc::clone(&self.memory_state);
+        let config = Arc::clone(&self.config);
         let events = self.events.clone();
         let auto_summarize = settings.memory.auto_summarize;
         let timeout = Duration::from_secs(u64::from(settings.ai.request_timeout_secs));
@@ -504,6 +516,7 @@ impl JarvisCore {
                     &memory,
                     &state,
                     &events,
+                    &config,
                     conversation_id,
                     provider,
                     model_name,
@@ -573,6 +586,7 @@ impl JarvisCore {
         };
         let provider = self.providers.get(&provider_id).ok()?;
         Some(Arc::new(ProviderEmbedder {
+            config: Arc::clone(&self.config),
             key: format!("{provider_id}/{model}"),
             provider,
             model,
@@ -996,6 +1010,7 @@ async fn compact(
     memory: &MemoryEngine,
     state: &MemoryState,
     events: &jarvis_events::EventBus,
+    config: &ConfigStore,
     conversation_id: Uuid,
     provider: Arc<dyn AiProvider>,
     model: String,
@@ -1009,6 +1024,19 @@ async fn compact(
         let Some(plan) = memory.compaction_plan(conversation_id, window).await? else {
             return Ok::<_, CoreError>(None);
         };
+        let settings = config.current();
+        if !settings.memory.enabled || !settings.memory.auto_summarize {
+            return Ok(None);
+        }
+        // Summaries contain this conversation, not facts or other chats, so
+        // only its destination needs cloud permission.
+        routing::check_data_privacy(provider.descriptor(), &settings.privacy, false, false)
+            .inspect_err(|err| {
+                events.warning(
+                    EventCategory::Security,
+                    format!("Blocked a conversation summary: {err}"),
+                );
+            })?;
         let request = ChatRequest {
             model: model.clone(),
             messages: plan.messages,
@@ -1097,6 +1125,261 @@ async fn flush_episodes(core: &Weak<JarvisCore>, buffer: &mut Vec<Episode>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    use futures::{StreamExt, stream};
+    use jarvis_ai::{
+        AiError, ChatChunk, ChatStream, EmbeddingResponse, ModelInfo, ProviderConfig,
+        ProviderDescriptor,
+    };
+
+    #[derive(Debug)]
+    struct PrivacyRecorder {
+        descriptor: ProviderDescriptor,
+        embeddings: AtomicUsize,
+        requests: Mutex<Vec<ChatRequest>>,
+    }
+
+    impl PrivacyRecorder {
+        fn new(locality: DataLocality) -> Arc<Self> {
+            Arc::new(Self {
+                descriptor: ProviderDescriptor {
+                    id: ProviderId::new("memory-provider"),
+                    display_name: "Memory provider".into(),
+                    kind: if locality == DataLocality::ThirdPartyCloud {
+                        ProviderKind::Cloud
+                    } else {
+                        ProviderKind::LocalServer
+                    },
+                    locality,
+                },
+                embeddings: AtomicUsize::new(0),
+                requests: Mutex::default(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl AiProvider for PrivacyRecorder {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        async fn health_check(&self) -> Result<(), AiError> {
+            Ok(())
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
+            Ok(vec![])
+        }
+
+        async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, AiError> {
+            guard(&self.requests).push(request);
+            Ok(stream::iter([
+                Ok(ChatChunk::Delta(
+                    "A summary of the current conversation".into(),
+                )),
+                Ok(ChatChunk::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                }),
+            ])
+            .boxed())
+        }
+
+        async fn embeddings(
+            &self,
+            request: EmbeddingRequest,
+        ) -> Result<EmbeddingResponse, AiError> {
+            self.embeddings.fetch_add(1, Ordering::SeqCst);
+            Ok(EmbeddingResponse {
+                vectors: vec![vec![1.0, 0.0]; request.input.len()],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_embedders_check_actual_destination_and_current_sharing_permissions() {
+        for revoke_cloud in [true, false] {
+            let dir = tempfile::tempdir().expect("temporary settings");
+            let mut settings = Settings::default();
+            settings.privacy.allow_cloud_providers = true;
+            settings.privacy.share_memory_with_cloud = true;
+            let config = Arc::new(ConfigStore::in_memory(
+                dir.path().join("settings.toml"),
+                settings.clone(),
+            ));
+            let provider = PrivacyRecorder::new(DataLocality::ThirdPartyCloud);
+            let embedder = ProviderEmbedder {
+                config: Arc::clone(&config),
+                provider: provider.clone(),
+                model: "embedding-model".into(),
+                key: "memory-provider/embedding-model".into(),
+            };
+            assert!(embedder.embed(vec!["Allowed fact".into()]).await.is_ok());
+            assert_eq!(provider.embeddings.load(Ordering::SeqCst), 1);
+
+            // Repointing the configured ID does not change the cached cloud handle.
+            settings.ai.providers = vec![ProviderConfig {
+                id: provider.descriptor.id.clone(),
+                backend: ProviderBackend::Ollama,
+                display_name: "Replacement local".into(),
+                base_url: "http://127.0.0.1:11434".into(),
+                enabled: true,
+                native_tool_models: vec![],
+            }];
+            if revoke_cloud {
+                settings.privacy.allow_cloud_providers = false;
+            } else {
+                settings.privacy.share_memory_with_cloud = false;
+            }
+            config
+                .update(settings.clone())
+                .await
+                .expect("revoke sharing");
+            let error = embedder
+                .embed(vec!["A newly private fact".into()])
+                .await
+                .expect_err("cached cloud destination must not receive it");
+            assert!(matches!(error, MemoryError::Embedding(_)));
+            assert_eq!(provider.embeddings.load(Ordering::SeqCst), 1);
+
+            settings.privacy.allow_cloud_providers = true;
+            settings.privacy.share_memory_with_cloud = true;
+            config.update(settings).await.expect("restore sharing");
+            assert!(embedder.embed(vec!["Allowed again".into()]).await.is_ok());
+            assert_eq!(provider.embeddings.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn local_embedders_do_not_require_cloud_sharing_permissions() {
+        for locality in [DataLocality::OnDevice, DataLocality::LocalNetwork] {
+            let provider = PrivacyRecorder::new(locality);
+            let embedder = ProviderEmbedder {
+                config: Arc::new(ConfigStore::in_memory(
+                    std::env::temp_dir().join("jarvis-unused-memory-config.toml"),
+                    Settings::default(),
+                )),
+                provider: provider.clone(),
+                model: "embedding-model".into(),
+                key: "memory-provider/embedding-model".into(),
+            };
+            assert!(embedder.embed(vec!["Local fact".into()]).await.is_ok());
+            assert_eq!(provider.embeddings.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn deferred_compaction_rechecks_current_permissions_before_dispatch() {
+        for revoked in ["cloud", "automatic summaries", "saving"] {
+            let dir = tempfile::tempdir().expect("temporary settings");
+            let mut settings = Settings::default();
+            settings.privacy.allow_cloud_providers = true;
+            // A summary of the current chat is allowed without sharing other memory.
+            assert!(!settings.privacy.share_memory_with_cloud);
+            let config = ConfigStore::in_memory(dir.path().join("settings.toml"), settings.clone());
+            let provider = PrivacyRecorder::new(DataLocality::ThirdPartyCloud);
+            let memory = MemoryEngine::in_memory().expect("memory database");
+            let conversation = memory
+                .create_conversation(None, false)
+                .await
+                .expect("conversation");
+            for index in 0..12 {
+                memory
+                    .append_message(
+                        conversation.id,
+                        NewMessage {
+                            id: Uuid::new_v4(),
+                            role: if index % 2 == 0 {
+                                MessageRole::User
+                            } else {
+                                MessageRole::Assistant
+                            },
+                            content: format!(
+                                "{index}: {}",
+                                "Detailed private conversation history. ".repeat(4)
+                            ),
+                            status: MessageStatus::Complete,
+                            provider_id: None,
+                            model: None,
+                        },
+                    )
+                    .await
+                    .expect("seed conversation");
+            }
+            let window = ContextWindow::new(Some(1024), None, Some(128));
+            assert!(
+                memory
+                    .compaction_plan(conversation.id, window)
+                    .await
+                    .expect("compaction plan")
+                    .is_some()
+            );
+            match revoked {
+                "cloud" => settings.privacy.allow_cloud_providers = false,
+                "automatic summaries" => settings.memory.auto_summarize = false,
+                _ => settings.memory.enabled = false,
+            }
+            config
+                .update(settings.clone())
+                .await
+                .expect("revoke before deferred summary");
+            let state = MemoryState::default();
+            let events = jarvis_events::EventBus::default();
+            compact(
+                &memory,
+                &state,
+                &events,
+                &config,
+                conversation.id,
+                provider.clone(),
+                "summary-model".into(),
+                window,
+                Duration::from_secs(1),
+            )
+            .await;
+            assert!(guard(&provider.requests).is_empty(), "{revoked}");
+            assert!(
+                memory
+                    .conversation(conversation.id)
+                    .await
+                    .expect("conversation")
+                    .summary
+                    .is_none()
+            );
+            assert!(
+                guard(&state.compacting).is_empty(),
+                "summary reservation released"
+            );
+
+            settings.privacy.allow_cloud_providers = true;
+            settings.memory.auto_summarize = true;
+            settings.memory.enabled = true;
+            config.update(settings).await.expect("restore permissions");
+            compact(
+                &memory,
+                &state,
+                &events,
+                &config,
+                conversation.id,
+                provider.clone(),
+                "summary-model".into(),
+                window,
+                Duration::from_secs(1),
+            )
+            .await;
+            assert_eq!(guard(&provider.requests).len(), 1, "{revoked}");
+            assert!(
+                memory
+                    .conversation(conversation.id)
+                    .await
+                    .expect("conversation")
+                    .summary
+                    .is_some()
+            );
+        }
+    }
 
     #[test]
     fn outcomes_decide_what_is_saved() {

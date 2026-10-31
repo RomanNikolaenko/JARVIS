@@ -43,6 +43,8 @@ pub use state::AppState;
 pub const MAIN_WINDOW: &str = "main";
 /// Event used to push [`jarvis_events::SystemEvent`]s to the UI.
 pub const SYSTEM_EVENT: &str = "jarvis://system-event";
+/// Available providers or model routing changed; the core catalog is ready.
+pub const MODELS_CHANGED_EVENT: &str = "jarvis://models-changed";
 /// Event with an [`AgentTask`] whenever a task changes.
 pub const AGENT_TASK_EVENT: &str = "jarvis://agent-task";
 /// Event with the list of actions waiting for approval.
@@ -201,6 +203,7 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
     logging.set_level(core.settings().logging.level);
 
     spawn_event_forwarder(app.handle().clone(), core.events().subscribe());
+    spawn_models_forwarder(app.handle().clone(), core.subscribe_models_changed());
     spawn_agent_forwarders(
         app.handle().clone(),
         core.subscribe_agent_tasks(),
@@ -282,6 +285,18 @@ fn spawn_agent_forwarders<R: Runtime>(
                 tracing::debug!("cannot request attention: {err}");
             }
             count = pending.len();
+        }
+    });
+}
+
+/// Coalesced invalidation: clients reload the catalog instead of receiving
+/// model data or private runtime connection credentials in an event.
+fn spawn_models_forwarder<R: Runtime>(app: AppHandle<R>, mut changes: watch::Receiver<()>) {
+    tauri::async_runtime::spawn(async move {
+        while changes.changed().await.is_ok() {
+            if let Err(err) = app.emit_to(MAIN_WINDOW, MODELS_CHANGED_EVENT, ()) {
+                tracing::debug!("cannot forward model changes: {err}");
+            }
         }
     });
 }

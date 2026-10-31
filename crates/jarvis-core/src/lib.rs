@@ -32,7 +32,7 @@ use jarvis_memory::MemoryEngine;
 use jarvis_platform::{OsFamily, PlatformInfo, SystemMetrics, SystemMonitor, current_adapter};
 use jarvis_runtime::process::CommandFactory;
 use jarvis_runtime::{RuntimeManager, RuntimeOptions, ServerRole};
-use jarvis_security::{KeyringSecretStore, SecretStore};
+use jarvis_security::{KeyringSecretStore, SecretError, SecretStore};
 use jarvis_vision::ScreenCapture;
 use jarvis_voice::backend::VoiceBackend;
 use jarvis_voice::{VoiceEngine, VoiceEngineOptions};
@@ -203,6 +203,8 @@ pub struct JarvisCore {
     providers: Arc<ProviderRegistry>,
     /// Serialises registry rebuilds (settings changes, runtime start/stop).
     provider_reload: tokio::sync::Mutex<()>,
+    /// Invalidates UI model choices only after the registry/cache are ready.
+    models_changed: tokio::sync::watch::Sender<()>,
     catalog: Arc<ModelCatalog>,
     runtime: Arc<RuntimeManager>,
     chat: ChatService,
@@ -372,6 +374,7 @@ impl JarvisCore {
             provider_factory,
             providers: registry,
             provider_reload: tokio::sync::Mutex::new(()),
+            models_changed: tokio::sync::watch::channel(()).0,
             catalog,
             runtime,
             chat,
@@ -476,6 +479,7 @@ impl JarvisCore {
             .await?,
         )?;
         self.catalog.invalidate().await;
+        self.models_changed.send_replace(());
         self.events.info(
             EventCategory::Ai,
             format!("AI providers: {}", provider_names(&self.providers)),
@@ -483,6 +487,12 @@ impl JarvisCore {
         // A new or vanished embedding model changes what can be indexed.
         self.notify_indexer();
         Ok(())
+    }
+
+    /// Changes to available providers or routing. Subscribe before loading the
+    /// catalog; a notification means the new registry and cache are ready.
+    pub fn subscribe_models_changed(&self) -> tokio::sync::watch::Receiver<()> {
+        self.models_changed.subscribe()
     }
 
     /// The embedded llama.cpp runtime.
@@ -555,6 +565,10 @@ impl JarvisCore {
             // Rebuilds from the latest saved settings, so concurrent updates
             // cannot leave an older provider set active.
             self.reload_providers().await?;
+        } else if previous.ai.routing != saved.ai.routing
+            || previous.privacy.allow_cloud_providers != saved.privacy.allow_cloud_providers
+        {
+            self.models_changed.send_replace(());
         }
         Ok(saved)
     }
@@ -609,13 +623,17 @@ impl JarvisCore {
                 operation: "connection test",
             })?;
         let api_key = match explicit_key {
-            Some(k) if !k.trim().is_empty() => Some(k),
+            Some(k) if !k.trim().is_empty() => {
+                validate_provider_api_key(&k)?;
+                Some(k)
+            }
             _ => {
                 let secrets = Arc::clone(&self.secrets);
                 let key = provider_secret_key(&config.id);
-                tokio::task::spawn_blocking(move || secrets.get_secret(&key))
+                let stored = tokio::task::spawn_blocking(move || secrets.get_secret(&key))
                     .await
-                    .map_err(|err| CoreError::Internal(err.to_string()))?
+                    .map_err(|err| CoreError::Internal(err.to_string()))?;
+                provider_key_or_local_fallback(&config, stored, &self.events)
                     .map_err(|err| CoreError::Internal(err.to_string()))?
             }
         };
@@ -663,15 +681,7 @@ impl JarvisCore {
         api_key: &str,
     ) -> Result<(), CoreError> {
         validate_secret_provider_id(provider_id)?;
-        if api_key.trim().is_empty()
-            || api_key.len() > 8192
-            || api_key.chars().any(char::is_control)
-        {
-            return Err(CoreError::Validation(
-                "API key must be nonempty, at most 8192 bytes and contain no control characters"
-                    .into(),
-            ));
-        }
+        validate_provider_api_key(api_key)?;
         let key = provider_secret_key(&jarvis_ai::ProviderId::new(provider_id));
         let secrets = Arc::clone(&self.secrets);
         let api_key = api_key.to_owned();
@@ -816,24 +826,12 @@ async fn build_providers(
         providers.extend(runtime);
         if let Some(factory) = factory {
             for config in configs.iter().filter(|c| c.enabled) {
-                let api_key = match secrets.get_secret(&provider_secret_key(&config.id)) {
-                    Ok(key) => key,
-                    Err(err) => {
-                        events.warning(
-                            EventCategory::Ai,
-                            format!(
-                                "AI provider \"{}\": cannot load its API key: {err}",
-                                config.display_name
-                            ),
-                        );
-                        // Unauthenticated local servers must remain usable when
-                        // the OS vault is unavailable. Never silently downgrade a
-                        // cloud provider to an unauthenticated connection.
-                        if config.locality().ok() == Some(DataLocality::ThirdPartyCloud) {
-                            continue;
-                        }
-                        None
-                    }
+                let Ok(api_key) = provider_key_or_local_fallback(
+                    config,
+                    secrets.get_secret(&provider_secret_key(&config.id)),
+                    &events,
+                ) else {
+                    continue;
                 };
                 match factory.create(config, api_key.as_deref()) {
                     Ok(provider) => providers.push(provider),
@@ -852,6 +850,31 @@ async fn build_providers(
     .map_err(|err| CoreError::Internal(err.to_string()))
 }
 
+/// Local servers may not need a key. Keep them usable when the vault fails,
+/// but never turn a failed cloud credential lookup into an unauthenticated call.
+fn provider_key_or_local_fallback(
+    config: &ProviderConfig,
+    stored: Result<Option<String>, SecretError>,
+    events: &EventBus,
+) -> Result<Option<String>, SecretError> {
+    match stored {
+        Ok(key) => Ok(key),
+        Err(err) => {
+            events.warning(
+                EventCategory::Ai,
+                format!(
+                    "AI provider \"{}\": cannot load its API key: {err}",
+                    config.display_name
+                ),
+            );
+            match config.locality() {
+                Ok(DataLocality::OnDevice | DataLocality::LocalNetwork) => Ok(None),
+                _ => Err(err),
+            }
+        }
+    }
+}
+
 /// Key used in the secret store for a provider's API key.
 pub fn provider_secret_key(id: &jarvis_ai::ProviderId) -> String {
     format!("ai.provider.{}.api_key", id.as_str())
@@ -860,6 +883,15 @@ pub fn provider_secret_key(id: &jarvis_ai::ProviderId) -> String {
 fn validate_secret_provider_id(id: &str) -> Result<(), CoreError> {
     if !jarvis_ai::is_valid_provider_id(id) {
         return Err(CoreError::Validation("invalid provider id".into()));
+    }
+    Ok(())
+}
+
+fn validate_provider_api_key(api_key: &str) -> Result<(), CoreError> {
+    if api_key.trim().is_empty() || api_key.len() > 8192 || api_key.chars().any(char::is_control) {
+        return Err(CoreError::Validation(
+            "API key must be nonempty, at most 8192 bytes and contain no control characters".into(),
+        ));
     }
     Ok(())
 }

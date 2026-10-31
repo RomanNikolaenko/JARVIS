@@ -4,6 +4,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
@@ -19,7 +20,7 @@ use jarvis_core::jarvis_vision::{
 use jarvis_core::{
     AppPaths, ChatStreamEvent, ChatTurnRequest, CoreOptions, ErrorCode, JarvisCore, SinkClosed,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 /// A display and one window, drawn in plain colors.
@@ -82,11 +83,18 @@ impl ScreenCapture for FakeScreen {
     }
 }
 
+#[derive(Debug, Default)]
+struct CapabilityGate {
+    entered: Notify,
+    release: Notify,
+}
+
 /// A provider with one model that sees images and one that does not.
 #[derive(Debug)]
 struct Eyes {
     descriptor: ProviderDescriptor,
     requests: Mutex<Vec<ChatRequest>>,
+    capability_gate: Option<Arc<CapabilityGate>>,
 }
 
 impl Eyes {
@@ -103,6 +111,7 @@ impl Eyes {
                 locality,
             },
             requests: Mutex::default(),
+            capability_gate: None,
         })
     }
 }
@@ -133,6 +142,21 @@ impl AiProvider for Eyes {
         Ok(vec![model("text-only", false), model("vision-model", true)])
     }
 
+    async fn capabilities(&self, model: &str) -> Result<ModelCapabilities, AiError> {
+        if let Some(gate) = &self.capability_gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        self.list_models()
+            .await?
+            .into_iter()
+            .find(|info| info.id == model)
+            .map(|info| info.capabilities)
+            .ok_or_else(|| AiError::ModelNotFound {
+                model: model.into(),
+            })
+    }
+
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, AiError> {
         self.requests.lock().unwrap().push(request);
         Ok(stream::iter([
@@ -153,13 +177,16 @@ struct TestCore {
 }
 
 async fn start(locality: DataLocality) -> TestCore {
+    start_with_provider(Eyes::new(locality)).await
+}
+
+async fn start_with_provider(eyes: Arc<Eyes>) -> TestCore {
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths {
         config_dir: dir.path().join("config"),
         data_dir: dir.path().join("data"),
         log_dir: dir.path().join("logs"),
     };
-    let eyes = Eyes::new(locality);
     let core = JarvisCore::initialize(
         CoreOptions::new(paths, "9.9.9")
             .with_static_providers(vec![eyes.clone()])
@@ -327,6 +354,74 @@ async fn models_without_vision_and_cloud_models_are_refused() {
     .await
     .unwrap();
     assert_eq!(cloud.eyes.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_cloud_permissions_during_discovery_preserves_the_capture_for_retry() {
+    for revoke_cloud in [false, true] {
+        let gate = Arc::new(CapabilityGate::default());
+        let mut eyes = Eyes::new(DataLocality::ThirdPartyCloud);
+        Arc::get_mut(&mut eyes).unwrap().capability_gate = Some(Arc::clone(&gate));
+        let test = start_with_provider(eyes).await;
+        let mut settings = test.core.settings();
+        settings.privacy.allow_cloud_providers = true;
+        settings.privacy.share_captures_with_cloud = true;
+        test.core.update_settings(settings.clone()).await.unwrap();
+        let capture = test.core.capture_screen(None).await.unwrap();
+        let conversation = test.core.create_conversation(None, false).await.unwrap();
+        let request = turn(
+            conversation.id,
+            "Private screen awaiting permission",
+            Some("vision-model"),
+            vec![capture.id.clone()],
+        );
+        let core = Arc::clone(&test.core);
+        let retry = request.clone();
+        let pending = tokio::spawn(async move { send(&core, request).await });
+        tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+            .await
+            .expect("capability discovery must reach the controlled pause");
+        if revoke_cloud {
+            settings.privacy.allow_cloud_providers = false;
+        } else {
+            settings.privacy.share_captures_with_cloud = false;
+        }
+        test.core.update_settings(settings.clone()).await.unwrap();
+        gate.release.notify_one();
+
+        let error = tokio::time::timeout(Duration::from_secs(5), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::PermissionDenied, "{error}");
+        assert!(test.eyes.requests.lock().unwrap().is_empty());
+        assert_eq!(test.core.chat().active_requests(), 0);
+        assert!(
+            test.core
+                .memory()
+                .conversation(conversation.id)
+                .await
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+
+        // The refused turn neither consumes its capture nor duplicates the
+        // user's message. The exact same attachment can be retried explicitly.
+        settings.privacy.allow_cloud_providers = true;
+        settings.privacy.share_captures_with_cloud = true;
+        test.core.update_settings(settings).await.unwrap();
+        gate.release.notify_one();
+        assert_eq!(
+            send(&test.core, retry).await.unwrap(),
+            "I see a dark screen."
+        );
+        let requests = test.eyes.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages.last().unwrap().images.len(), 1);
+        test.core.shutdown().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

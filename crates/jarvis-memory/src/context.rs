@@ -308,36 +308,58 @@ pub fn compaction_plan(
         .iter()
         .filter(|m| m.seq > covered_until && !m.content.is_empty())
         .collect();
-    if uncovered.len() <= KEEP_RECENT_MESSAGES {
+    if uncovered.len() < KEEP_RECENT_MESSAGES + 2 {
         return None;
     }
     let candidates = &uncovered[..uncovered.len() - KEEP_RECENT_MESSAGES];
 
-    let previous = summary.map_or("(none yet)", |s| s.content.as_str());
-    let fixed = estimate_tokens(COMPACTION_INSTRUCTIONS) + estimate_tokens(previous) + 32;
-    let room = share(
+    let budget = share(
         window
             .total_tokens
             .saturating_sub(window.reserved_output_tokens),
         0.6,
-    )
-    .saturating_sub(fixed);
+    );
+    let fixed = estimate_tokens(COMPACTION_INSTRUCTIONS)
+        + 2 * MESSAGE_OVERHEAD_TOKENS
+        + estimate_tokens("Current summary:\n\n\nNew messages:\n");
+    let available = budget.saturating_sub(fixed);
+    // An oversized previous summary must not crowd out the new material.
+    let previous = compaction_excerpt(
+        summary.map_or("(none yet)", |s| s.content.as_str()),
+        available / 3,
+    );
+    let room = available.saturating_sub(estimate_tokens(&previous));
     let mut lines = Vec::new();
     let mut used = 0;
     let mut covers_until = covered_until;
-    for message in candidates {
-        let speaker = match message.role {
-            MessageRole::User => "User",
-            MessageRole::Assistant => "JARVIS",
+    for (index, message) in candidates.iter().enumerate() {
+        let remaining = candidates.len() - index;
+        // Fit at least two consecutive messages. When only three remain,
+        // fit all three rather than stranding one that cannot form a plan.
+        let required = if lines.is_empty() && remaining == 3 {
+            3
+        } else if lines.is_empty() || remaining == 2 {
+            2
+        } else {
+            1
         };
-        let line = format!(
-            "{speaker}: {}",
-            truncate_chars(strip_reasoning(message.content.trim()).trim(), 1500)
-        );
-        let tokens = estimate_tokens(&line) + 1;
-        if used + tokens > room {
+        let available = room.saturating_sub(used);
+        let fits = candidates[index..]
+            .iter()
+            .take(required)
+            .map(|message| estimate_tokens(&compaction_line(message)) + 1)
+            .sum::<u32>()
+            <= available;
+        let cap = if fits {
+            available
+        } else {
+            available / required as u32
+        };
+        if cap < 16 {
             break;
         }
+        let line = compaction_excerpt(&compaction_line(message), cap - 1);
+        let tokens = estimate_tokens(&line) + 1;
         used += tokens;
         lines.push(line);
         covers_until = message.seq;
@@ -356,6 +378,28 @@ pub fn compaction_plan(
         covers_until,
         covered: lines.len(),
     })
+}
+
+fn compaction_line(message: &StoredMessage) -> String {
+    let speaker = match message.role {
+        MessageRole::User => "User",
+        MessageRole::Assistant => "JARVIS",
+    };
+    format!(
+        "{speaker}: {}",
+        truncate_chars(strip_reasoning(message.content.trim()).trim(), 1500)
+    )
+}
+
+/// Leaves room for the truncation marker within the estimated token cap.
+fn compaction_excerpt(text: &str, cap: u32) -> String {
+    if cap == 0 {
+        String::new()
+    } else if estimate_tokens(text) <= cap {
+        text.to_owned()
+    } else {
+        truncate_to_tokens(text, cap - 1)
+    }
 }
 
 #[cfg(test)]
@@ -549,5 +593,126 @@ mod tests {
         };
         assert!(compaction_plan(&history, Some(&summary), window).is_none());
         assert!(compaction_plan(&history[..6], None, window).is_none());
+    }
+
+    fn assert_compaction_fits(plan: &CompactionPlan, window: ContextWindow) {
+        let tokens = plan
+            .messages
+            .iter()
+            .map(|message| estimate_tokens(&message.content) + MESSAGE_OVERHEAD_TOKENS)
+            .sum::<u32>();
+        assert!(tokens <= window.budget(), "{tokens} tokens: {plan:?}");
+        assert!(tokens + window.reserved_output_tokens <= window.total_tokens);
+    }
+
+    #[test]
+    fn compaction_excerpts_long_unicode_messages_without_changing_the_history() {
+        for text in [
+            "A detailed decision with dates and names. ",
+            "Рішення про наступний запуск: Київ, субота. 🛰️🙂 ",
+        ] {
+            for output in [256, 512] {
+                let mut history = history(14, 0);
+                for (index, message) in history.iter_mut().enumerate() {
+                    message.content = if index < 8 {
+                        format!("old-{index}: {}", text.repeat(1000))
+                    } else {
+                        format!("recent-{index}: {}", text.repeat(1000))
+                    };
+                }
+                let before = history.clone();
+                let window = ContextWindow::new(Some(1024), None, Some(output));
+                let plan = compaction_plan(&history, None, window).expect("long messages fit");
+                assert_compaction_fits(&plan, window);
+                assert!(plan.covered >= 2);
+                assert_eq!(plan.covers_until, history[plan.covered - 1].seq);
+                assert!(plan.covers_until <= 8);
+                let prompt = &plan.messages[1].content;
+                assert!(prompt.contains("User: old-0:"));
+                assert!(prompt.contains("JARVIS: old-1:"));
+                assert!(prompt.contains('…'));
+                assert!(!prompt.contains("recent-"));
+                assert_eq!(history, before);
+            }
+        }
+    }
+
+    #[test]
+    fn an_oversized_previous_summary_cannot_block_new_compaction() {
+        let history = history(20, 3000);
+        let summary = ConversationSummary {
+            content: "Попередні рішення 🛰️ та важливі домовленості. ".repeat(2000),
+            covered_messages: 2,
+            covers_until: 2,
+            model: Some("old-model".into()),
+            updated_at_ms: 1,
+            tokens: 40_000,
+        };
+        let before = summary.clone();
+        let window = ContextWindow::new(Some(1024), None, Some(512));
+        let plan = compaction_plan(&history, Some(&summary), window).expect("new messages fit");
+        assert_compaction_fits(&plan, window);
+        assert!(plan.covered >= 2);
+        assert_eq!(plan.covers_until, 2 + plan.covered as i64);
+        assert!(
+            plan.messages[1]
+                .content
+                .contains("Current summary:\nПопередні рішення")
+        );
+        assert!(plan.messages[1].content.contains("User: message 2"));
+        assert!(plan.messages[1].content.contains("JARVIS: message 3"));
+        assert!(plan.messages[1].content.contains('…'));
+        assert_eq!(summary, before);
+    }
+
+    #[test]
+    fn repeated_compaction_reaches_the_recent_boundary_without_skipping_messages() {
+        for count in [8, 9, 13, 14, 25] {
+            let history = history(count, 3000);
+            let window = ContextWindow::new(Some(1024), None, Some(512));
+            let mut summary: Option<ConversationSummary> = None;
+            let mut covered = 0;
+            while let Some(plan) = compaction_plan(&history, summary.as_ref(), window) {
+                assert_compaction_fits(&plan, window);
+                assert!(plan.covered >= 2);
+                covered += plan.covered;
+                assert_eq!(plan.covers_until, covered as i64);
+                assert!(covered <= count - KEEP_RECENT_MESSAGES);
+                // Even an overlong model reply must not stop the next batch.
+                summary = Some(ConversationSummary {
+                    content: "Prior summary with decisions and preferences. ".repeat(2000),
+                    covered_messages: covered as u32,
+                    covers_until: plan.covers_until,
+                    model: None,
+                    updated_at_ms: 1,
+                    tokens: 40_000,
+                });
+            }
+            assert_eq!(
+                covered,
+                count - KEEP_RECENT_MESSAGES,
+                "history size {count}"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_requires_two_old_messages_and_a_usable_prompt_budget() {
+        let history = history(8, 3000);
+        let window = ContextWindow::new(Some(1024), None, Some(512));
+        assert!(compaction_plan(&history[..7], None, window).is_none());
+        assert!(compaction_plan(&[], None, window).is_none());
+        assert!(compaction_plan(&history, None, window).is_some());
+        assert!(
+            compaction_plan(
+                &history,
+                None,
+                ContextWindow {
+                    total_tokens: 64,
+                    reserved_output_tokens: 32,
+                },
+            )
+            .is_none()
+        );
     }
 }

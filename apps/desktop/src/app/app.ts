@@ -4,6 +4,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AgentsStore } from './core/state/agents.store';
 import { ChatStore } from './core/state/chat.store';
 import { EventLogStore } from './core/state/event-log.store';
+import { ModelsStore } from './core/state/models.store';
 import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
 import { SystemStore } from './core/state/system.store';
@@ -42,6 +43,7 @@ export class App {
   protected readonly background = signal(inBackground());
   protected readonly voice = inject(VoiceStore);
   protected readonly updates = inject(UpdatesStore);
+  protected readonly models = inject(ModelsStore);
 
   protected readonly nav: readonly NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -88,6 +90,8 @@ export class App {
     void this.system.loadStaticInfo();
     const eventLog = inject(EventLogStore);
     void eventLog.start();
+    // Autostart and model switches must update Chat on every screen.
+    void this.models.start();
     // Approval requests must reach the user on every screen.
     const agents = inject(AgentsStore);
     void agents.start();
@@ -104,10 +108,12 @@ export class App {
         if (error) {
           agents.connectionLost(error);
           eventLog.connectionLost(error);
+          this.models.connectionLost(error);
           chat.connectionLost(error);
         } else {
           void agents.start();
           void eventLog.start();
+          void this.models.start();
         }
       },
       HEALTH_POLL_MS,

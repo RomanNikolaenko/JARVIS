@@ -196,7 +196,7 @@ async fn task_deadline_interrupts_a_program_and_retains_its_journal() {
     let done = finished(&h.manager, start.id).await;
     assert_task_timed_out(&done);
     assert_eq!(actions(&done).len(), 1);
-    assert_eq!(actions(&done)[0].outcome, StepOutcome::Failed);
+    assert_eq!(actions(&done)[0].outcome, StepOutcome::Unknown);
     assert!(
         actions(&done)[0]
             .output
@@ -556,6 +556,7 @@ struct Harness {
     audit: AuditLog,
     store: TaskStore,
     dir: TempDir,
+    settings: Arc<Mutex<AgentSettings>>,
 }
 
 /// `programs`: when given, `run_command` is on and may run them.
@@ -584,17 +585,19 @@ fn harness_with(max_concurrent: usize, approval_timeout: Duration, programs: &[&
         auto_approve_low: true,
         auto_approve_medium: false,
     });
+    let settings = Arc::new(Mutex::new(AgentSettings {
+        policy,
+        tool_limits: ToolLimits::default(),
+        approval_timeout,
+    }));
+    let live_settings = settings.clone();
     let manager = AgentManager::new(AgentEnvironment {
         store: store.clone(),
         tools: Arc::new(ToolRegistry::builtin()),
         approvals: Arc::clone(&approvals),
         audit: Some(audit.clone()),
         processes: Arc::new(ProcessRegistry::default()),
-        settings: Arc::new(move || AgentSettings {
-            policy: policy.clone(),
-            tool_limits: ToolLimits::default(),
-            approval_timeout,
-        }),
+        settings: Arc::new(move || live_settings.lock().unwrap().clone()),
         max_concurrent,
     });
     Harness {
@@ -604,11 +607,210 @@ fn harness_with(max_concurrent: usize, approval_timeout: Duration, programs: &[&
         audit,
         store,
         dir,
+        settings,
     }
 }
 
 fn harness() -> Harness {
     harness_with(2, Duration::from_secs(30), &[])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_permissions_and_limits_apply_after_pending_approval() {
+    for change in ["tool", "workspace", "program", "write_limit"] {
+        let h = harness_with(1, Duration::from_secs(30), &["git"]);
+        let call = if change == "program" {
+            r#"{"tool":"run_command","input":{"program":"git","args":["--version"]}}"#
+        } else {
+            r#"{"tool":"write_file","input":{"path":"out.txt","content":"not allowed"}}"#
+        };
+        let model = ScriptedModel::new(&[call, r#"{"final":"Action refused"}"#]);
+        let start = h.manager.start(task("Act"), model.clone()).await.unwrap();
+        let approval = wait_for_approval(&h.approvals, start.id).await;
+
+        {
+            let mut settings = h.settings.lock().unwrap();
+            let mut policy = settings.policy.config().clone();
+            match change {
+                "tool" => {
+                    policy.enabled_tools.remove("write_file");
+                }
+                "workspace" => policy.scope = FileScope::default(),
+                "program" => policy.allowed_programs.clear(),
+                "write_limit" => settings.tool_limits.max_write_bytes = 1,
+                _ => unreachable!(),
+            }
+            settings.policy = SecurityPolicy::new(policy);
+        }
+        assert!(h.approvals.resolve(approval.id, true));
+        let done = finished(&h.manager, start.id).await;
+        let action = actions(&done)[0];
+        assert_eq!(action.outcome, StepOutcome::Denied, "{change}: {done:#?}");
+        assert!(action.output.as_deref().unwrap().starts_with("Not run:"));
+        assert!(!h.dir.path().join("out.txt").exists(), "{change}");
+        assert!(model.last_message(1).contains("denied"));
+        let events = audit_events(&h.audit).await;
+        assert_eq!(events.len(), 2, "{change}");
+        assert_eq!(events[0].1, AuditEvent::Approved);
+        assert_eq!(events[1].1, AuditEvent::PolicyDenied);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approving_a_create_cannot_authorize_a_later_overwrite() {
+    let h = harness();
+    let model = ScriptedModel::new(&[
+        r#"{"tool":"write_file","input":{"path":"out.txt","content":"agent","overwrite":true}}"#,
+        r#"{"final":"The file changed while waiting"}"#,
+    ]);
+    let start = h.manager.start(task("Create a file"), model).await.unwrap();
+    let approval = wait_for_approval(&h.approvals, start.id).await;
+    assert!(approval.summary.starts_with("Create"));
+    std::fs::write(h.dir.path().join("out.txt"), "written by the user").unwrap();
+    assert!(h.approvals.resolve(approval.id, true));
+
+    let done = finished(&h.manager, start.id).await;
+    let action = actions(&done)[0];
+    assert_eq!(action.outcome, StepOutcome::Denied);
+    assert!(action.output.as_deref().unwrap().contains("action changed"));
+    assert_eq!(
+        std::fs::read_to_string(h.dir.path().join("out.txt")).unwrap(),
+        "written by the user"
+    );
+    assert_eq!(audit_events(&h.audit).await[1].1, AuditEvent::PolicyDenied);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_the_workspace_cannot_retarget_an_approved_relative_path() {
+    let h = harness();
+    let replacement = tempfile::tempdir().unwrap();
+    let model = ScriptedModel::new(&[
+        r#"{"tool":"write_file","input":{"path":"out.txt","content":"agent"}}"#,
+        r#"{"final":"Workspace changed"}"#,
+    ]);
+    let start = h.manager.start(task("Write a file"), model).await.unwrap();
+    let approval = wait_for_approval(&h.approvals, start.id).await;
+    {
+        let mut settings = h.settings.lock().unwrap();
+        let mut policy = settings.policy.config().clone();
+        policy.scope = FileScope::new([replacement.path().to_path_buf()], []);
+        settings.policy = SecurityPolicy::new(policy);
+    }
+    assert!(h.approvals.resolve(approval.id, true));
+    let done = finished(&h.manager, start.id).await;
+    assert_eq!(actions(&done)[0].outcome, StepOutcome::Denied);
+    assert!(!h.dir.path().join("out.txt").exists());
+    assert!(!replacement.path().join("out.txt").exists());
+}
+
+#[derive(Debug)]
+struct NetworkProposal {
+    spec: jarvis_tools::ToolSpec,
+    runs: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl NetworkProposal {
+    fn new(runs: Arc<std::sync::atomic::AtomicUsize>) -> Arc<Self> {
+        let registry = ToolRegistry::builtin();
+        let mut spec = registry.get("fetch_url").unwrap().spec().clone();
+        spec.name = "test_network".into();
+        Arc::new(Self { spec, runs })
+    }
+}
+
+#[async_trait]
+impl jarvis_tools::Tool for NetworkProposal {
+    fn spec(&self) -> &jarvis_tools::ToolSpec {
+        &self.spec
+    }
+
+    fn prepare(
+        &self,
+        input: &serde_json::Value,
+        _ctx: &jarvis_tools::ToolContext,
+    ) -> Result<jarvis_tools::PreparedCall, jarvis_tools::ToolError> {
+        Ok(jarvis_tools::PreparedCall {
+            action: jarvis_security::ActionRequest {
+                tool: self.spec.name.clone(),
+                capabilities: self.spec.capabilities.clone(),
+                risk: self.spec.risk,
+                summary: "Test public network request".into(),
+                paths: Vec::new(),
+                program: None,
+                url: Some("https://example.com/".into()),
+            },
+            args: input.clone(),
+        })
+    }
+
+    async fn run(
+        &self,
+        _call: &jarvis_tools::PreparedCall,
+        _ctx: &jarvis_tools::ToolContext,
+    ) -> Result<jarvis_tools::ToolOutput, jarvis_tools::ToolError> {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(jarvis_tools::ToolOutput {
+            summary: "Test call".into(),
+            content: "No real request is made".into(),
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn network_revocation_and_registry_changes_invalidate_pending_approval() {
+    for change in ["network", "removed", "replaced"] {
+        let h = harness();
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tools = Arc::new(ToolRegistry::default());
+        tools
+            .set_group("test", vec![NetworkProposal::new(runs.clone())])
+            .unwrap();
+        {
+            let mut settings = h.settings.lock().unwrap();
+            let mut policy = settings.policy.config().clone();
+            policy.enabled_tools.insert("test_network".into());
+            policy.allow_network = true;
+            settings.policy = SecurityPolicy::new(policy);
+        }
+        let live_settings = h.settings.clone();
+        let manager = AgentManager::new(AgentEnvironment {
+            store: h.store.clone(),
+            tools: tools.clone(),
+            approvals: h.approvals.clone(),
+            audit: Some(h.audit.clone()),
+            processes: Arc::new(ProcessRegistry::default()),
+            settings: Arc::new(move || live_settings.lock().unwrap().clone()),
+            max_concurrent: 1,
+        });
+        let model = ScriptedModel::new(&[
+            r#"{"tool":"test_network","input":{"url":"https://example.com/"}}"#,
+            r#"{"final":"Request refused"}"#,
+        ]);
+        let start = manager.start(task("Fetch"), model).await.unwrap();
+        let approval = wait_for_approval(&h.approvals, start.id).await;
+        match change {
+            "network" => {
+                let mut settings = h.settings.lock().unwrap();
+                let mut policy = settings.policy.config().clone();
+                policy.allow_network = false;
+                settings.policy = SecurityPolicy::new(policy);
+            }
+            "removed" => tools.remove_group("test"),
+            "replaced" => tools
+                .set_group("test", vec![NetworkProposal::new(runs.clone())])
+                .unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(h.approvals.resolve(approval.id, true));
+        let done = finished(&manager, start.id).await;
+        assert_eq!(actions(&done)[0].outcome, StepOutcome::Denied, "{change}");
+        assert_eq!(
+            runs.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "{change}"
+        );
+        assert_eq!(audit_events(&h.audit).await[1].1, AuditEvent::PolicyDenied);
+    }
 }
 
 #[tokio::test]
@@ -673,6 +875,294 @@ struct CrashAfterEffect {
     inner: Arc<dyn jarvis_tools::Tool>,
     store: TaskStore,
     checked: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToolInterruption {
+    Cancellation,
+    InternalTimeout,
+    Unresponsive,
+    SpontaneousCancellation,
+    IoFailure,
+    RemoteFailure,
+}
+
+/// Completes a real tool effect, then loses its result to an interruption.
+#[derive(Debug)]
+struct InterruptAfterEffect {
+    inner: Arc<dyn jarvis_tools::Tool>,
+    interruption: ToolInterruption,
+    entered: Notify,
+    runs: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl jarvis_tools::Tool for InterruptAfterEffect {
+    fn spec(&self) -> &jarvis_tools::ToolSpec {
+        self.inner.spec()
+    }
+
+    fn prepare(
+        &self,
+        input: &serde_json::Value,
+        ctx: &jarvis_tools::ToolContext,
+    ) -> Result<jarvis_tools::PreparedCall, jarvis_tools::ToolError> {
+        self.inner.prepare(input, ctx)
+    }
+
+    async fn run(
+        &self,
+        call: &jarvis_tools::PreparedCall,
+        ctx: &jarvis_tools::ToolContext,
+    ) -> Result<jarvis_tools::ToolOutput, jarvis_tools::ToolError> {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.run(call, ctx).await?;
+        self.entered.notify_one();
+        match self.interruption {
+            ToolInterruption::Cancellation => {
+                ctx.cancel.cancelled().await;
+                Err(jarvis_tools::ToolError::Cancelled)
+            }
+            ToolInterruption::SpontaneousCancellation => Err(jarvis_tools::ToolError::Cancelled),
+            ToolInterruption::InternalTimeout => Err(jarvis_tools::ToolError::TimedOut(1)),
+            ToolInterruption::Unresponsive => std::future::pending().await,
+            ToolInterruption::IoFailure => Err(jarvis_tools::ToolError::Io {
+                context: "saving the result after the write".into(),
+                source: std::io::Error::other("injected I/O failure after the effect"),
+            }),
+            ToolInterruption::RemoteFailure => Err(jarvis_tools::ToolError::Failed(
+                "remote server lost the result after applying the change".into(),
+            )),
+        }
+    }
+}
+
+fn interrupting_manager(
+    h: &Harness,
+    tool_name: &str,
+    interruption: ToolInterruption,
+) -> (
+    Arc<AgentManager>,
+    AgentEnvironment,
+    Arc<InterruptAfterEffect>,
+) {
+    let mut tools = ToolRegistry::builtin();
+    let tool = Arc::new(InterruptAfterEffect {
+        inner: tools.get(tool_name).unwrap(),
+        interruption,
+        entered: Notify::new(),
+        runs: std::sync::atomic::AtomicUsize::new(0),
+    });
+    tools.register(tool.clone());
+    let settings = h.settings.clone();
+    let env = AgentEnvironment {
+        store: h.store.clone(),
+        tools: Arc::new(tools),
+        approvals: h.approvals.clone(),
+        audit: Some(h.audit.clone()),
+        processes: Arc::new(ProcessRegistry::default()),
+        settings: Arc::new(move || settings.lock().unwrap().clone()),
+        max_concurrent: 1,
+    };
+    (AgentManager::new(env.clone()), env, tool)
+}
+
+#[tokio::test]
+async fn interrupted_effects_are_unknown_terminal_and_never_replayed() {
+    for cause in [
+        "cancel",
+        "shutdown",
+        "tool_timeout",
+        "task_timeout",
+        "tool_watchdog",
+        "internal_cancel",
+        "io_failure",
+        "remote_failure",
+    ] {
+        let h = harness();
+        let interruption = match cause {
+            "tool_timeout" => ToolInterruption::InternalTimeout,
+            "task_timeout" | "tool_watchdog" => ToolInterruption::Unresponsive,
+            "internal_cancel" => ToolInterruption::SpontaneousCancellation,
+            "io_failure" => ToolInterruption::IoFailure,
+            "remote_failure" => ToolInterruption::RemoteFailure,
+            _ => ToolInterruption::Cancellation,
+        };
+        let (manager, env, tool) = interrupting_manager(&h, "write_file", interruption);
+        let model = ScriptedModel::new(&[
+            r#"{"tool":"write_file","input":{"path":"effect.txt","content":"once"}}"#,
+            r#"{"final":"must not be requested"}"#,
+        ]);
+        let mut new = short_task();
+        if cause == "tool_watchdog" {
+            new.limits.max_duration_secs = 1800;
+        }
+        let started = manager.start(new, model.clone()).await.unwrap();
+        let approval = wait_for_approval(&h.approvals, started.id).await;
+        assert!(h.approvals.resolve(approval.id, true));
+        tokio::time::timeout(Duration::from_secs(5), tool.entered.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(h.dir.path().join("effect.txt")).unwrap(),
+            "once"
+        );
+        match cause {
+            "cancel" => {
+                assert!(manager.cancel(started.id).await.unwrap());
+            }
+            "shutdown" => manager.shutdown().await,
+            "task_timeout" => expire_task_time().await,
+            "tool_watchdog" => {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(901)).await;
+                tokio::time::resume();
+            }
+            _ => {}
+        }
+        let done = finished(&manager, started.id).await;
+        assert_eq!(
+            done.status,
+            if cause == "cancel" {
+                TaskStatus::Cancelled
+            } else {
+                TaskStatus::Failed
+            },
+            "{cause}: {done:#?}"
+        );
+        assert!(done.finished_at_ms.is_some());
+        assert_eq!(actions(&done).len(), 1);
+        assert_eq!(actions(&done)[0].outcome, StepOutcome::Unknown, "{cause}");
+        let error = done.error.as_deref().unwrap();
+        assert!(
+            error.contains(&format!("{}:1", done.id)),
+            "{cause}: {error}"
+        );
+        assert!(error.contains("Check its effects manually"));
+        assert_eq!(model.turns_seen(), 1, "{cause}");
+        assert_eq!(h.store.get(started.id).await.unwrap(), done);
+        assert_eq!(audit_events(&h.audit).await[1].1, AuditEvent::Failed);
+
+        let retry = ScriptedModel::new(&[r#"{"final":"must not run"}"#]);
+        assert!(manager.resume(started.id, retry.clone()).await.is_err());
+        let reopened = AgentManager::new(env);
+        assert_eq!(reopened.recover().await.unwrap(), 0);
+        assert!(reopened.resume(started.id, retry.clone()).await.is_err());
+        assert_eq!(retry.turns_seen(), 0);
+        assert_eq!(tool.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(reopened.delete_finished().await.unwrap(), 0);
+        assert_eq!(reopened.get(started.id).await.unwrap(), done);
+        let audit_before = h.audit.list(100, None).await.unwrap();
+        assert_eq!(reopened.delete_reviewed(started.id).await.unwrap(), 1);
+        assert!(matches!(
+            reopened.get(started.id).await,
+            Err(AgentError::NotFound)
+        ));
+        assert_eq!(h.audit.list(100, None).await.unwrap(), audit_before);
+    }
+}
+
+#[tokio::test]
+async fn interrupted_read_only_tools_remain_resumable_after_shutdown() {
+    let h = harness();
+    let (manager, env, tool) =
+        interrupting_manager(&h, "read_file", ToolInterruption::Cancellation);
+    let model = ScriptedModel::new(&[r#"{"tool":"read_file","input":{"path":"a.txt"}}"#]);
+    let start = manager.start(task("Read"), model).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), tool.entered.notified())
+        .await
+        .unwrap();
+    manager.shutdown().await;
+    let saved = manager.get(start.id).await.unwrap();
+    assert_eq!(saved.status, TaskStatus::Paused);
+    assert_eq!(actions(&saved)[0].outcome, StepOutcome::Failed);
+    assert!(!saved.error.as_deref().unwrap().contains("unknown result"));
+    let reopened = AgentManager::new(env);
+    let resumed = ScriptedModel::new(&[r#"{"final":"The read was interrupted"}"#]);
+    reopened.resume(start.id, resumed).await.unwrap();
+    let done = finished(&reopened, start.id).await;
+    assert_eq!(done.status, TaskStatus::Completed);
+    assert_eq!(tool.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(reopened.delete_finished().await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn bulk_clear_retains_terminal_journals_with_unresolved_actions() {
+    let h = harness();
+    let model = ScriptedModel::new(&[
+        r#"{"tool":"read_file","input":{"path":"a.txt"}}"#,
+        r#"{"final":"alpha"}"#,
+    ]);
+    let start = h.manager.start(task("Read"), model).await.unwrap();
+    let completed = finished(&h.manager, start.id).await;
+    let mut retained = Vec::new();
+    for outcome in [StepOutcome::Unknown, StepOutcome::InProgress] {
+        let mut unresolved = completed.clone();
+        unresolved.id = Uuid::new_v4();
+        unresolved.status = TaskStatus::Failed;
+        unresolved.result = None;
+        unresolved
+            .steps
+            .iter_mut()
+            .find(|step| step.kind == StepKind::Action)
+            .unwrap()
+            .outcome = outcome;
+        h.store.save(&unresolved).await.unwrap();
+        retained.push(unresolved);
+    }
+    assert_eq!(h.manager.delete_finished().await.unwrap(), 1);
+    assert!(matches!(
+        h.manager.get(completed.id).await,
+        Err(AgentError::NotFound)
+    ));
+    for unresolved in &retained {
+        assert_eq!(h.manager.get(unresolved.id).await.unwrap(), *unresolved);
+    }
+    h.db.call(|conn| {
+        conn.execute_batch("CREATE TRIGGER reject_task_delete BEFORE DELETE ON agent_tasks BEGIN SELECT RAISE(FAIL, 'injected delete failure'); END;")?;
+        Ok::<_, jarvis_storage::StorageError>(())
+    }).await.unwrap();
+    assert!(h.manager.delete_reviewed(retained[0].id).await.is_err());
+    assert_eq!(h.manager.get(retained[0].id).await.unwrap(), retained[0]);
+    h.db.call(|conn| {
+        conn.execute_batch("DROP TRIGGER reject_task_delete;")?;
+        Ok::<_, jarvis_storage::StorageError>(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(h.manager.delete_reviewed(retained[0].id).await.unwrap(), 1);
+    assert!(matches!(
+        h.manager.get(retained[0].id).await,
+        Err(AgentError::NotFound)
+    ));
+    for unresolved in retained.iter().skip(1) {
+        assert_eq!(h.manager.get(unresolved.id).await.unwrap(), *unresolved);
+    }
+}
+
+#[tokio::test]
+async fn reviewed_journal_deletion_refuses_running_and_paused_tasks() {
+    let h = harness();
+    let paused = saved_paused_task(&h).await;
+    assert!(matches!(
+        h.manager.delete_reviewed(paused).await,
+        Err(AgentError::Invalid(_))
+    ));
+    let model = ScriptedModel::new(&["<block>"]);
+    let start = h.manager.start(task("Think"), model.clone()).await.unwrap();
+    wait_for_turns(&model, 1).await;
+    assert!(matches!(
+        h.manager.delete_reviewed(start.id).await,
+        Err(AgentError::Invalid(_))
+    ));
+    assert!(h.manager.get(start.id).await.is_ok());
+    h.manager.cancel(start.id).await.unwrap();
+    finished(&h.manager, start.id).await;
+    assert_eq!(h.manager.delete_reviewed(start.id).await.unwrap(), 1);
+    assert_eq!(
+        h.manager.get(paused).await.unwrap().status,
+        TaskStatus::Paused
+    );
 }
 
 #[async_trait]
@@ -777,6 +1267,74 @@ async fn a_crash_after_effect_recovers_as_unknown_and_cannot_replay() {
     assert_eq!(retry.turns_seen(), 0);
     assert_eq!(reopened.recover().await.unwrap(), 0);
     assert_eq!(h.store.get(start.id).await.unwrap(), recovered);
+}
+
+#[tokio::test]
+async fn a_saved_unknown_outcome_recovers_as_failed_and_can_be_reviewed() {
+    let h = harness();
+    let id = Uuid::new_v4();
+    let diagnostic = "I/O error after writing; the action may have partly happened";
+    let interrupted = AgentTask {
+        id,
+        goal: "Write effect.txt".to_owned(),
+        status: TaskStatus::Running,
+        provider_id: None,
+        model: None,
+        limits: TaskLimits::default(),
+        plan: vec!["Write the file".to_owned()],
+        steps: vec![TaskStep {
+            index: 0,
+            kind: StepKind::Action,
+            thought: None,
+            tool: Some("write_file".to_owned()),
+            input: Some(r#"{"path":"effect.txt","content":"once"}"#.to_owned()),
+            summary: Some("Create effect.txt".to_owned()),
+            decision: Some("approved by you".to_owned()),
+            outcome: StepOutcome::Unknown,
+            output: Some(diagnostic.to_owned()),
+            started_at_ms: 1,
+            duration_ms: 1,
+        }],
+        result: None,
+        error: None,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        finished_at_ms: None,
+    };
+    std::fs::write(h.dir.path().join("effect.txt"), "once").unwrap();
+    h.store.save(&interrupted).await.unwrap();
+    let settings = h.settings.clone();
+    let reopened = AgentManager::new(AgentEnvironment {
+        store: h.store.clone(),
+        tools: Arc::new(ToolRegistry::builtin()),
+        approvals: h.approvals.clone(),
+        audit: Some(h.audit.clone()),
+        processes: Arc::new(ProcessRegistry::default()),
+        settings: Arc::new(move || settings.lock().unwrap().clone()),
+        max_concurrent: 1,
+    });
+
+    assert_eq!(reopened.recover().await.unwrap(), 1);
+    let recovered = reopened.get(id).await.unwrap();
+    assert_eq!(recovered.status, TaskStatus::Failed);
+    assert!(recovered.finished_at_ms.is_some());
+    assert_eq!(actions(&recovered)[0].outcome, StepOutcome::Unknown);
+    assert_eq!(actions(&recovered)[0].output.as_deref(), Some(diagnostic));
+    let warning = recovered.error.as_deref().unwrap();
+    assert!(warning.contains(&format!("{id}:0")));
+    assert!(warning.contains("cannot be resumed"));
+    let retry = ScriptedModel::new(&[r#"{"final":"must not run"}"#]);
+    assert!(reopened.resume(id, retry.clone()).await.is_err());
+    assert_eq!(retry.turns_seen(), 0);
+    assert_eq!(reopened.recover().await.unwrap(), 0);
+    assert_eq!(reopened.delete_finished().await.unwrap(), 0);
+    assert_eq!(h.store.get(id).await.unwrap(), recovered);
+    assert_eq!(reopened.delete_reviewed(id).await.unwrap(), 1);
+    assert!(matches!(reopened.get(id).await, Err(AgentError::NotFound)));
+    assert_eq!(
+        std::fs::read_to_string(h.dir.path().join("effect.txt")).unwrap(),
+        "once"
+    );
 }
 
 async fn reject_task_saves(h: &Harness, reject: bool) {
@@ -1138,6 +1696,28 @@ async fn wait_for_turns(model: &ScriptedModel, count: usize) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("the model was not asked {count} times");
+}
+
+async fn wait_for_approval(
+    approvals: &ApprovalBroker,
+    task_id: Uuid,
+) -> jarvis_security::PendingApproval {
+    let mut pending = approvals.subscribe();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let approval = pending
+                .borrow_and_update()
+                .iter()
+                .find(|approval| approval.task_id == Some(task_id))
+                .cloned();
+            if let Some(approval) = approval {
+                return approval;
+            }
+            pending.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the task did not publish its approval request")
 }
 
 fn kinds(task: &AgentTask) -> Vec<StepKind> {
@@ -1768,7 +2348,7 @@ async fn an_action_interrupted_by_cancel_stays_in_the_journal() {
     );
     assert_eq!(done.status, TaskStatus::Cancelled);
     let step = actions(&done)[0];
-    assert_eq!(step.outcome, StepOutcome::Failed);
+    assert_eq!(step.outcome, StepOutcome::Unknown);
     assert!(
         step.output
             .as_deref()

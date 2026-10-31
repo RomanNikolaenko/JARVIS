@@ -194,6 +194,7 @@ impl ChatService {
                 &settings,
             )
             .await?;
+        self.authorize_request(model.provider.as_ref(), &request.messages, None)?;
         let reservation = self.reserve()?;
         Ok(self.launch(
             reservation,
@@ -247,6 +248,7 @@ impl ChatService {
             guard,
         } = reservation;
         let job = ChatJob {
+            config: Arc::clone(&self.config),
             request_id,
             provider: prepared.model.provider,
             provider_id: prepared.model.descriptor.id,
@@ -291,6 +293,16 @@ impl ChatService {
         self.shutdown.cancel();
     }
 
+    /// Rechecks the actual destination and payload after asynchronous preparation.
+    pub(crate) fn authorize_request(
+        &self,
+        provider: &dyn AiProvider,
+        messages: &[ChatMessage],
+        context: Option<&ContextReport>,
+    ) -> Result<(), CoreError> {
+        authorize_chat_request(&self.config, provider, messages, context, &self.events)
+    }
+
     /// Chooses a chat-capable provider and model; blocked choices are
     /// reported as security events.
     pub(crate) async fn resolve_model(
@@ -310,6 +322,7 @@ impl ChatService {
                     );
                 }
             })?;
+        self.authorize_request(resolved.provider.as_ref(), &[], None)?;
         if !resolved.capabilities.chat {
             return Err(AiError::Unsupported {
                 provider: resolved.descriptor.id,
@@ -339,6 +352,7 @@ impl ChatService {
             settings.privacy.allow_cloud_providers,
         )?;
         let provider = self.registry.get(&selection.provider.id)?;
+        self.authorize_request(provider.as_ref(), &[], None)?;
         Ok(ResolvedModel {
             descriptor: provider.descriptor().clone(),
             provider,
@@ -401,6 +415,31 @@ impl ChatService {
             context_window: model.context_window,
         })
     }
+}
+
+fn authorize_chat_request(
+    config: &ConfigStore,
+    provider: &dyn AiProvider,
+    messages: &[ChatMessage],
+    context: Option<&ContextReport>,
+    events: &EventBus,
+) -> Result<(), CoreError> {
+    let shares_memory = context.is_some_and(|report| {
+        report.memory_tokens > 0 || report.facts_included > 0 || report.recalls_included > 0
+    });
+    let shares_captures = messages.iter().any(|message| !message.images.is_empty());
+    routing::check_data_privacy(
+        provider.descriptor(),
+        &config.current().privacy,
+        shares_memory,
+        shares_captures,
+    )
+    .inspect_err(|err| {
+        events.warning(
+            EventCategory::Security,
+            format!("Blocked a chat request: {err}"),
+        );
+    })
 }
 
 fn first_chat_model(
@@ -510,6 +549,7 @@ enum Outcome {
 }
 
 struct ChatJob {
+    config: Arc<ConfigStore>,
     request_id: Uuid,
     provider: Arc<dyn AiProvider>,
     provider_id: ProviderId,
@@ -614,6 +654,15 @@ impl ChatJob {
     }
 
     async fn drive(&self, sink: &mut impl ChatEventSink) -> Outcome {
+        if let Err(err) = authorize_chat_request(
+            &self.config,
+            self.provider.as_ref(),
+            &self.request.messages,
+            self.context.as_ref(),
+            &self.events,
+        ) {
+            return Outcome::Failed(err);
+        }
         if !self.streaming {
             return match self.provider.chat(self.request.clone()).await {
                 Ok(response) => {
@@ -684,8 +733,328 @@ fn short_id(id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jarvis_ai::EchoProvider;
-    use tokio::sync::mpsc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use jarvis_ai::{ChatStream, DataLocality, EchoProvider, ImageData, ProviderKind};
+    use tokio::sync::{Notify, mpsc};
+
+    #[derive(Debug, Default)]
+    struct DiscoveryGate {
+        entered: Notify,
+        release: Notify,
+    }
+
+    #[derive(Debug)]
+    struct PrivacyProvider {
+        descriptor: ProviderDescriptor,
+        streaming: bool,
+        calls: AtomicUsize,
+        capabilities_gate: Option<Arc<DiscoveryGate>>,
+        catalog_gate: Option<Arc<DiscoveryGate>>,
+    }
+
+    impl PrivacyProvider {
+        fn new(locality: DataLocality, streaming: bool) -> Self {
+            Self {
+                descriptor: ProviderDescriptor {
+                    id: ProviderId::new("privacy-test"),
+                    display_name: "Privacy test".into(),
+                    kind: if locality == DataLocality::ThirdPartyCloud {
+                        ProviderKind::Cloud
+                    } else {
+                        ProviderKind::LocalServer
+                    },
+                    locality,
+                },
+                streaming,
+                calls: AtomicUsize::default(),
+                capabilities_gate: None,
+                catalog_gate: None,
+            }
+        }
+
+        fn caps(&self) -> ModelCapabilities {
+            ModelCapabilities {
+                chat: true,
+                streaming: self.streaming,
+                vision: true,
+                ..ModelCapabilities::default()
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AiProvider for PrivacyProvider {
+        fn descriptor(&self) -> &ProviderDescriptor {
+            &self.descriptor
+        }
+
+        async fn health_check(&self) -> Result<(), AiError> {
+            Ok(())
+        }
+
+        async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
+            if let Some(gate) = &self.catalog_gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+            Ok(vec![ModelInfo {
+                id: "private-model".into(),
+                display_name: "Private model".into(),
+                provider_id: self.descriptor.id.clone(),
+                capabilities: self.caps(),
+                context_window: Some(4096),
+            }])
+        }
+
+        async fn capabilities(&self, _: &str) -> Result<ModelCapabilities, AiError> {
+            if let Some(gate) = &self.capabilities_gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+            Ok(self.caps())
+        }
+
+        async fn stream_chat(&self, _: ChatRequest) -> Result<ChatStream, AiError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(futures::stream::iter([
+                Ok(ChatChunk::Delta("allowed reply".into())),
+                Ok(ChatChunk::Done {
+                    finish_reason: FinishReason::Stop,
+                    usage: None,
+                }),
+            ])
+            .boxed())
+        }
+    }
+
+    fn privacy_service(provider: Arc<PrivacyProvider>) -> (ChatService, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temporary settings");
+        let registry = Arc::new(ProviderRegistry::new());
+        registry
+            .register(provider)
+            .expect("register privacy provider");
+        let mut settings = Settings::default();
+        settings.privacy.allow_cloud_providers = true;
+        settings.privacy.share_memory_with_cloud = true;
+        settings.privacy.share_captures_with_cloud = true;
+        let config = Arc::new(ConfigStore::in_memory(
+            dir.path().join("config.toml"),
+            settings,
+        ));
+        (
+            ChatService::new(
+                registry,
+                Arc::default(),
+                config,
+                EventBus::default(),
+                tokio::runtime::Handle::current(),
+            ),
+            dir,
+        )
+    }
+
+    fn prepared_privacy_request(
+        provider: Arc<PrivacyProvider>,
+        shares_memory: bool,
+        shares_captures: bool,
+    ) -> PreparedChat {
+        let message = ChatMessage::user("Private current conversation");
+        let message = if shares_captures {
+            message.with_images(vec![ImageData {
+                media_type: "image/jpeg".into(),
+                base64: "aW1hZ2U=".into(),
+            }])
+        } else {
+            message
+        };
+        PreparedChat {
+            model: ResolvedModel {
+                descriptor: provider.descriptor.clone(),
+                capabilities: provider.caps(),
+                context_window: Some(4096),
+                provider,
+                model: "private-model".into(),
+            },
+            messages: vec![message],
+            options: GenerationOptions::default(),
+            conversation_id: None,
+            message_id: None,
+            context: Some(ContextReport {
+                memory_tokens: u32::from(shares_memory),
+                facts_included: u32::from(shares_memory),
+                // Current conversation history and summary are independent of
+                // the permission for recalled saved memory.
+                history_tokens: 50,
+                summary_tokens: 20,
+                ..ContextReport::default()
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_permission_is_rechecked_after_explicit_automatic_and_vision_discovery() {
+        for discovery in ["explicit", "automatic", "vision"] {
+            let gate = Arc::new(DiscoveryGate::default());
+            let mut provider = PrivacyProvider::new(DataLocality::ThirdPartyCloud, true);
+            if discovery == "explicit" {
+                provider.capabilities_gate = Some(Arc::clone(&gate));
+            } else {
+                provider.catalog_gate = Some(Arc::clone(&gate));
+            }
+            let provider = Arc::new(provider);
+            let (chat, _dir) = privacy_service(Arc::clone(&provider));
+            let chat = Arc::new(chat);
+            let pending_chat = Arc::clone(&chat);
+            let pending = tokio::spawn(async move {
+                if discovery == "vision" {
+                    pending_chat
+                        .resolve_vision_model(None, None, &pending_chat.config.current())
+                        .await
+                        .map(|_| ())
+                } else {
+                    let mut req = request("Private message awaiting discovery");
+                    if discovery == "explicit" {
+                        req.provider_id = Some(ProviderId::new("privacy-test"));
+                        req.model = Some("private-model".into());
+                    }
+                    let (sink, _rx) = channel_sink();
+                    pending_chat.start(req, sink).await.map(|_| ())
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+                .await
+                .expect("discovery entered");
+            let mut settings = chat.config.current();
+            settings.privacy.allow_cloud_providers = false;
+            chat.config.update(settings).await.expect("revoke cloud");
+            gate.release.notify_one();
+            let err = tokio::time::timeout(Duration::from_secs(5), pending)
+                .await
+                .expect("discovery completed")
+                .expect("request task")
+                .expect_err("revoked privacy must fail");
+            assert_eq!(
+                err.code(),
+                ErrorCode::PermissionDenied,
+                "{discovery}: {err}"
+            );
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(chat.active_requests(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_cloud_requests_recheck_each_permission_against_the_held_provider() {
+        use jarvis_ai::{ProviderBackend, ProviderConfig};
+
+        for streaming in [false, true] {
+            for permission in ["cloud", "memory", "captures"] {
+                let provider = Arc::new(PrivacyProvider::new(
+                    DataLocality::ThirdPartyCloud,
+                    streaming,
+                ));
+                let (chat, _dir) = privacy_service(Arc::clone(&provider));
+                let prepared = prepared_privacy_request(Arc::clone(&provider), true, true);
+                let reservation = chat.reserve().expect("reserve");
+                let mut settings = chat.config.current();
+                // The same ID now describes a local replacement. The prepared
+                // request still holds the original cloud adapter.
+                settings.ai.providers = vec![ProviderConfig {
+                    id: ProviderId::new("privacy-test"),
+                    backend: ProviderBackend::Ollama,
+                    display_name: "Local replacement".into(),
+                    base_url: "http://127.0.0.1:11434".into(),
+                    enabled: true,
+                    native_tool_models: vec![],
+                }];
+                match permission {
+                    "cloud" => settings.privacy.allow_cloud_providers = false,
+                    "memory" => settings.privacy.share_memory_with_cloud = false,
+                    _ => settings.privacy.share_captures_with_cloud = false,
+                }
+                chat.config
+                    .update(settings)
+                    .await
+                    .expect("revoke permission");
+                chat.registry
+                    .replace_all(vec![Arc::new(PrivacyProvider::new(
+                        DataLocality::OnDevice,
+                        streaming,
+                    ))])
+                    .expect("replace provider");
+                let (sink, rx) = channel_sink();
+                chat.launch(reservation, prepared, sink);
+                let events = collect(rx).await;
+                assert!(matches!(
+                    events.first(),
+                    Some(ChatStreamEvent::Started { .. })
+                ));
+                assert!(
+                    matches!(events.last(), Some(ChatStreamEvent::Failed { error, .. }) if error.code == ErrorCode::PermissionDenied)
+                );
+                assert_eq!(
+                    events.len(),
+                    2,
+                    "streaming={streaming}, revoked={permission}"
+                );
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+                assert_eq!(chat.active_requests(), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_text_with_current_history_needs_no_saved_memory_or_capture_permission() {
+        for streaming in [false, true] {
+            let provider = Arc::new(PrivacyProvider::new(
+                DataLocality::ThirdPartyCloud,
+                streaming,
+            ));
+            let (chat, _dir) = privacy_service(Arc::clone(&provider));
+            let mut settings = chat.config.current();
+            settings.privacy.share_memory_with_cloud = false;
+            settings.privacy.share_captures_with_cloud = false;
+            chat.config.update(settings).await.expect("limit sharing");
+            let prepared = prepared_privacy_request(Arc::clone(&provider), false, false);
+            let (sink, rx) = channel_sink();
+            chat.launch(chat.reserve().expect("reserve"), prepared, sink);
+            let events = collect(rx).await;
+            assert!(matches!(
+                events.last(),
+                Some(ChatStreamEvent::Finished { .. })
+            ));
+            assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(chat.active_requests(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn local_and_lan_payloads_remain_allowed_with_all_cloud_sharing_disabled() {
+        for locality in [DataLocality::OnDevice, DataLocality::LocalNetwork] {
+            for streaming in [false, true] {
+                let provider = Arc::new(PrivacyProvider::new(locality, streaming));
+                let (chat, _dir) = privacy_service(Arc::clone(&provider));
+                let mut settings = chat.config.current();
+                settings.privacy = Default::default();
+                chat.config
+                    .update(settings)
+                    .await
+                    .expect("disable cloud sharing");
+                let prepared = prepared_privacy_request(Arc::clone(&provider), true, true);
+                let (sink, rx) = channel_sink();
+                chat.launch(chat.reserve().expect("reserve"), prepared, sink);
+                let events = collect(rx).await;
+                assert!(matches!(
+                    events.last(),
+                    Some(ChatStreamEvent::Finished { .. })
+                ));
+                assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+                assert_eq!(chat.active_requests(), 0);
+            }
+        }
+    }
 
     fn request(text: &str) -> ChatStartRequest {
         ChatStartRequest {

@@ -8,6 +8,7 @@ import { AgentsStore } from './core/state/agents.store';
 import { SystemStore } from './core/state/system.store';
 import { EventLogStore } from './core/state/event-log.store';
 import { ChatStore } from './core/state/chat.store';
+import { ModelsStore } from './core/state/models.store';
 
 describe('App shell', () => {
   beforeEach(async () => {
@@ -77,16 +78,22 @@ describe('App shell', () => {
       const startEvents = vi.spyOn(eventLog, 'start').mockResolvedValue();
       const lostEvents = vi.spyOn(eventLog, 'connectionLost').mockImplementation(() => undefined);
       const lostChat = vi.spyOn(TestBed.inject(ChatStore), 'connectionLost').mockImplementation(() => undefined);
+      const models = TestBed.inject(ModelsStore);
+      const startModels = vi.spyOn(models, 'start').mockResolvedValue();
+      const lostModels = vi.spyOn(models, 'connectionLost').mockImplementation(() => undefined);
       const fixture = TestBed.createComponent(App);
       await vi.advanceTimersByTimeAsync(0);
       expect(lost).toHaveBeenCalledWith(offline);
       expect(lostEvents).toHaveBeenCalledWith(offline);
       expect(lostChat).toHaveBeenCalledWith(offline);
+      expect(lostModels).toHaveBeenCalledWith(offline);
+      expect(startModels).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalledTimes(1);
       connectionError.set(null);
       await vi.advanceTimersByTimeAsync(15_000);
       expect(start).toHaveBeenCalledTimes(2);
       expect(startEvents).toHaveBeenCalledTimes(2);
+      expect(startModels).toHaveBeenCalledTimes(2);
       expect(lost).toHaveBeenCalledTimes(1);
       // A degraded component is still a reachable core.
       expect(system.status()).toBe('degraded');
@@ -94,8 +101,33 @@ describe('App shell', () => {
       await vi.advanceTimersByTimeAsync(15_000);
       expect(start).toHaveBeenCalledTimes(2);
       expect(startEvents).toHaveBeenCalledTimes(2);
+      expect(startModels).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reports model-update failures on any screen and retries without navigation', async () => {
+    TestBed.overrideProvider(SystemStore, {
+      useValue: {
+        status: signal('healthy'),
+        appInfo: signal(null),
+        connectionError: signal(null),
+        loadStaticInfo: vi.fn(async () => undefined),
+        refreshHealth: vi.fn(async () => undefined),
+      },
+    });
+    const models = TestBed.inject(ModelsStore);
+    const start = vi.spyOn(models, 'start').mockResolvedValue();
+    models.subscriptionError.set(new IpcError('timeout', 'Model updates timed out'));
+    const fixture = TestBed.createComponent(App);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('.banner[role="status"]')?.textContent).toContain('Model updates timed out');
+    const retry = [...element.querySelectorAll('button')].find((button) => button.textContent?.includes('Retry model updates'));
+    const initialCalls = start.mock.calls.length;
+    retry!.click();
+    expect(start).toHaveBeenCalledTimes(initialCalls + 1);
   });
 });

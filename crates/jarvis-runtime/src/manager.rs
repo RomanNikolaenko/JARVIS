@@ -531,15 +531,16 @@ impl RuntimeManager {
             .map(|p| ResolvedFile::from_curated_projector(&model, p))
             .transpose()?;
         self.start_download(resolved, model.display_name, projector)
+            .await
     }
 
     pub async fn download_model(self: &Arc<Self>, request: ModelDownloadRequest) -> Result<String> {
         let resolved = catalog::resolve(&self.client, &request).await?;
         let label = format!("{} / {}", resolved.repo, resolved.file);
-        self.start_download(resolved, label, None)
+        self.start_download(resolved, label, None).await
     }
 
-    fn start_download(
+    async fn start_download(
         self: &Arc<Self>,
         resolved: ResolvedFile,
         label: String,
@@ -549,7 +550,38 @@ impl RuntimeManager {
         if let Some(projector) = &projector {
             download::check_source(&projector.url)?;
         }
-        let dest = self.library.download_path(resolved.file_name());
+        let directory = library::canonical(self.library.dir())
+            .await
+            .map_err(|err| RuntimeError::io("opening the models directory", err))?;
+        let dest = directory.join(resolved.file_name());
+        let source = ModelSource::Downloaded {
+            repo: resolved.repo.clone(),
+            file: resolved.file.clone(),
+            revision: resolved.revision.clone(),
+        };
+        for model in self.library.list() {
+            let path = Path::new(&model.path);
+            let actual = match library::canonical(path).await {
+                Ok(actual) => actual,
+                Err(_) => match (path.parent(), path.file_name()) {
+                    (Some(parent), Some(name)) => library::canonical(parent)
+                        .await
+                        .map(|parent| parent.join(name))
+                        .unwrap_or_else(|_| path.to_path_buf()),
+                    _ => path.to_path_buf(),
+                },
+            };
+            if same_download_path(&actual, &dest)
+                && (model.source != source
+                    || model.sha256.as_deref() != Some(&resolved.expected.sha256))
+            {
+                return Err(RuntimeError::InvalidInput(format!(
+                    "{} is already used by {}. Choose a file with a different name, or remove the existing model and its file before downloading {label}",
+                    dest.display(),
+                    model.display_name
+                )));
+            }
+        }
         let already = self.library.list().into_iter().any(|m| {
             Path::new(&m.path) == dest.as_path()
                 && m.available
@@ -574,11 +606,6 @@ impl RuntimeManager {
                     &handle,
                 )
                 .await?;
-                let source = ModelSource::Downloaded {
-                    repo: resolved.repo.clone(),
-                    file: resolved.file.clone(),
-                    revision: resolved.revision.clone(),
-                };
                 let model = this
                     .library
                     .add_downloaded(dest.clone(), source, resolved.expected.sha256.clone())
@@ -669,10 +696,7 @@ impl RuntimeManager {
     ) -> Result<()> {
         let slot = self.slot(role);
         let mut supervisor = slot.supervisor.lock().await;
-        if let Some(previous) = supervisor.take() {
-            stop_supervisor(slot, previous).await;
-        }
-
+        // Refuse invalid replacements without disconnecting a healthy server.
         let binary = self.verified_binary().await?;
         let model = self.library.get(model_id).ok_or_else(|| {
             RuntimeError::NotFound(format!("model \"{model_id}\" is not in the library"))
@@ -709,6 +733,11 @@ impl RuntimeManager {
             ),
         };
 
+        if let Some(previous) = supervisor.take() {
+            stop_supervisor(slot, previous).await;
+        }
+        // Sample memory after stopping the old model so its allocation does
+        // not make a valid replacement appear too large for this machine.
         let hardware = Self::hardware().await;
         let gpu_layers = gpu_layers(settings, binary.backend, &hardware, &model);
         let mut estimate = gguf::estimate_memory(model.size_bytes, &model.gguf, context_size);
@@ -1032,6 +1061,18 @@ impl RuntimeManager {
     }
 }
 
+fn same_download_path(left: &Path, right: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        left == right
+    }
+}
+
 /// The slot's state with the server's current memory use.
 async fn sampled_state(slot: &Slot) -> ServerState {
     let mut state = slot.state();
@@ -1165,6 +1206,127 @@ mod tests {
     use super::*;
     use crate::types::GgufInfo;
     use jarvis_platform::{CpuFeatures, GpuInfo, GpuVendor};
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn model_downloads_preserve_occupied_library_paths_and_metadata() {
+        for conflict in [
+            "repository",
+            "subfolder",
+            "revision",
+            "checksum",
+            "imported",
+        ] {
+            for file_present in [true, false] {
+                let dir = tempfile::tempdir().expect("temporary runtime");
+                let manager = RuntimeManager::new(RuntimeOptions {
+                    data_dir: dir.path().to_path_buf(),
+                    events: EventBus::default(),
+                    ai_http: Arc::new(HttpClient::new()),
+                    command_factory: None,
+                })
+                .await
+                .expect("runtime");
+                let path = manager.library.download_path("model.gguf");
+                let bytes = crate::testing::fake_gguf_bytes();
+                tokio::fs::write(&path, &bytes)
+                    .await
+                    .expect("model weights");
+                let digest = download::hex(&Sha256::digest(&bytes));
+                let source = ModelSource::Downloaded {
+                    repo: "owner/original".into(),
+                    file: "model.gguf".into(),
+                    revision: "revision-one".into(),
+                };
+                let model = if conflict == "imported" {
+                    manager.library.import(&path).await.expect("import")
+                } else {
+                    manager
+                        .library
+                        .add_downloaded(path.clone(), source, digest.clone())
+                        .await
+                        .expect("registered model")
+                };
+                let projector_path = manager.library.download_path("model.mmproj.gguf");
+                tokio::fs::write(&projector_path, b"original projector")
+                    .await
+                    .expect("projector");
+                manager
+                    .library
+                    .set_projector(
+                        &model.id,
+                        Some(ProjectorFile {
+                            path: projector_path.display().to_string(),
+                            size_bytes: 18,
+                            sha256: None,
+                        }),
+                    )
+                    .await
+                    .expect("attached projector");
+                if !file_present {
+                    tokio::fs::remove_file(&path)
+                        .await
+                        .expect("simulate missing weights");
+                }
+                let before = manager.library.list();
+                let index_path = manager.library.dir().join("library.json");
+                let index = tokio::fs::read(&index_path).await.expect("saved index");
+                let repo = if conflict == "repository" {
+                    "owner/other"
+                } else {
+                    "owner/original"
+                };
+                let file = if conflict == "subfolder" {
+                    "other/model.gguf"
+                } else {
+                    "model.gguf"
+                };
+                let revision = if conflict == "revision" {
+                    "revision-two"
+                } else {
+                    "revision-one"
+                };
+                let resolved = ResolvedFile {
+                    repo: repo.into(),
+                    file: file.into(),
+                    revision: revision.into(),
+                    url: url::Url::parse(&format!(
+                        "https://huggingface.co/{repo}/resolve/{revision}/{file}"
+                    ))
+                    .expect("source URL"),
+                    expected: Expected {
+                        sha256: if conflict == "checksum" {
+                            "ab".repeat(32)
+                        } else {
+                            digest
+                        },
+                        size: Some(bytes.len() as u64),
+                    },
+                };
+                let error = manager
+                    .start_download(resolved, "Conflicting model".into(), None)
+                    .await
+                    .expect_err("occupied name");
+                assert!(matches!(error, RuntimeError::InvalidInput(_)), "{error}");
+                assert!(error.to_string().contains("already used"), "{error}");
+                assert!(
+                    manager.downloads.snapshot().is_empty(),
+                    "no transfer starts"
+                );
+                assert_eq!(manager.library.list(), before);
+                assert_eq!(tokio::fs::read(index_path).await.expect("index"), index);
+                assert_eq!(
+                    tokio::fs::read(projector_path).await.expect("projector"),
+                    b"original projector"
+                );
+                if file_present {
+                    assert_eq!(tokio::fs::read(&path).await.expect("weights"), bytes);
+                } else {
+                    assert!(!path.exists());
+                }
+            }
+        }
+    }
 
     fn hardware(vram: Option<u64>) -> HardwareInfo {
         HardwareInfo {

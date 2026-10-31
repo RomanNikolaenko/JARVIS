@@ -435,6 +435,56 @@ describe('RuntimeStore', () => {
     expect(refreshModels).toHaveBeenCalledTimes(4);
   });
 
+  it.each(['chat', 'embeddings'] as const)(
+    'refreshes a %s model already running in the first snapshot only once',
+    async (role) => {
+      const running = role === 'chat' ? status('running') : status('stopped', 'running');
+      api['getRuntimeStatus']!.mockResolvedValue(running);
+      await store.refresh();
+      expect(refreshModels).toHaveBeenCalledOnce();
+      expect(refreshModels).toHaveBeenLastCalledWith(true);
+      await store.refresh();
+      expect(refreshModels).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['chat', 'embeddings'] as const)(
+    'refreshes changed %s model identity or capabilities without an observed phase change',
+    async (role) => {
+      const field = role === 'chat' ? 'server' : 'embeddingServer';
+      const running = role === 'chat' ? status('running') : status('stopped', 'running');
+      const changes: Partial<ServerState>[] = [
+        { modelId: 'replacement-model' },
+        { port: 32123 },
+        { contextSize: 8192 },
+        { vision: true },
+        { toolCalling: true },
+      ];
+      for (const change of changes) {
+        api['getRuntimeStatus']!.mockResolvedValueOnce(running);
+        await store.refresh();
+        refreshModels.mockClear();
+        api['getRuntimeStatus']!.mockResolvedValueOnce({ ...running, [field]: { ...running[field], ...change } });
+        await store.refresh();
+        expect(refreshModels).toHaveBeenCalledOnce();
+        expect(refreshModels).toHaveBeenLastCalledWith(true);
+      }
+    }
+  );
+
+  it('does not refresh models for runtime memory, uptime, or hardware changes', async () => {
+    api['getRuntimeStatus']!.mockResolvedValueOnce(status('running', 'running'));
+    await store.refresh();
+    refreshModels.mockClear();
+    api['getRuntimeStatus']!.mockResolvedValueOnce({
+      ...status('running', 'running'),
+      server: { ...server('running', 'qwen'), memoryBytes: 1024, startedAtMs: 1234, gpuLayers: 20, threads: 8 },
+      embeddingServer: { ...server('running', 'bge-m3-q8_0'), memoryBytes: 2048, startedAtMs: 1235, gpuLayers: 10, threads: 4 },
+    });
+    await store.refresh();
+    expect(refreshModels).not.toHaveBeenCalled();
+  });
+
   it('records action errors and still refreshes the status', async () => {
     await store.removeModel('m', true);
     expect(store.actionErrors()[0]?.error.code).toBe('permissionDenied');

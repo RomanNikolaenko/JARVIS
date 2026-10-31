@@ -6,6 +6,83 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Fixed
 
+- Model library changes are published only after the index is saved. Failed
+  imports, projector changes and removals keep the committed state available
+  for retry; failed file deletion restores its library entry when possible.
+  Exact download retries preserve the model ID, projector and original date.
+- Downloads cannot replace another model or an unrelated file sharing the same
+  name. Existing bytes are reused only after verification; files appearing
+  during a transfer are preserved, and conflicting registrations are rejected.
+- Automatic summaries make bounded progress with long Unicode messages and
+  oversized previous summaries in small context windows, while preserving the
+  original messages and six most recent messages.
+- A late send acknowledgement no longer navigates back to an earlier chat after
+  the user opens another conversation, starts a new one or leaves the screen.
+- Chat requests recheck current cloud, image and saved-memory permissions after
+  discovery and immediately before dispatch, using the connection actually held
+  by the request. Embedding batches and automatic conversation summaries also
+  honor revoked permissions. Turns refused during preparation retain captures
+  for an explicit retry.
+- Sending while another conversation is opening no longer targets the previous
+  conversation or creates an unintended new one. Send, Enter, pinned-note saves
+  and project changes wait until loading completes, preserving unsent drafts.
+- Paused agent tasks resume only with their recorded provider/model. Missing
+  identities, unavailable original models, unfinished actions and disabled
+  agents are refused without rerouting the journal or changing the saved task.
+  The task panel explains the refusal and can refresh the original model list.
+- Agent authorization is checked again after asynchronous model discovery and
+  before each new model request using the provider actually held by the task.
+  Turning agents off also disables built-in and plugin tools at the execution
+  policy check, including actions that were waiting for approval.
+- Saving model routes preserves edits made while the earlier save was pending.
+  Save/Discard and conflicting provider operations stay blocked until the
+  operation completes; failed saves keep the draft for an explicit retry.
+- Provider settings, API-key writes and catalog refreshes share one UI guard
+  across page instances. Keys are captured before awaiting a settings save,
+  and removing the edited provider closes its obsolete editor.
+- Explicit model selections survive catalog changes. If a chosen model
+  disappears, chat and agent creation show it as unavailable and preserve the
+  draft instead of silently switching to Automatic. Returning models restore
+  the selection; Automatic requires an explicit choice. Pending chat creation
+  retains the original provider/model IDs, and blocked sends keep attachments.
+  Routing selectors also label missing or category-incompatible saved choices
+  as unavailable without rewriting their references.
+- Provider connection tests have a 30-second UI deadline and can be dismissed
+  while waiting. Late replies cannot affect a reopened editor or a newer test;
+  editing connection details clears the previous result. Missing provider names
+  and invalid API keys now have visible validation messages.
+- Connection tests keep local and LAN servers usable when the OS credential
+  vault is unavailable, matching provider registration. Cloud credential lookup
+  failures stop before any provider request; explicit test keys use the same
+  byte-length and control-character checks as saved keys.
+- Invalid local-model replacements (missing model files/projectors, incompatible
+  embedding pooling or a changed engine) no longer stop a healthy chat or
+  embedding server before reporting the error.
+- Model availability and routing update on every screen after the core registry
+  is ready, including autostart and model changes that finish between polls.
+  Catalog refreshes precede route resolution; missed subscriptions are retried
+  after connection recovery and stale replies cannot replace newer selections.
+- Execution errors, cancellation, shutdown and timeouts during a started
+  non-idempotent tool now leave an `unknown` action result and stop the task
+  without another model turn. User cancellations remain cancelled; other
+  uncertain actions fail instead of becoming resumable. Their journals survive reopening and
+  bulk clearing, with an operation ID and manual-review warning.
+  After checking the effects, users can explicitly delete one reviewed journal
+  without removing its audit entries or other unresolved tasks.
+- The local model library explains when Start is unavailable because the
+  llama.cpp engine is missing, with a link to the engine installation controls.
+- New-file writes flush Tokio's buffered file operation before reporting
+  success, so readers cannot observe an incomplete write after a successful
+  tool result.
+- Agent approvals are checked again immediately before execution using current
+  permissions, workspace folders, program/network access and tool limits.
+  Removed or replaced plugin tools and changed prepared actions are refused;
+  approving file creation cannot authorize a later overwrite or a different
+  workspace target. Refusals remain in the journal and audit log.
+- The task journal expands failed, denied and unknown action output so the
+  reason is visible immediately. Unknown results show their operation ID and
+  a manual-review warning; running actions use a readable status label.
+  Clearing finished tasks preserves unresolved journals and their selection.
 - Agent tools now persist an authorized execution intent before running, using
   the task ID and journal index as the operation identity. Recovery marks an
   unfinished intent as an unknown result and stops the task; users must inspect
@@ -32,6 +109,10 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   journal/audit record with a warning that they may have partly happened.
 
 ### Added
+
+- Running local chat and embedding models have a Restart action for applying
+  saved inference settings. It refuses stale process selections and waits for
+  pending operations or unsaved settings to be resolved.
 
 - Core-level native tool regression tests now exercise both Ollama and
   OpenAI-compatible HTTP adapters with persisted settings and real scoped file

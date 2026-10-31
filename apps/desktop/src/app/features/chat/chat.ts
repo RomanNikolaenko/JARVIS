@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   type ElementRef,
   afterRenderEffect,
   computed,
@@ -10,6 +11,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import type { ContextReport } from '@jarvis/shared-types';
 
@@ -43,7 +45,7 @@ function withoutReasoning(text: string): string {
 
 @Component({
   selector: 'jv-chat',
-  imports: [AttachMenu, ConversationList, Icon, MarkdownPipe, RouterLink, ChatAgentAction],
+  imports: [AttachMenu, ConversationList, FormsModule, Icon, MarkdownPipe, RouterLink, ChatAgentAction],
   templateUrl: './chat.html',
   styleUrl: './chat.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -55,6 +57,7 @@ export class Chat {
   protected readonly vision = inject(VisionStore);
   protected readonly levelPercent = levelPercent;
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private stickToBottom = true;
   private noteFor: string | null | undefined = undefined;
@@ -66,10 +69,7 @@ export class Chat {
   protected readonly formatTokens = formatTokens;
   protected readonly draft = signal('');
   protected readonly agentStarting = signal(false);
-  protected readonly agentModel = computed(() => {
-    const option = this.store.selected();
-    return option ? { providerId: option.provider.id, model: option.model.id } : null;
-  });
+  protected readonly agentModel = this.store.selection;
   protected readonly noteOpen = signal(false);
   protected readonly noteDraft = signal('');
   protected readonly noteSaved = signal(false);
@@ -87,8 +87,8 @@ export class Chat {
     return this.store.temporary() ? 'New temporary chat' : 'New chat';
   });
   protected readonly selectedKey = computed(() => {
-    const selected = this.store.selected();
-    return selected ? this.keyOf(selected) : AUTOMATIC;
+    const selected = this.store.selection();
+    return selected ? optionKey(selected.providerId, selected.model) : AUTOMATIC;
   });
   protected readonly groups = computed<OptionGroup[]>(() => {
     const groups = new Map<string, { label: string; options: ModelOption[] }>();
@@ -110,15 +110,7 @@ export class Chat {
     const text = this.draft().trim();
     // An image alone can be sent too.
     const hasContent = text.length > 0 || this.vision.attachments().length > 0;
-    return (
-      hasContent &&
-      text.length <= MAX_MESSAGE_LENGTH &&
-      !this.store.busy() &&
-      !this.store.savingNote() &&
-      !this.store.deletingIds().includes(this.store.conversation()?.id ?? '') &&
-      !this.store.readOnly() &&
-      !this.agentStarting()
-    );
+    return hasContent && text.length <= MAX_MESSAGE_LENGTH && this.store.acceptsInput() && !this.agentStarting();
   });
   protected readonly nearLimit = computed(() => this.draft().length > MAX_MESSAGE_LENGTH * 0.8);
   /** Saved conversations can feed facts; temporary ones do not link back. */
@@ -254,7 +246,9 @@ export class Chat {
     this.draft.set('');
     this.stickToBottom = true;
     const isNew = !this.store.conversation();
+    const context = this.store.inputContext();
     void this.store.send(text, false, attachments).then(() => {
+      if (this.destroyRef.destroyed || context !== this.store.inputContext()) return;
       const id = this.store.conversation()?.id;
       if (isNew && id) {
         void this.router.navigate([], { queryParams: { c: id }, replaceUrl: true });
@@ -293,7 +287,12 @@ export class Chat {
 
   protected onModelChange(event: Event): void {
     const key = (event.target as HTMLSelectElement).value;
-    this.store.select(this.store.modelOptions().find((o) => this.keyOf(o) === key) ?? null);
+    if (key === AUTOMATIC) {
+      this.store.select(null);
+      return;
+    }
+    const option = this.store.modelOptions().find((o) => this.keyOf(o) === key);
+    if (option) this.store.select(option);
   }
 
   /** Tooltip describing how the context of a reply was built. */

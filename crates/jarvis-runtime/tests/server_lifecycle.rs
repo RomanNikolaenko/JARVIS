@@ -589,6 +589,108 @@ async fn unknown_models_and_missing_runtime_are_reported() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn invalid_replacements_preserve_the_running_servers() {
+    let h = harness("slow").await;
+    for (role, model) in [(CHAT, &h.model_id), (EMBEDDINGS, &h.embedding_model_id)] {
+        h.manager.start(role, model, &settings(30)).await.unwrap();
+        assert_eq!(
+            h.manager
+                .wait_settled(role, Duration::from_secs(30))
+                .await
+                .phase,
+            ServerPhase::Running
+        );
+    }
+    let chat = h.manager.server_state(CHAT);
+    let embedding = h.manager.server_state(EMBEDDINGS);
+    let chat_provider = h.manager.provider(CHAT).unwrap();
+    let embedding_provider = h.manager.provider(EMBEDDINGS).unwrap();
+
+    for role in ServerRole::ALL {
+        let error = h
+            .manager
+            .start(role, "missing", &settings(30))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RuntimeError::NotFound(_)), "{error:?}");
+    }
+
+    let missing_file = h.import("removed.gguf", &testing::fake_gguf_bytes()).await;
+    std::fs::remove_file(h.data_dir.join("removed.gguf")).unwrap();
+    let error = h
+        .manager
+        .start(CHAT, &missing_file, &settings(30))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, RuntimeError::NotFound(_)), "{error:?}");
+
+    let vision_model = h.import("vision.gguf", &testing::fake_gguf_bytes()).await;
+    let projector = h.data_dir.join("vision.mmproj.gguf");
+    std::fs::write(&projector, testing::fake_projector_gguf_bytes()).unwrap();
+    h.manager
+        .attach_projector(&vision_model, &projector)
+        .await
+        .unwrap();
+    std::fs::remove_file(&projector).unwrap();
+    let error = h
+        .manager
+        .start(CHAT, &vision_model, &settings(30))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("vision projector"), "{error}");
+
+    let reranker = h
+        .import("reranker.gguf", &testing::fake_gguf(Some(4)))
+        .await;
+    let error = h
+        .manager
+        .start(EMBEDDINGS, &reranker, &settings(30))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, RuntimeError::InvalidInput(_)), "{error:?}");
+
+    let planted = h.engine.with_file_name("version.dll");
+    std::fs::write(&planted, b"not a real library").unwrap();
+    let error = h
+        .manager
+        .start(CHAT, &h.model_id, &settings(30))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, RuntimeError::BinaryChanged(_)), "{error:?}");
+    std::fs::remove_file(planted).unwrap();
+
+    assert_eq!(h.manager.server_state(CHAT), chat);
+    assert_eq!(h.manager.server_state(EMBEDDINGS), embedding);
+    assert!(Arc::ptr_eq(
+        &h.manager.provider(CHAT).unwrap(),
+        &chat_provider
+    ));
+    assert!(Arc::ptr_eq(
+        &h.manager.provider(EMBEDDINGS).unwrap(),
+        &embedding_provider
+    ));
+    let reply = chat_provider
+        .chat(ChatRequest {
+            model: h.model_id.clone(),
+            messages: vec![ChatMessage::user("ping")],
+            options: GenerationOptions::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.content, "pong");
+    let vectors = embedding_provider
+        .embeddings(EmbeddingRequest {
+            model: h.embedding_model_id.clone(),
+            input: vec!["my cat".into()],
+        })
+        .await
+        .unwrap()
+        .vectors;
+    assert_eq!(vectors, vec![testing::fake_embedding("my cat")]);
+    h.manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn servers_left_by_a_previous_session_are_stopped() {
     let dir = tempfile::tempdir().unwrap();
     let exe = std::env::current_exe().unwrap();

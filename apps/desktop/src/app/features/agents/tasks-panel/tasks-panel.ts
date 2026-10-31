@@ -1,9 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import type { StepKind, StepOutcome, TaskStatus, TaskStep } from '@jarvis/shared-types';
+import type { AgentTask, StepKind, StepOutcome, TaskStatus, TaskStep } from '@jarvis/shared-types';
 
-import { AgentsStore, MAX_GOAL_LENGTH, isFinished } from '../../../core/state/agents.store';
+import { AgentsStore, MAX_GOAL_LENGTH, hasUnresolvedAction, isFinished } from '../../../core/state/agents.store';
 import { ModelsStore, optionKey } from '../../../core/state/models.store';
 import { SettingsStore } from '../../../core/state/settings.store';
 import { formatShortDate } from '../../../shared/format';
@@ -40,6 +40,8 @@ const OUTCOME_CHIP: Record<StepOutcome, string> = {
   info: '',
 };
 
+type ResumeBlockReason = 'disabled' | 'unknownResult' | 'missingIdentity' | 'modelUnavailable';
+
 /** New task form, the task list and the journal of the selected task. */
 @Component({
   selector: 'jv-tasks-panel',
@@ -59,11 +61,24 @@ export class TasksPanel {
   protected readonly modelKey = signal('');
   protected readonly maxSteps = signal<number | null>(null);
   protected readonly maxMinutes = signal<number | null>(null);
+  protected readonly confirmDeleteId = signal<string | null>(null);
 
   protected readonly modelOptions = this.models.chatOptions;
+  protected readonly selectedOption = computed(() =>
+    this.modelOptions().find((option) => optionKey(option.provider.id, option.model.id) === this.modelKey())
+  );
+  protected readonly selectionUnavailable = computed(() => this.modelKey() !== '' && !this.selectedOption());
   protected readonly defaults = computed(() => this.settings.settings()?.agents ?? null);
+  protected readonly agentsEnabled = computed(
+    () => this.settings.settings()?.agents.enabled ?? this.store.status()?.enabled ?? true
+  );
+  protected readonly modelsLoading = this.models.loading;
   protected readonly canStart = computed(
-    () => this.goal().trim().length > 0 && this.goal().length <= MAX_GOAL_LENGTH && (this.store.status()?.enabled ?? true)
+    () =>
+      this.goal().trim().length > 0 &&
+      this.goal().length <= MAX_GOAL_LENGTH &&
+      this.agentsEnabled() &&
+      !this.selectionUnavailable()
   );
   protected readonly task = this.store.selected;
   protected readonly finished = computed(() => {
@@ -109,15 +124,62 @@ export class TasksPanel {
     return OUTCOME_CHIP[outcome];
   }
 
+  protected outcomeLabel(outcome: StepOutcome): string {
+    return outcome === 'inProgress' ? 'In progress' : outcome;
+  }
+
+  protected canDeleteReviewed(task: AgentTask): boolean {
+    return isFinished(task.status) && hasUnresolvedAction(task);
+  }
+
+  protected resumeBlock(task: AgentTask): ResumeBlockReason | null {
+    if (!this.agentsEnabled()) return 'disabled';
+    if (hasUnresolvedAction(task)) return 'unknownResult';
+    if (!task.providerId?.trim() || !task.model?.trim()) return 'missingIdentity';
+    return this.modelOptions().some((option) => option.provider.id === task.providerId && option.model.id === task.model)
+      ? null
+      : 'modelUnavailable';
+  }
+
+  protected canResume(task: AgentTask): boolean {
+    return task.status === 'paused' && this.store.selectedId() === task.id && !this.store.busy() && !this.resumeBlock(task);
+  }
+
+  protected async resume(expected: AgentTask): Promise<void> {
+    const current = this.task();
+    if (
+      !current ||
+      current.id !== expected.id ||
+      current.providerId !== expected.providerId ||
+      current.model !== expected.model ||
+      expected.status !== 'paused' ||
+      !this.canResume(current)
+    )
+      return;
+    await this.store.resume(current.id);
+  }
+
+  protected refreshModels(): void {
+    if (!this.modelsLoading()) void this.models.refresh(true);
+  }
+
+  protected async deleteReviewed(id: string): Promise<void> {
+    if (this.confirmDeleteId() !== id || this.store.busy()) {
+      return;
+    }
+    this.confirmDeleteId.set(null);
+    await this.store.deleteReviewed(id);
+  }
+
   protected optionKey(providerId: string, modelId: string): string {
     return optionKey(providerId, modelId);
   }
 
   protected async start(): Promise<void> {
-    if (!this.canStart()) {
+    if (!this.canStart() || this.store.busy()) {
       return;
     }
-    const option = this.modelOptions().find((o) => optionKey(o.provider.id, o.model.id) === this.modelKey());
+    const option = this.selectedOption();
     const minutes = this.maxMinutes();
     const task = await this.store.startTask({
       goal: this.goal().trim(),

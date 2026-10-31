@@ -7,7 +7,6 @@ import type {
   RuntimeRelease,
   RuntimeSettings,
   RuntimeStatus,
-  ServerPhase,
   ServerRole,
   ServerState,
 } from '@jarvis/shared-types';
@@ -38,6 +37,13 @@ function settling(server: ServerState): boolean {
   return server.phase === 'starting' || server.phase === 'stopping';
 }
 
+/** Only changes that affect the available model or its advertised capabilities. */
+function servedModelKey(server: ServerState): string | null {
+  return server.phase === 'running'
+    ? JSON.stringify([server.modelId, server.port, server.contextSize, server.vision, server.toolCalling])
+    : null;
+}
+
 /** State of the embedded llama.cpp runtime (Runtime screen). */
 @Injectable({ providedIn: 'root' })
 export class RuntimeStore {
@@ -45,8 +51,7 @@ export class RuntimeStore {
   private readonly destroyRef = inject(DestroyRef);
   private readonly models = inject(ModelsStore);
   private readonly settingsStore = inject(SettingsStore);
-  /** Last seen phase of the chat and the embedding server. */
-  private lastPhases: [ServerPhase, ServerPhase] | null = null;
+  private lastServedModels: [string | null, string | null] = [null, null];
   private refreshing: Promise<void> | null = null;
   private releaseEpoch = 0;
   private releaseRequest: { backend: RuntimeBackend; promise: Promise<void> } | null = null;
@@ -107,16 +112,16 @@ export class RuntimeStore {
       if (this.destroyRef.destroyed) return;
       this.status.set(status);
       this.statusError.set(null);
-      const phases: [ServerPhase, ServerPhase] = [status.server.phase, status.embeddingServer.phase];
-      // The set of AI models changes when a local model starts or stops.
-      const last = this.lastPhases;
-      const changed = phases.some(
-        (phase, i) => last !== null && phase !== last[i] && (phase === 'running' || last[i] === 'running')
-      );
+      const servedModels: [string | null, string | null] = [
+        servedModelKey(status.server),
+        servedModelKey(status.embeddingServer),
+      ];
+      // Polling can miss intermediate phases when a model is replaced or restarted.
+      const changed = servedModels.some((model, i) => model !== this.lastServedModels[i]);
+      this.lastServedModels = servedModels;
       if (changed) {
         void this.models.refresh(true);
       }
-      this.lastPhases = phases;
     } catch (error) {
       if (!this.destroyRef.destroyed) this.statusError.set(IpcError.from(error));
     }

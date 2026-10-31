@@ -32,7 +32,7 @@
 
 <div class="layout">
   <!-- Engine -->
-  <jv-hud-panel class="engine" heading="Engine (llama.cpp)">
+  <jv-hud-panel id="runtime-engine" class="engine" heading="Engine (llama.cpp)">
     @if (store.installed(); as binary) {
       <dl class="facts">
         <div>
@@ -63,7 +63,7 @@
       </p>
     }
 
-    <div class="engine-actions">
+    <div #engineActions class="engine-actions" tabindex="-1">
       <label class="inline">
         <span>Build</span>
         <select (change)="onBackend($event)">
@@ -280,6 +280,15 @@
         }
         @if (isActive(entry.state)) {
           <div class="row-actions">
+            @if (entry.state.phase === 'running') {
+              <button
+                type="button"
+                class="ghost"
+                (click)="restart(entry.role, entry.state)"
+                [disabled]="!canRestart(entry.role, entry.state)">
+                Restart
+              </button>
+            }
             <button
               type="button"
               class="danger"
@@ -289,6 +298,15 @@
               Stop
             </button>
           </div>
+          @if (entry.state.phase === 'running') {
+            <p class="hint">
+              @if (settingsForm.dirty) {
+                Save inference changes before restarting.
+              } @else {
+                Restart applies the saved inference settings to this model.
+              }
+            </p>
+          }
         }
         @if (entry.logTail.length) {
           <details class="logs">
@@ -306,6 +324,17 @@
       Import GGUF…
     </button>
     @if (models().length) {
+      @if (!store.installed()) {
+        <div class="engine-required" role="status">
+          <strong>Install the engine to start your models.</strong>
+          <p>
+            GGUF files need llama-server to run. In
+            <a href="#runtime-engine" (click)="$event.preventDefault(); engineActions.focus()">Engine (llama.cpp)</a>, choose
+            <strong>Find build</strong>, then <strong>Download &amp; install</strong>. Or select
+            <strong>Use existing llama-server…</strong> if you already have it. Then start an available model from your library.
+          </p>
+        </div>
+      }
       <table class="model-table">
         <thead>
           <tr>

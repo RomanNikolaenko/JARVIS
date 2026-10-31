@@ -130,14 +130,35 @@ impl TaskStore {
             .await?)
     }
 
-    /// Deletes finished tasks; returns how many.
+    /// Deletes finished tasks with known outcomes; retains unresolved action
+    /// journals for manual review and returns how many tasks were deleted.
     pub async fn delete_finished(&self) -> Result<usize> {
         Ok(self
             .db
             .call(|conn| {
                 Ok::<_, StorageError>(conn.execute(
-                    "DELETE FROM agent_tasks WHERE status IN ('completed', 'unverified', 'failed', 'cancelled')",
+                    "DELETE FROM agent_tasks
+                     WHERE status IN ('completed', 'unverified', 'failed', 'cancelled')
+                       AND NOT EXISTS (
+                           SELECT 1 FROM json_each(agent_tasks.steps) AS step
+                           WHERE json_extract(step.value, '$.outcome') IN ('unknown', 'inProgress')
+                       )",
                     [],
+                )?)
+            })
+            .await?)
+    }
+
+    /// Explicit deletion of one finished journal after its effects were reviewed.
+    /// Audit entries are independent and remain intact.
+    pub async fn delete_reviewed(&self, id: Uuid) -> Result<usize> {
+        Ok(self
+            .db
+            .call(move |conn| {
+                Ok::<_, StorageError>(conn.execute(
+                    "DELETE FROM agent_tasks WHERE id = ?1
+                     AND status IN ('completed', 'unverified', 'failed', 'cancelled')",
+                    [id.to_string()],
                 )?)
             })
             .await?)

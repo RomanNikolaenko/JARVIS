@@ -120,6 +120,13 @@ JARVIS talks to AI servers over HTTP. Configure them on the **Models** screen
   Key changes apply to new requests immediately; in-flight requests retain their
   existing provider. Connection tests contact the selected endpoint even when
   cloud chat is disabled, but do not send conversation content.
+- Connection-test waiting ends after 30 seconds in the UI; **Cancel** closes
+  the editor immediately and ignores late results. It does not cancel a native
+  request that has already been dispatched. Editing connection details clears
+  the previous result. If the credential vault is unavailable, tests can still
+  contact unauthenticated on-device or LAN servers; an explicitly entered key
+  can authenticate without reading the vault. Cloud vault failures are reported
+  before contacting the provider.
 - Thinking models (`<think>…</think>`) are shown with a collapsible
   "Reasoning" block.
 - First requests to a model can be slow while the server loads it; the idle
