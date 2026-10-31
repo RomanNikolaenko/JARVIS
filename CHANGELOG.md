@@ -4,6 +4,17 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+### Changed
+
+- A chat reply refused by the privacy settings links to Settings → Privacy.
+  Such refusals have their own error code, `privacyBlocked`;
+  `permissionDenied` now means a security-policy block only.
+
+### Fixed
+
+- The hint for the subscription providers reads as one sentence: the sign-in
+  command no longer stands on a line of its own.
+
 ## [0.1.2] — 2026-10-31
 
 Your ChatGPT or Claude subscription as a model (through the Codex CLI or

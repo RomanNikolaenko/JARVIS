@@ -342,7 +342,7 @@ async fn models_without_vision_and_cloud_models_are_refused() {
     )
     .await
     .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::PermissionDenied);
+    assert_eq!(err.code(), ErrorCode::PrivacyBlocked);
     assert!(cloud.eyes.requests.lock().unwrap().is_empty());
 
     settings.privacy.share_captures_with_cloud = true;
@@ -394,7 +394,7 @@ async fn revoking_cloud_permissions_during_discovery_preserves_the_capture_for_r
             .unwrap()
             .unwrap()
             .unwrap_err();
-        assert_eq!(error.code(), ErrorCode::PermissionDenied, "{error}");
+        assert_eq!(error.code(), ErrorCode::PrivacyBlocked, "{error}");
         assert!(test.eyes.requests.lock().unwrap().is_empty());
         assert_eq!(test.core.chat().active_requests(), 0);
         assert!(

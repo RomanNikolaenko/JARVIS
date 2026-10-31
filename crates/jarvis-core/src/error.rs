@@ -18,8 +18,11 @@ pub enum ErrorCode {
     /// The request was malformed or violated a limit.
     Validation,
     NotFound,
-    /// Blocked by a security or privacy policy.
+    /// Blocked by a security policy.
     PermissionDenied,
+    /// Blocked by the user's privacy settings (Settings → Privacy); allowed
+    /// once the user changes them.
+    PrivacyBlocked,
     /// The operation is not supported by this platform, provider or model.
     Unsupported,
     Timeout,
@@ -70,6 +73,10 @@ pub enum CoreError {
 
     #[error("{0}")]
     PermissionDenied(String),
+
+    /// Blocked by the user's privacy settings.
+    #[error("{0}")]
+    PrivacyBlocked(String),
 
     #[error("{0}")]
     LimitExceeded(String),
@@ -122,6 +129,7 @@ impl CoreError {
             Self::Validation(_) => ErrorCode::Validation,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::PermissionDenied(_) => ErrorCode::PermissionDenied,
+            Self::PrivacyBlocked(_) => ErrorCode::PrivacyBlocked,
             Self::LimitExceeded(_) => ErrorCode::LimitExceeded,
             Self::Config(_) => ErrorCode::Config,
             Self::Io { .. } => ErrorCode::Io,

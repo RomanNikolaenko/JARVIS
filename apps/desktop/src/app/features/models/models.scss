@@ -160,6 +160,17 @@ button.small {
   color: var(--jv-text-dim);
 }
 
+// One paragraph across the form grid, in place of the URL and key fields.
+.cli-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+
+  code {
+    font-family: var(--jv-mono);
+    color: var(--jv-text-muted);
+  }
+}
+
 .test-result {
   display: flex;
   align-items: center;

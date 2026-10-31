@@ -275,7 +275,7 @@ impl JarvisCore {
                     model.descriptor.display_name
                 ),
             );
-            return Err(CoreError::PermissionDenied(message.to_owned()));
+            return Err(CoreError::PrivacyBlocked(message.to_owned()));
         }
         Ok(())
     }

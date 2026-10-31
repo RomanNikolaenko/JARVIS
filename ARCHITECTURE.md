@@ -139,9 +139,11 @@ Its public API is UI-agnostic:
 | `shutdown()` | cancels running work |
 
 **Errors.** `CoreError` maps to a stable `ErrorCode` (`validation`,
-`notFound`, `permissionDenied`, `unsupported`, `timeout`, `cancelled`,
-`unavailable`, `limitExceeded`, `config`, `io`, `internal`). The UI branches on
-codes only. `ErrorPayload { code, message }` is the IPC error format.
+`notFound`, `permissionDenied`, `privacyBlocked`, `unsupported`, `timeout`,
+`cancelled`, `unavailable`, `limitExceeded`, `config`, `io`, `internal`). The UI
+branches on codes only: `privacyBlocked` (refused by the user's privacy
+settings) leads to Settings → Privacy, `permissionDenied` is a security-policy
+block. `ErrorPayload { code, message }` is the IPC error format.
 
 **Settings.** One TOML file (`config.toml`) in the OS config directory.
 Missing fields get defaults; values are validated (ranges, cross-field rules);

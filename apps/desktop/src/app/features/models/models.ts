@@ -46,6 +46,12 @@ export function usesCli(backend: ProviderBackend): boolean {
   return backend === 'codex' || backend === 'claudeCode';
 }
 
+/** The program a CLI backend starts. */
+export const CLI_PRODUCTS: Partial<Record<ProviderBackend, string>> = {
+  codex: 'the Codex CLI',
+  claudeCode: 'Claude Code',
+};
+
 /** The terminal command that signs a CLI backend in. */
 export const CLI_LOGIN_COMMANDS: Partial<Record<ProviderBackend, string>> = {
   codex: 'codex login',
@@ -114,6 +120,7 @@ export class Models {
   protected readonly categories = CATEGORIES;
   protected readonly backendLabels = BACKEND_LABELS;
   protected readonly usesCli = usesCli;
+  protected readonly cliProducts = CLI_PRODUCTS;
   protected readonly loginCommands = CLI_LOGIN_COMMANDS;
   protected readonly localityLabels = LOCALITY_LABELS;
   protected readonly saveError = this.settings.error;

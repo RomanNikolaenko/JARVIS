@@ -373,7 +373,7 @@ impl JarvisCore {
                 EventCategory::Security,
                 format!("Blocked an agent task: {message}"),
             );
-            return Err(CoreError::PermissionDenied(message));
+            return Err(CoreError::PrivacyBlocked(message));
         }
         let mut window = resolved.context_window.unwrap_or(DEFAULT_CONTEXT_TOKENS);
         if let Some(limit) = settings.memory.context_limit_tokens {

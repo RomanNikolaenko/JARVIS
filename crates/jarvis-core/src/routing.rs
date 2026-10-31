@@ -244,7 +244,7 @@ fn select_automatic(
                         && entry.models.iter().any(|m| category.supports(&m.capabilities))
                 });
             if blocked_cloud_model_exists {
-                CoreError::PermissionDenied(format!(
+                CoreError::PrivacyBlocked(format!(
                     "Only cloud models support {} tasks, and sending data to the cloud is disabled in privacy settings",
                     category.key()
                 ))
@@ -271,7 +271,7 @@ pub(crate) fn check_privacy(
     allow_cloud: bool,
 ) -> Result<(), CoreError> {
     if provider.locality == DataLocality::ThirdPartyCloud && !allow_cloud {
-        return Err(CoreError::PermissionDenied(format!(
+        return Err(CoreError::PrivacyBlocked(format!(
             "Sending data to the cloud provider \"{}\" is disabled in privacy settings",
             provider.display_name
         )));
@@ -292,13 +292,13 @@ pub(crate) fn check_data_privacy(
         return Ok(());
     }
     if shares_memory && !privacy.share_memory_with_cloud {
-        return Err(CoreError::PermissionDenied(
+        return Err(CoreError::PrivacyBlocked(
             "Saved memory is not shared with cloud models unless allowed in Settings → Privacy"
                 .to_owned(),
         ));
     }
     if shares_captures && !privacy.share_captures_with_cloud {
-        return Err(CoreError::PermissionDenied(
+        return Err(CoreError::PrivacyBlocked(
             "Images are not sent to cloud models unless allowed in Settings → Privacy".to_owned(),
         ));
     }
@@ -454,7 +454,7 @@ mod tests {
             select(TaskCategory::Vision, &routing, &catalog, false)
                 .expect_err("blocked")
                 .code(),
-            ErrorCode::PermissionDenied
+            ErrorCode::PrivacyBlocked
         );
         assert_eq!(
             select(TaskCategory::Vision, &routing, &catalog, true)
@@ -472,7 +472,7 @@ mod tests {
             ..ModelRouting::default()
         };
         let err = select(TaskCategory::Vision, &explicit, &catalog, false).expect_err("blocked");
-        assert_eq!(err.code(), ErrorCode::PermissionDenied);
+        assert_eq!(err.code(), ErrorCode::PrivacyBlocked);
     }
 
     #[test]

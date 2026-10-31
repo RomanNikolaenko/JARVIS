@@ -597,7 +597,12 @@ describe('Provider credentials form', () => {
     fixture.detectChanges();
     expect(element.querySelector('input[formControlName="baseUrl"]')).toBeNull();
     expect(element.querySelector('input[formControlName="apiKey"]')).toBeNull();
-    expect(element.textContent).toContain('claude auth login');
+    // One sentence, not separate lines for the command and the full stop.
+    const hint = element.querySelector('.cli-hint')!;
+    expect(hint.children).toHaveLength(1);
+    expect(hint.textContent!.replace(/\s+/g, ' ')).toContain(
+      'JARVIS starts Claude Code on this computer for each request, with its own tools turned off. Install it, then sign in once in a terminal with claude auth login. No API key'
+    );
     await click('Test connection');
     expect(api.testAiProvider).toHaveBeenCalledWith(
       expect.objectContaining({ backend: 'claudeCode', baseUrl: 'https://claude.ai' }),

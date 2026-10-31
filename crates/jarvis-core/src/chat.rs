@@ -315,7 +315,10 @@ impl ChatService {
             .resolve(provider_id, model, settings)
             .await
             .inspect_err(|err| {
-                if err.code() == ErrorCode::PermissionDenied {
+                if matches!(
+                    err.code(),
+                    ErrorCode::PermissionDenied | ErrorCode::PrivacyBlocked
+                ) {
                     self.events.warning(
                         EventCategory::Security,
                         format!("Blocked a chat request: {err}"),
@@ -935,11 +938,7 @@ mod tests {
                 .expect("discovery completed")
                 .expect("request task")
                 .expect_err("revoked privacy must fail");
-            assert_eq!(
-                err.code(),
-                ErrorCode::PermissionDenied,
-                "{discovery}: {err}"
-            );
+            assert_eq!(err.code(), ErrorCode::PrivacyBlocked, "{discovery}: {err}");
             assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
             assert_eq!(chat.active_requests(), 0);
         }
@@ -992,7 +991,7 @@ mod tests {
                     Some(ChatStreamEvent::Started { .. })
                 ));
                 assert!(
-                    matches!(events.last(), Some(ChatStreamEvent::Failed { error, .. }) if error.code == ErrorCode::PermissionDenied)
+                    matches!(events.last(), Some(ChatStreamEvent::Failed { error, .. }) if error.code == ErrorCode::PrivacyBlocked)
                 );
                 assert_eq!(
                     events.len(),

@@ -235,7 +235,7 @@ async fn cloud_providers_are_blocked_until_the_user_allows_them() {
         .start(user_request("secret"), sink)
         .await
         .expect_err("cloud must be blocked by default");
-    assert_eq!(err.code(), ErrorCode::PermissionDenied);
+    assert_eq!(err.code(), ErrorCode::PrivacyBlocked);
     assert!(
         test.core
             .events()

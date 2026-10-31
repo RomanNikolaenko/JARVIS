@@ -139,7 +139,7 @@ id: string, label: string, status: HealthStatus, message: string, latencyMs: num
  *
  * The UI branches on these codes, never on message text.
  */
-export type ErrorCode = "validation" | "notFound" | "permissionDenied" | "unsupported" | "timeout" | "cancelled" | "unavailable" | "limitExceeded" | "config" | "io" | "internal";
+export type ErrorCode = "validation" | "notFound" | "permissionDenied" | "privacyBlocked" | "unsupported" | "timeout" | "cancelled" | "unavailable" | "limitExceeded" | "config" | "io" | "internal";
 
 /**
  * Serializable error returned over IPC and inside stream events.

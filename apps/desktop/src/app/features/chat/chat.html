@@ -193,7 +193,12 @@
             <div class="bubble thinking"><span></span><span></span><span></span></div>
           }
           @if (entry.error) {
-            <div class="error-text">{{ entry.error }}</div>
+            <div class="error-text">
+              {{ entry.error }}
+              @if (entry.errorCode === 'privacyBlocked') {
+                <a class="error-action" routerLink="/settings">Open Settings → Privacy</a>
+              }
+            </div>
           }
           @if (entry.content && entry.status !== 'streaming') {
             <div class="message-footer">

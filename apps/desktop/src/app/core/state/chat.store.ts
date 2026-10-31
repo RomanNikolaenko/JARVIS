@@ -6,6 +6,7 @@ import type {
   Conversation,
   ConversationPatch,
   ConversationSummary,
+  ErrorCode,
   ModelRef,
   StoredMessage,
 } from '@jarvis/shared-types';
@@ -27,6 +28,8 @@ export interface ChatEntry {
   readonly status: ChatEntryStatus;
   readonly model?: string;
   readonly error?: string;
+  /** Category of `error`, when the core reported one. */
+  readonly errorCode?: ErrorCode;
   readonly elapsedMs?: number;
   /** How the core built the context of this reply. */
   readonly context?: ContextReport;
@@ -337,7 +340,8 @@ export class ChatStore {
       }
     } catch (error) {
       if (!current()) return;
-      this.updateEntry(assistantId, { status: 'failed', error: IpcError.from(error).message });
+      const failure = IpcError.from(error);
+      this.updateEntry(assistantId, { status: 'failed', error: failure.message, errorCode: failure.code });
       this.finish();
     }
   }
@@ -525,6 +529,7 @@ export class ChatStore {
         this.updateEntry(entryId, {
           status: 'failed',
           error: event.error.message,
+          errorCode: event.error.code,
           elapsedMs: event.elapsedMs,
         });
         this.finish();

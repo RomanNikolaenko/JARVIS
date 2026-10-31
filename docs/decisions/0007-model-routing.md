@@ -24,7 +24,7 @@ must respect the privacy policy.
   real providers before the diagnostic provider, then on-device before local
   network before cloud, then the user's provider order, then the server's model
   order. Cloud models are candidates only when allowed; if only blocked cloud
-  models qualify, the error says so (`permissionDenied`).
+  models qualify, the error says so (`privacyBlocked`).
 - The router is a pure function over a **model catalog**: a cached snapshot of
   all providers' models (30 s, or 5 s if any provider failed), invalidated
   when providers change and refreshable on demand.

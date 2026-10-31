@@ -33,6 +33,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<ErrorCode>([
   'validation',
   'notFound',
   'permissionDenied',
+  'privacyBlocked',
   'unsupported',
   'timeout',
   'cancelled',

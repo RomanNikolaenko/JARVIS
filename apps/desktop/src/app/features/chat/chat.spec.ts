@@ -318,6 +318,37 @@ describe('Chat explicit model selection', () => {
     expect(input.value).toBe('');
     expect(vision.attachments()).toEqual([]);
   });
+
+  it('links a reply blocked by privacy settings to them, and only that one', async () => {
+    const { api, fixture, element, input, button } = await render();
+    const link = () => element.querySelector<HTMLAnchorElement>('.error-text a');
+    api.sendMessage.mockImplementationOnce(async (_request, onEvent) => {
+      onEvent({
+        type: 'failed',
+        error: { code: 'privacyBlocked', message: 'Sending data to the cloud provider "Claude" is disabled in privacy settings' },
+        elapsedMs: 1,
+      });
+      return 'request';
+    });
+    button('Send').click();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(link()?.getAttribute('href')).toBe('/settings');
+    });
+    expect(link()?.textContent).toContain('Privacy');
+
+    api.sendMessage.mockRejectedValueOnce({ code: 'permissionDenied', message: 'Blocked by the security policy' });
+    input.value = 'Again';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    button('Send').click();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(element.textContent).toContain('Blocked by the security policy');
+    });
+    const errors = [...element.querySelectorAll('.error-text')];
+    expect(errors.at(-1)?.querySelector('a')).toBeNull();
+  });
 });
 
 describe('Chat pinned note', () => {

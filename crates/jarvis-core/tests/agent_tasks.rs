@@ -348,7 +348,7 @@ async fn cloud_models_need_their_own_permission_for_agents() {
     })
     .await;
     let err = t.core.start_agent_task(goal("Anything")).await.unwrap_err();
-    assert_eq!(err.code(), ErrorCode::PermissionDenied, "{err}");
+    assert_eq!(err.code(), ErrorCode::PrivacyBlocked, "{err}");
     assert!(t.core.list_agent_tasks(10).await.unwrap().is_empty());
 
     let mut settings = t.core.settings();
@@ -655,9 +655,15 @@ async fn permissions_revoked_during_model_discovery_block_start_and_resume() {
                 .unwrap()
                 .unwrap()
                 .unwrap_err();
+            let expected = match permission {
+                RevokedPermission::Agents => ErrorCode::PermissionDenied,
+                RevokedPermission::CloudProviders | RevokedPermission::CloudAgents => {
+                    ErrorCode::PrivacyBlocked
+                }
+            };
             assert_eq!(
                 err.code(),
-                ErrorCode::PermissionDenied,
+                expected,
                 "resume={resume}, revoked={permission:?}: {err}"
             );
             if let Some(paused) = paused {

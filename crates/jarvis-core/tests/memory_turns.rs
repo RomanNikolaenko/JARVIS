@@ -391,7 +391,7 @@ async fn revoking_memory_sharing_during_preparation_keeps_the_turn_unsaved() {
         .unwrap()
         .unwrap()
         .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::PermissionDenied);
+    assert_eq!(err.code(), ErrorCode::PrivacyBlocked);
     assert!(provider.requests().is_empty());
     let after = test
         .core

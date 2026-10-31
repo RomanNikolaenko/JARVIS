@@ -103,11 +103,13 @@
               </select>
             </label>
             @if (usesCli(form.controls.backend.value)) {
-              <p class="field wide hint">
-                JARVIS runs the {{ backendLabels[form.controls.backend.value] }} installed on this computer for each request, with
-                the CLI's own tools turned off. Install it, then sign in once in a terminal with
-                <code>{{ loginCommands[form.controls.backend.value] }}</code
-                >. No API key is needed; your subscription's usage limits apply.
+              <p class="hint cli-hint">
+                <span
+                  >JARVIS starts {{ cliProducts[form.controls.backend.value] }} on this computer for each request, with its own
+                  tools turned off. Install it, then sign in once in a terminal with
+                  <code>{{ loginCommands[form.controls.backend.value] }}</code
+                  >. No API key is needed; your subscription's usage limits apply.</span
+                >
               </p>
             } @else {
               <label class="field wide">
