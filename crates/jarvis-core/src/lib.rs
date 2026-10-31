@@ -623,6 +623,8 @@ impl JarvisCore {
                 operation: "connection test",
             })?;
         let api_key = match explicit_key {
+            // A CLI provider keeps its own sign-in.
+            _ if config.backend.uses_cli() => None,
             Some(k) if !k.trim().is_empty() => {
                 validate_provider_api_key(&k)?;
                 Some(k)
@@ -826,11 +828,13 @@ async fn build_providers(
         providers.extend(runtime);
         if let Some(factory) = factory {
             for config in configs.iter().filter(|c| c.enabled) {
-                let Ok(api_key) = provider_key_or_local_fallback(
-                    config,
-                    secrets.get_secret(&provider_secret_key(&config.id)),
-                    &events,
-                ) else {
+                // A CLI provider keeps its own sign-in.
+                let stored = if config.backend.uses_cli() {
+                    Ok(None)
+                } else {
+                    secrets.get_secret(&provider_secret_key(&config.id))
+                };
+                let Ok(api_key) = provider_key_or_local_fallback(config, stored, &events) else {
                     continue;
                 };
                 match factory.create(config, api_key.as_deref()) {

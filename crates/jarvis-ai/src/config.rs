@@ -27,6 +27,12 @@ pub enum ProviderBackend {
     Anthropic,
     /// Google Gemini API (`https://generativelanguage.googleapis.com/v1beta`).
     Gemini,
+    /// ChatGPT through the installed OpenAI Codex CLI, signed in with the
+    /// user's ChatGPT account.
+    Codex,
+    /// Claude through the installed Claude Code CLI, signed in with the
+    /// user's Claude account.
+    ClaudeCode,
 }
 
 impl ProviderBackend {
@@ -38,7 +44,17 @@ impl ProviderBackend {
             Self::OpenAi => "https://api.openai.com/v1",
             Self::Anthropic => "https://api.anthropic.com/v1",
             Self::Gemini => "https://generativelanguage.googleapis.com/v1beta",
+            // Where a CLI sends the conversation. Fixed, so the privacy class
+            // is always third-party cloud.
+            Self::Codex => "https://chatgpt.com",
+            Self::ClaudeCode => "https://claude.ai",
         }
+    }
+
+    /// Whether requests go through a vendor CLI that keeps its own sign-in
+    /// instead of an HTTP endpoint with an API key.
+    pub fn uses_cli(self) -> bool {
+        matches!(self, Self::Codex | Self::ClaudeCode)
     }
 }
 
@@ -121,7 +137,20 @@ impl ProviderConfig {
                 self.id
             ));
         }
-        parse_base_url(&self.base_url).map_err(|err| format!("provider \"{}\": {err}", self.id))
+        let url = parse_base_url(&self.base_url)
+            .map_err(|err| format!("provider \"{}\": {err}", self.id))?;
+        if self.backend.uses_cli()
+            && url
+                != parse_base_url(self.backend.default_base_url())
+                    .map_err(|err| format!("provider \"{}\": {err}", self.id))?
+        {
+            return Err(format!(
+                "provider \"{}\": the URL of a CLI provider must be {}",
+                self.id,
+                self.backend.default_base_url()
+            ));
+        }
+        Ok(url)
     }
 
     /// Where requests to this provider end up. Fails for invalid URLs.
@@ -307,5 +336,28 @@ mod tests {
         let mut unnamed = ProviderConfig::defaults().remove(0);
         unnamed.display_name = "  ".into();
         assert!(unnamed.validate().is_err());
+    }
+
+    #[test]
+    fn cli_providers_are_always_cloud() {
+        for backend in [ProviderBackend::Codex, ProviderBackend::ClaudeCode] {
+            let mut config = ProviderConfig {
+                id: ProviderId::new("cli"),
+                backend,
+                display_name: "CLI".into(),
+                base_url: format!("{}/", backend.default_base_url()),
+                enabled: true,
+                native_tool_models: vec![],
+            };
+            assert!(backend.uses_cli());
+            config.validate().expect("canonical URL");
+            assert_eq!(config.locality(), Ok(DataLocality::ThirdPartyCloud));
+            // A local URL would turn the cloud service into a local one.
+            config.base_url = "http://127.0.0.1:1234".into();
+            assert!(config.validate().is_err());
+        }
+        let parsed: ProviderBackend = serde_json::from_str("\"claudeCode\"").expect("backend");
+        assert_eq!(parsed, ProviderBackend::ClaudeCode);
+        assert!(!ProviderBackend::OpenAi.uses_cli());
     }
 }

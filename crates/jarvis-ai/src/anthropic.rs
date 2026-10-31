@@ -14,11 +14,17 @@ use url::Url;
 use crate::http::{self, ChunkDecoder, HttpClient, SseParser};
 use crate::{
     AiError, AiProvider, ChatChunk, ChatRequest, ChatRole, ChatStream, EmbeddingRequest,
-    EmbeddingResponse, FinishReason, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
+    EmbeddingResponse, FinishReason, ImageData, ModelCapabilities, ModelInfo, ProviderDescriptor,
+    TokenUsage,
 };
 
-const ANTHROPIC_VERSION: &str = "2023-06-01";
-const DEFAULT_MAX_TOKENS: u32 = 4096;
+/// API version 2026-10-21: sampling parameters (`temperature`, `top_p`,
+/// `top_k`) are rejected, so requests never send them; current models only
+/// sampled with the defaults anyway.
+const ANTHROPIC_VERSION: &str = "2026-10-21";
+/// Output budget of a streamed reply. Thinking is always on with current
+/// models and counts towards it, so a small budget cut answers short.
+const DEFAULT_MAX_TOKENS: u32 = 32_000;
 
 pub struct AnthropicProvider {
     descriptor: ProviderDescriptor,
@@ -78,7 +84,7 @@ impl AnthropicProvider {
                     display_name: m.display_name.unwrap_or_else(|| m.id.clone()),
                     id: m.id,
                     provider_id: self.descriptor.id.clone(),
-                    context_window: Some(200_000),
+                    context_window: m.max_input_tokens,
                 })
                 .collect()),
             Err(err) => Err(err),
@@ -127,7 +133,7 @@ impl AiProvider for AnthropicProvider {
                 ChatRole::System => system_parts.push(msg.content),
                 ChatRole::User => messages.push(json!({
                     "role": "user",
-                    "content": msg.content,
+                    "content": user_content(&msg.content, &msg.images),
                 })),
                 ChatRole::Assistant => messages.push(json!({
                     "role": "assistant",
@@ -153,9 +159,8 @@ impl AiProvider for AnthropicProvider {
         if !system_parts.is_empty() {
             body["system"] = json!(system_parts.join("\n\n"));
         }
-        if let Some(temp) = req.options.temperature {
-            body["temperature"] = json!(temp);
-        }
+        // `req.options.temperature` is deliberately not sent (see
+        // ANTHROPIC_VERSION).
 
         let response = self
             .authorize(client.post(url))
@@ -193,6 +198,27 @@ struct AnthropicModelEntry {
     id: String,
     #[serde(default)]
     display_name: Option<String>,
+    /// The context window (Models API).
+    #[serde(default)]
+    max_input_tokens: Option<u32>,
+}
+
+/// A user message: plain text, or image blocks followed by the text.
+fn user_content(text: &str, images: &[ImageData]) -> serde_json::Value {
+    if images.is_empty() {
+        return json!(text);
+    }
+    let mut blocks: Vec<serde_json::Value> = images
+        .iter()
+        .map(|image| {
+            json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": image.media_type, "data": image.base64 },
+            })
+        })
+        .collect();
+    blocks.push(json!({ "type": "text", "text": text }));
+    json!(blocks)
 }
 
 #[derive(Debug, Default)]
@@ -240,11 +266,26 @@ impl AnthropicSseDecoder {
                     .map(|t| ChatChunk::Delta(t.to_owned())))
             }
             "message_delta" => {
-                if let Some(stop_reason) = value
-                    .get("delta")
+                let delta = value.get("delta");
+                if let Some(stop_reason) = delta
                     .and_then(|d| d.get("stop_reason"))
                     .and_then(|s| s.as_str())
                 {
+                    if stop_reason == "refusal" {
+                        // Safety classifiers declined: say so instead of
+                        // ending with an empty or cut answer.
+                        let details = delta.and_then(|d| d.get("stop_details"));
+                        let reason = details
+                            .and_then(|d| d.get("explanation"))
+                            .and_then(|e| e.as_str())
+                            .or_else(|| {
+                                details
+                                    .and_then(|d| d.get("category"))
+                                    .and_then(|c| c.as_str())
+                            })
+                            .unwrap_or("no reason given");
+                        return Err(AiError::Refused(reason.to_owned()));
+                    }
                     self.finish_reason = Some(if stop_reason == "max_tokens" {
                         FinishReason::Length
                     } else {
@@ -327,5 +368,37 @@ data: {\"type\":\"message_stop\"}\n\n";
                 }
             ]
         );
+    }
+
+    #[test]
+    fn skips_thinking_and_reports_refusals() {
+        let mut decoder = AnthropicSseDecoder::default();
+        let events = b"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"\"}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"c2ln\"}}\n\n\
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n";
+        assert_eq!(
+            decoder.feed(events).expect("decode"),
+            vec![ChatChunk::Delta("Hi".into())]
+        );
+
+        let refusal = b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_details\":{\"type\":\"refusal\",\"category\":\"cyber\",\"explanation\":null}}}\n\n";
+        assert_eq!(decoder.feed(refusal), Err(AiError::Refused("cyber".into())));
+    }
+
+    #[test]
+    fn sends_images_as_blocks_before_the_text() {
+        let image = ImageData {
+            media_type: "image/png".into(),
+            base64: "iVBORw0KGgo=".into(),
+        };
+        assert_eq!(
+            user_content("What is on the screen?", &[image]),
+            json!([
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" } },
+                { "type": "text", "text": "What is on the screen?" },
+            ])
+        );
+        assert_eq!(user_content("Hi", &[]), json!("Hi"));
     }
 }

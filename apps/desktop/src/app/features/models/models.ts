@@ -26,6 +26,9 @@ export const DEFAULT_URLS: Record<ProviderBackend, string> = {
   openAi: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com/v1',
   gemini: 'https://generativelanguage.googleapis.com/v1beta',
+  // Fixed: where the CLI sends the conversation (always a cloud service).
+  codex: 'https://chatgpt.com',
+  claudeCode: 'https://claude.ai',
 };
 
 export const BACKEND_LABELS: Record<ProviderBackend, string> = {
@@ -34,6 +37,19 @@ export const BACKEND_LABELS: Record<ProviderBackend, string> = {
   openAi: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Google Gemini',
+  codex: 'ChatGPT (Codex CLI)',
+  claudeCode: 'Claude (Claude Code)',
+};
+
+/** Backends that run the vendor's CLI with its own sign-in instead of an API key. */
+export function usesCli(backend: ProviderBackend): boolean {
+  return backend === 'codex' || backend === 'claudeCode';
+}
+
+/** The terminal command that signs a CLI backend in. */
+export const CLI_LOGIN_COMMANDS: Partial<Record<ProviderBackend, string>> = {
+  codex: 'codex login',
+  claudeCode: 'claude auth login',
 };
 
 export const LOCALITY_LABELS: Record<DataLocality, string> = {
@@ -97,6 +113,8 @@ export class Models {
 
   protected readonly categories = CATEGORIES;
   protected readonly backendLabels = BACKEND_LABELS;
+  protected readonly usesCli = usesCli;
+  protected readonly loginCommands = CLI_LOGIN_COMMANDS;
   protected readonly localityLabels = LOCALITY_LABELS;
   protected readonly saveError = this.settings.error;
 
@@ -265,8 +283,13 @@ export class Models {
     if (backend !== 'openAiCompatible' && backend !== 'openAi') {
       this.form.controls.nativeToolModels.reset();
     }
-    // Swap the URL only if it is still one of the defaults.
-    if (Object.values(DEFAULT_URLS).includes(baseUrl)) {
+    // A CLI provider keeps its own sign-in.
+    if (usesCli(backend)) {
+      this.form.controls.apiKey.reset();
+    }
+    // Swap the URL only if it is still one of the defaults. A CLI provider
+    // always uses its fixed one.
+    if (usesCli(backend) || Object.values(DEFAULT_URLS).includes(baseUrl)) {
       this.form.controls.baseUrl.setValue(DEFAULT_URLS[backend]);
     }
     this.resetTest();
@@ -283,7 +306,9 @@ export class Models {
     this.testing.set(true);
     this.resetTest();
     try {
-      const result = await this.store.testProvider(this.draftConfig(true), this.form.controls.apiKey.value || undefined);
+      const draft = this.draftConfig(true);
+      const key = usesCli(draft.backend) ? undefined : this.form.controls.apiKey.value || undefined;
+      const result = await this.store.testProvider(draft, key);
       if (current()) this.testResult.set(result);
     } catch (error) {
       if (current()) this.testError.set(IpcError.from(error).message);
@@ -300,7 +325,7 @@ export class Models {
     }
     const editing = this.editingId();
     const draft = this.draftConfig(true);
-    const key = this.form.controls.apiKey.value;
+    const key = usesCli(draft.backend) ? '' : this.form.controls.apiKey.value;
     const current = this.store.configured();
     const next =
       editing === '' || editing === null

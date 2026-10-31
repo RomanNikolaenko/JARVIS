@@ -9,7 +9,8 @@ A local-first, privacy-first desktop AI assistant for **Windows 10/11** and
 > remembers conversations, facts and projects in a local SQLite database,
 > and runs **multi-step agent tasks** with tools (files, programs, system,
 > web, git) behind a Security Policy Engine with approvals and an audit log.
-> Cloud providers: OpenAI, Anthropic and Gemini with OS-keychain API keys.
+> Cloud providers: OpenAI, Anthropic and Gemini with OS-keychain API keys, or
+> your ChatGPT or Claude subscription through the Codex CLI or Claude Code.
 > It listens and speaks (whisper.cpp, Piper, wake word «Джарвіс») and looks
 > at screenshots, windows and photos with vision models — all on your
 > computer. Plugins add tools through the Model Context Protocol (MCP).

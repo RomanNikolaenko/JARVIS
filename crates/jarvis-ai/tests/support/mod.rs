@@ -18,11 +18,20 @@ pub struct Request {
     pub path: String,
     pub body: String,
     pub authorization: Option<String>,
+    /// Every header, names in lower case.
+    pub headers: Vec<(String, String)>,
 }
 
 impl Request {
     pub fn json(&self) -> serde_json::Value {
         serde_json::from_str(&self.body).unwrap_or(serde_json::Value::Null)
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -136,6 +145,7 @@ async fn serve(
 
     let mut content_length = 0usize;
     let mut authorization = None;
+    let mut headers = Vec::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
@@ -149,6 +159,7 @@ async fn serve(
             } else if name.eq_ignore_ascii_case("authorization") {
                 authorization = Some(value.trim().to_owned());
             }
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
         }
     }
     let mut body = vec![0; content_length];
@@ -159,6 +170,7 @@ async fn serve(
         path,
         body: String::from_utf8_lossy(&body).into_owned(),
         authorization,
+        headers,
     };
     requests.lock().unwrap().push(request.clone());
     let reply = handler(&request);

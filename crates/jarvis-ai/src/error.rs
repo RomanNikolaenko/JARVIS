@@ -37,6 +37,15 @@ pub enum AiError {
     /// The backend answered with something that violates its protocol.
     #[error("AI provider protocol error: {0}")]
     Protocol(String),
+
+    /// The model declined to answer (a provider's safety policy).
+    #[error("the model declined the request: {0}")]
+    Refused(String),
+
+    /// A usage limit of the account or subscription is reached; retrying
+    /// before it resets does not help.
+    #[error("usage limit reached: {0}")]
+    LimitReached(String),
 }
 
 impl AiError {
@@ -60,5 +69,7 @@ mod tests {
         assert!(!AiError::Cancelled.is_transient());
         assert!(!AiError::InvalidRequest("empty".into()).is_transient());
         assert!(!AiError::ModelNotFound { model: "x".into() }.is_transient());
+        assert!(!AiError::Refused("cyber".into()).is_transient());
+        assert!(!AiError::LimitReached("try again at 4 PM".into()).is_transient());
     }
 }

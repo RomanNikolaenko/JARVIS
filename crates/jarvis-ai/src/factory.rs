@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::anthropic::AnthropicProvider;
+use crate::cli::{CliKind, CliProvider};
 use crate::config::classify_locality;
 use crate::gemini::GeminiProvider;
 use crate::http::HttpClient;
@@ -22,7 +23,8 @@ pub trait ProviderFactory: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn AiProvider>, AiError>;
 }
 
-/// Creates HTTP providers that share one connection pool.
+/// Creates the providers: HTTP ones share one connection pool, CLI ones
+/// start the vendor's program for each request.
 #[derive(Debug, Default)]
 pub struct HttpProviderFactory {
     http: Arc<HttpClient>,
@@ -58,6 +60,9 @@ impl ProviderFactory for HttpProviderFactory {
             ProviderBackend::OpenAiCompatible | ProviderBackend::OpenAi => {
                 let mut provider = OpenAiCompatibleProvider::new(descriptor, url, http)
                     .with_native_tool_models(config.native_tool_models.clone());
+                if config.backend == ProviderBackend::OpenAi {
+                    provider = provider.for_openai_api();
+                }
                 if let Some(key) = api_key {
                     provider = provider.with_api_key(key);
                 }
@@ -76,6 +81,11 @@ impl ProviderFactory for HttpProviderFactory {
                     provider = provider.with_api_key(key);
                 }
                 Arc::new(provider)
+            }
+            // The CLI keeps its own sign-in; an API key is never passed on.
+            ProviderBackend::Codex => Arc::new(CliProvider::new(descriptor, CliKind::Codex)),
+            ProviderBackend::ClaudeCode => {
+                Arc::new(CliProvider::new(descriptor, CliKind::ClaudeCode))
             }
         })
     }
@@ -140,6 +150,25 @@ mod tests {
             )
             .expect("gemini provider");
         assert_eq!(gemini.descriptor().kind, ProviderKind::Cloud);
+
+        for backend in [ProviderBackend::Codex, ProviderBackend::ClaudeCode] {
+            let cli = factory
+                .create(
+                    &ProviderConfig {
+                        native_tool_models: vec![],
+                        id: ProviderId::new("cli"),
+                        backend,
+                        display_name: "CLI".into(),
+                        base_url: backend.default_base_url().into(),
+                        enabled: true,
+                    },
+                    None,
+                )
+                .expect("cli provider");
+            assert_eq!(cli.descriptor().kind, ProviderKind::Cloud);
+            assert_eq!(cli.descriptor().locality, DataLocality::ThirdPartyCloud);
+            assert!(!cli.supports_native_tools());
+        }
     }
 
     #[test]

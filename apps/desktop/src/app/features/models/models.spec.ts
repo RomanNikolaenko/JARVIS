@@ -551,4 +551,63 @@ describe('Provider credentials form', () => {
     await click('Save');
     expect(api.setProviderApiKey).toHaveBeenCalledTimes(2);
   });
+
+  it('connects a subscription CLI with its fixed address and no API key', async () => {
+    const api = {
+      listAiModels: vi.fn(async () => []),
+      getModelRoutes: vi.fn(async () => []),
+      updateSettings: vi.fn(async (settings) => settings),
+      setProviderApiKey: vi.fn(async () => undefined),
+      hasProviderApiKey: vi.fn(async () => false),
+      testAiProvider: vi.fn(async (): Promise<ProviderTestResult> => ({
+        reachable: true,
+        locality: 'thirdPartyCloud',
+        latencyMs: 5,
+        models: [],
+        error: null,
+      })),
+    };
+    TestBed.configureTestingModule({ providers: [{ provide: JarvisApi, useValue: api }] });
+    TestBed.inject(SettingsStore).settings.set(structuredClone(SETTINGS));
+    const fixture = TestBed.createComponent(Models);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+    const click = async (label: string) => {
+      const button = [...element.querySelectorAll('button')].find((b) => b.textContent?.trim() === label);
+      expect(button, label).toBeDefined();
+      button!.click();
+      fixture.detectChanges();
+      await fixture.whenStable();
+      await vi.waitFor(() => {
+        fixture.detectChanges();
+        expect(element.querySelector('fieldset')?.disabled ?? false).toBe(false);
+      });
+    };
+    await click('+ Add');
+    const name = element.querySelector<HTMLInputElement>('input[formControlName="displayName"]')!;
+    name.value = 'Claude';
+    name.dispatchEvent(new Event('input'));
+    const key = element.querySelector<HTMLInputElement>('input[formControlName="apiKey"]')!;
+    key.value = 'typed-before-switching';
+    key.dispatchEvent(new Event('input'));
+    const backend = element.querySelector<HTMLSelectElement>('select[formControlName="backend"]')!;
+    backend.value = 'claudeCode';
+    backend.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(element.querySelector('input[formControlName="baseUrl"]')).toBeNull();
+    expect(element.querySelector('input[formControlName="apiKey"]')).toBeNull();
+    expect(element.textContent).toContain('claude auth login');
+    await click('Test connection');
+    expect(api.testAiProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: 'claudeCode', baseUrl: 'https://claude.ai' }),
+      undefined
+    );
+    await click('Save');
+    const saved = TestBed.inject(SettingsStore)
+      .settings()!
+      .ai.providers.find((p) => p.id === 'claude')!;
+    expect(saved).toMatchObject({ backend: 'claudeCode', baseUrl: 'https://claude.ai' });
+    expect(api.setProviderApiKey).not.toHaveBeenCalled();
+  });
 });

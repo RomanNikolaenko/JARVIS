@@ -98,31 +98,42 @@
                 <option value="anthropic">Anthropic</option>
                 <option value="gemini">Google Gemini</option>
                 <option value="openAiCompatible">OpenAI-compatible (LM Studio, llama.cpp, vLLM…)</option>
+                <option value="codex">ChatGPT subscription (Codex CLI)</option>
+                <option value="claudeCode">Claude subscription (Claude Code)</option>
               </select>
             </label>
-            <label class="field wide">
-              <span class="field-label">Base URL</span>
-              <input type="url" formControlName="baseUrl" spellcheck="false" />
-              @if (form.controls.baseUrl.invalid && form.controls.baseUrl.touched) {
-                <span class="field-error">Enter an http:// or https:// URL</span>
-              }
-            </label>
-            <label class="field wide">
-              <span class="field-label">API key</span>
-              <input
-                type="password"
-                formControlName="apiKey"
-                autocomplete="new-password"
-                spellcheck="false"
-                [placeholder]="hasStoredKey() ? 'Leave blank to keep the saved key' : 'Optional for local servers'" />
-              <span class="hint">Stored in your operating system's credential vault.</span>
-              @if (form.controls.apiKey.invalid && form.controls.apiKey.touched) {
-                <span class="field-error"
-                  >Leave blank to keep the saved key, or enter a non-blank key of at most 8192 bytes without control
-                  characters.</span
-                >
-              }
-            </label>
+            @if (usesCli(form.controls.backend.value)) {
+              <p class="field wide hint">
+                JARVIS runs the {{ backendLabels[form.controls.backend.value] }} installed on this computer for each request, with
+                the CLI's own tools turned off. Install it, then sign in once in a terminal with
+                <code>{{ loginCommands[form.controls.backend.value] }}</code
+                >. No API key is needed; your subscription's usage limits apply.
+              </p>
+            } @else {
+              <label class="field wide">
+                <span class="field-label">Base URL</span>
+                <input type="url" formControlName="baseUrl" spellcheck="false" />
+                @if (form.controls.baseUrl.invalid && form.controls.baseUrl.touched) {
+                  <span class="field-error">Enter an http:// or https:// URL</span>
+                }
+              </label>
+              <label class="field wide">
+                <span class="field-label">API key</span>
+                <input
+                  type="password"
+                  formControlName="apiKey"
+                  autocomplete="new-password"
+                  spellcheck="false"
+                  [placeholder]="hasStoredKey() ? 'Leave blank to keep the saved key' : 'Optional for local servers'" />
+                <span class="hint">Stored in your operating system's credential vault.</span>
+                @if (form.controls.apiKey.invalid && form.controls.apiKey.touched) {
+                  <span class="field-error"
+                    >Leave blank to keep the saved key, or enter a non-blank key of at most 8192 bytes without control
+                    characters.</span
+                  >
+                }
+              </label>
+            }
             @if (form.controls.backend.value === 'openAiCompatible' || form.controls.backend.value === 'openAi') {
               <label class="field wide">
                 <span class="field-label">Models with native tool support</span>

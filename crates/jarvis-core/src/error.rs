@@ -134,6 +134,8 @@ impl CoreError {
                 AiError::InvalidRequest(_) => ErrorCode::Validation,
                 AiError::Timeout => ErrorCode::Timeout,
                 AiError::Cancelled => ErrorCode::Cancelled,
+                AiError::Refused(_) => ErrorCode::PermissionDenied,
+                AiError::LimitReached(_) => ErrorCode::LimitExceeded,
             },
             Self::Runtime(err) => match err {
                 RuntimeError::NotInstalled | RuntimeError::NotFound(_) => ErrorCode::NotFound,

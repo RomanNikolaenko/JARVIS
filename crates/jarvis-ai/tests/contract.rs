@@ -615,6 +615,78 @@ async fn openai_compatible_reports_fixed_capabilities_when_configured() {
     assert!(models.iter().all(|m| m.capabilities == embeddings_only));
 }
 
+/// Anthropic API version 2026-10-21: no sampling parameters, images as
+/// content blocks, the context window from the Models API, thinking blocks
+/// left out of the reply.
+#[tokio::test]
+async fn anthropic_requests_follow_the_current_api() {
+    let sse = [
+        r#"{"type":"message_start","message":{"usage":{"input_tokens":12}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}"#,
+        r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Готово"}}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .iter()
+    .map(|e| format!("event: x\ndata: {e}\n\n"))
+    .collect::<String>();
+    let server = MockServer::start(move |req| match req.path.as_str() {
+        "/v1/models" => Reply::Json(
+            200,
+            json!({"data":[{"id":"claude-opus-5-5","display_name":"Claude Opus 5.5","max_input_tokens":1_000_000}]}),
+        ),
+        "/v1/messages" => Reply::stream("text/event-stream", &sse, 17),
+        _ => Reply::Json(404, json!({"error":{"message":"not found"}})),
+    })
+    .await;
+    let provider = HttpProviderFactory::new()
+        .create(
+            &ProviderConfig {
+                native_tool_models: vec![],
+                id: ProviderId::new("claude"),
+                backend: ProviderBackend::Anthropic,
+                display_name: "Claude".into(),
+                base_url: server.url("/v1"),
+                enabled: true,
+            },
+            Some("sk-ant-test"),
+        )
+        .expect("provider");
+
+    let models = provider.list_models().await.expect("models");
+    assert_eq!(models[0].context_window, Some(1_000_000));
+
+    let mut request = chat_request("claude-opus-5-5");
+    request.options.temperature = Some(0.2);
+    request.messages = vec![
+        ChatMessage::user("Що на екрані?").with_images(vec![ImageData {
+            media_type: "image/png".into(),
+            base64: "iVBORw0KGgo=".into(),
+        }]),
+    ];
+    let mut stream = provider.stream_chat(request).await.expect("stream");
+    let mut text = String::new();
+    while let Some(chunk) = stream.next().await {
+        if let ChatChunk::Delta(delta) = chunk.expect("chunk") {
+            text.push_str(&delta);
+        }
+    }
+    assert_eq!(text, "Готово");
+
+    let sent = server.last_request_to("/v1/messages").expect("request");
+    assert_eq!(sent.header("anthropic-version"), Some("2026-10-21"));
+    assert_eq!(sent.header("x-api-key"), Some("sk-ant-test"));
+    let body = sent.json();
+    assert!(body.get("temperature").is_none(), "{body}");
+    assert_eq!(body["max_tokens"], json!(32_000));
+    assert_eq!(body["messages"][0]["content"][0]["type"], json!("image"));
+    assert_eq!(
+        body["messages"][0]["content"][1]["text"],
+        json!("Що на екрані?")
+    );
+}
+
 #[tokio::test]
 async fn cloud_providers_propagate_model_listing_and_health_errors() {
     for backend in [ProviderBackend::Anthropic, ProviderBackend::Gemini] {

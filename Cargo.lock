@@ -2317,10 +2317,13 @@ name = "jarvis-ai"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "futures",
+ "jarvis-platform",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

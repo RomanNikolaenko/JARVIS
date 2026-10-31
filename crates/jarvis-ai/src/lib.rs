@@ -5,6 +5,8 @@
 //!
 //! - [`OllamaProvider`]: Ollama native API;
 //! - [`OpenAiCompatibleProvider`]: LM Studio, llama.cpp server, vLLM, ...;
+//! - [`CliProvider`]: ChatGPT and Claude through the vendors' CLIs, signed in
+//!   with the user's subscription;
 //! - [`EchoProvider`]: clearly labelled diagnostic provider without a model.
 //!
 //! User-configured endpoints ([`ProviderConfig`]) are turned into providers by
@@ -12,6 +14,7 @@
 //! from the endpoint URL, never from user input.
 
 mod anthropic;
+mod cli;
 mod config;
 mod echo;
 mod error;
@@ -26,6 +29,7 @@ mod tool_calling;
 mod types;
 
 pub use anthropic::AnthropicProvider;
+pub use cli::{CLI_DEFAULT_MODEL, CliKind, CliProvider};
 pub use config::{
     ProviderBackend, ProviderConfig, classify_locality, is_valid_provider_id, parse_base_url,
 };

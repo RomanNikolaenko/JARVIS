@@ -31,6 +31,8 @@ pub struct OpenAiCompatibleProvider {
     /// model id (servers that are known to serve one kind of model).
     capabilities: Option<ModelCapabilities>,
     native_tool_models: std::collections::BTreeSet<String>,
+    /// The official OpenAI API (see [`adapt_to_openai_api`]).
+    openai_api: bool,
 }
 
 impl std::fmt::Debug for OpenAiCompatibleProvider {
@@ -51,7 +53,15 @@ impl OpenAiCompatibleProvider {
             api_key: None,
             capabilities: None,
             native_tool_models: Default::default(),
+            openai_api: false,
         }
+    }
+
+    /// Requests follow the official OpenAI API rather than the older
+    /// fields compatible servers understand.
+    pub fn for_openai_api(mut self) -> Self {
+        self.openai_api = true;
+        self
     }
 
     /// Sends `Authorization: Bearer <key>` with every request.
@@ -149,6 +159,9 @@ impl AiProvider for OpenAiCompatibleProvider {
         if let Some(max_tokens) = request.options.max_output_tokens {
             body["max_tokens"] = json!(max_tokens);
         }
+        if self.openai_api {
+            adapt_to_openai_api(&mut body, &request.model);
+        }
 
         let response = self
             .authorize(client.post(url))
@@ -167,7 +180,10 @@ impl AiProvider for OpenAiCompatibleProvider {
         request: crate::ToolChatRequest,
     ) -> Result<crate::ToolChatResponse, AiError> {
         let dialect = crate::tool_calling::Dialect::OpenAi;
-        let body = request.body(dialect, message_json)?;
+        let mut body = request.body(dialect, message_json)?;
+        if self.openai_api {
+            adapt_to_openai_api(&mut body, &request.model);
+        }
         let response = self
             .authorize(self.http.get()?.post(self.url("chat/completions")?))
             .json(&body)
@@ -202,6 +218,29 @@ impl AiProvider for OpenAiCompatibleProvider {
                 .collect(),
         })
     }
+}
+
+/// The official OpenAI API replaced `max_tokens` with
+/// `max_completion_tokens` (reasoning models reject the old field), and
+/// reasoning models (GPT-5, o-series) accept only the default temperature.
+fn adapt_to_openai_api(body: &mut Value, model: &str) {
+    let Some(map) = body.as_object_mut() else {
+        return;
+    };
+    if let Some(max) = map.remove("max_tokens") {
+        map.insert("max_completion_tokens".into(), max);
+    }
+    if is_reasoning_model(model) {
+        map.remove("temperature");
+    }
+}
+
+fn is_reasoning_model(model: &str) -> bool {
+    let id = model.to_ascii_lowercase();
+    id.starts_with("gpt-5")
+        || id
+            .strip_prefix('o')
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// The OpenAI API has no capability discovery: models whose id names an
@@ -438,5 +477,28 @@ data: [DONE]\n\n",
         assert!(chat.chat && chat.streaming && !chat.vision && !chat.tool_calling);
         let embed = infer_capabilities("text-embedding-nomic-embed-text-v1.5");
         assert!(embed.embeddings && !embed.chat);
+    }
+
+    #[test]
+    fn requests_to_openai_use_its_current_fields() {
+        let mut reasoning = json!({"model": "gpt-5.5", "max_tokens": 64, "temperature": 0.2});
+        adapt_to_openai_api(&mut reasoning, "gpt-5.5");
+        assert_eq!(
+            reasoning,
+            json!({"model": "gpt-5.5", "max_completion_tokens": 64})
+        );
+
+        let mut o_series = json!({"temperature": 0.2});
+        adapt_to_openai_api(&mut o_series, "o4-mini");
+        assert_eq!(o_series, json!({}));
+
+        let mut classic = json!({"max_tokens": 64, "temperature": 0.2});
+        adapt_to_openai_api(&mut classic, "gpt-4.1");
+        assert_eq!(
+            classic,
+            json!({"max_completion_tokens": 64, "temperature": 0.2})
+        );
+
+        assert!(!is_reasoning_model("omni-moderation"));
     }
 }

@@ -6,6 +6,14 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Fixed
 
+- Anthropic requests no longer fail on current models: JARVIS sends API version
+  `2026-10-21` without the sampling temperature those models reject, allows
+  32 000 output tokens (thinking included), passes attached images, reads the
+  context window from the Models API and reports refusals as such.
+- Requests to the official OpenAI API use `max_completion_tokens` and leave out
+  the temperature for reasoning models (`gpt-5*`, o-series), which reject it.
+- Reached usage limits are reported as a limit (with the provider's message)
+  instead of a generic failure, and are not retried.
 - Model library changes are published only after the index is saved. Failed
   imports, projector changes and removals keep the committed state available
   for retry; failed file deletion restores its library entry when possible.
@@ -109,6 +117,13 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   journal/audit record with a warning that they may have partly happened.
 
 ### Added
+
+- ChatGPT and Claude subscriptions as providers: "ChatGPT subscription (Codex
+  CLI)" and "Claude subscription (Claude Code)" run the vendor's installed CLI,
+  signed in by the user with `codex login` / `claude auth login`, without an
+  API key. The CLI's own tools, plugins, MCP servers and hooks are switched
+  off, it runs in an empty temporary folder and is stopped with the request.
+  Both count as cloud providers. See ADR 0015.
 
 - Running local chat and embedding models have a Restart action for applying
   saved inference settings. It refuses stale process selections and waits for
