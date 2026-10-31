@@ -488,10 +488,11 @@ impl Parser {
 }
 
 /// `codex exec --json` events: whole agent messages, then `turn.completed`
-/// or `turn.failed`.
+/// or `turn.failed`. Like `codex exec --output-last-message`, the last agent
+/// message is the answer; earlier ones are commentary such as "I'll run …".
 #[derive(Default)]
 struct CodexParser {
-    wrote_text: bool,
+    answer: Option<String>,
     last_error: Option<String>,
 }
 
@@ -508,9 +509,7 @@ impl CodexParser {
                 match item["type"].as_str() {
                     Some("agent_message") => {
                         if let Some(text) = item["text"].as_str().filter(|t| !t.is_empty()) {
-                            let separator = if self.wrote_text { "\n\n" } else { "" };
-                            self.wrote_text = true;
-                            out.push_back(Ok(ChatChunk::Delta(format!("{separator}{text}"))));
+                            self.answer = Some(text.to_owned());
                         }
                     }
                     // Warnings such as an unknown setting; the turn goes on.
@@ -533,6 +532,9 @@ impl CodexParser {
                 out.push_back(Err(failure(kind, &message)));
             }
             Some("turn.completed") => {
+                if let Some(answer) = self.answer.take() {
+                    out.push_back(Ok(ChatChunk::Delta(answer)));
+                }
                 let usage = &event["usage"];
                 out.push_back(Ok(ChatChunk::Done {
                     finish_reason: FinishReason::Stop,
@@ -955,7 +957,8 @@ mod tests {
                 r#"{"type":"thread.started","thread_id":"t"}"#,
                 r#"{"type":"item.completed","item":{"id":"0","type":"error","message":"unknown setting"}}"#,
                 r#"{"type":"item.completed","item":{"id":"1","type":"reasoning","text":"thinking"}}"#,
-                r#"{"type":"item.completed","item":{"id":"2","type":"agent_message","text":"Привіт"}}"#,
+                r#"{"type":"item.completed","item":{"id":"2","type":"agent_message","text":"I'll answer."}}"#,
+                r#"{"type":"item.completed","item":{"id":"3","type":"agent_message","text":"Привіт"}}"#,
                 r#"{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":0,"output_tokens":3}}"#,
             ],
         );

@@ -123,7 +123,8 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   signed in by the user with `codex login` / `claude auth login`, without an
   API key. The CLI's own tools, plugins, MCP servers and hooks are switched
   off, it runs in an empty temporary folder and is stopped with the request.
-  Both count as cloud providers. See ADR 0015.
+  Both count as cloud providers. See ADR 0015. `provider-probe` checks them
+  with `codex` or `claude-code`.
 
 - Running local chat and embedding models have a Restart action for applying
   saved inference settings. It refuses stale process selections and waits for

@@ -2,13 +2,18 @@
 //! what works: health, models and their capabilities, a streamed reply with
 //! the time to the first token, cancellation in the middle of a reply, and
 //! embeddings. For checking real servers (Ollama, LM Studio, llama.cpp
-//! server, vLLM, ...).
+//! server, vLLM, ...) and the subscription CLIs (Codex CLI, Claude Code).
 //!
 //! ```text
 //! cargo run -p jarvis-ai --example provider-probe -- <ollama|openai-compatible> <base url> [--model <id>] [--embed-model <id>]
 //! cargo run -p jarvis-ai --example provider-probe -- ollama http://127.0.0.1:11434 --model qwen2.5:3b
 //! cargo run -p jarvis-ai --example provider-probe -- openai-compatible http://127.0.0.1:1234/v1
+//! cargo run -p jarvis-ai --example provider-probe -- <codex|claude-code> [--model <id>]
 //! ```
+//!
+//! A CLI provider is checked with two requests that count against the
+//! subscription: a streamed reply and a reply that needs the history. The
+//! output limit, cancellation timing and embeddings do not apply to it.
 //!
 //! Cancellation is checked the way JARVIS cancels: the stream is dropped
 //! after a few words, then a short request follows at once. A server that
@@ -128,9 +133,17 @@ async fn main() -> ExitCode {
         [backend, url, ..] if backend == "openai-compatible" => {
             (ProviderBackend::OpenAiCompatible, url.clone())
         }
+        [backend, ..] if backend == "codex" || backend == "claude-code" => {
+            let backend = if backend == "codex" {
+                ProviderBackend::Codex
+            } else {
+                ProviderBackend::ClaudeCode
+            };
+            (backend, backend.default_base_url().to_owned())
+        }
         _ => {
             eprintln!(
-                "usage: provider-probe <ollama|openai-compatible> <base url> [--model <id>] [--embed-model <id>]"
+                "usage: provider-probe <ollama|openai-compatible> <base url> [--model <id>] [--embed-model <id>]\n       provider-probe <codex|claude-code> [--model <id>]"
             );
             return ExitCode::from(2);
         }
@@ -230,6 +243,35 @@ async fn main() -> ExitCode {
             );
         }
         Err(err) => report.check("streamed reply", false, &err),
+    }
+
+    if backend.uses_cli() {
+        // A CLI run takes one message, so the history travels inside it.
+        let history = ChatRequest {
+            model: model.clone(),
+            messages: vec![
+                ChatMessage::new(ChatRole::System, "You are a concise assistant."),
+                ChatMessage::user("Remember the code word: amber."),
+                ChatMessage::new(ChatRole::Assistant, "Got it."),
+                ChatMessage::user("What is the code word? Answer with the word only."),
+            ],
+            options: GenerationOptions::default(),
+        };
+        match streamed(provider.as_ref(), history).await {
+            Ok((text, _, total, _, _)) => report.check(
+                "reply that needs the history",
+                text.to_lowercase().contains("amber"),
+                &format!("done after {:.1} s: {:?}", total.as_secs_f32(), text.trim()),
+            ),
+            Err(err) => report.check("reply that needs the history", false, &err),
+        }
+        println!("skip output limit, cancellation timing and embeddings — not used by a CLI");
+        println!("\n{} failed", report.failures);
+        return if report.failures == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
 
     // A reply cut short by the output limit.

@@ -28,10 +28,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Secrets in the OS keychain; API-key authentication
 - ✅ Cloud providers (OpenAI, Anthropic, Gemini) behind the privacy opt-in
 - ✅ ChatGPT and Claude subscriptions through the Codex CLI and Claude Code
-  (ADR 0015); tested with a fake CLI. Live: the Codex CLI 0.166 accepted the
-  options and the ChatGPT sign-in (the account's usage limit stopped the
-  answer); Claude Code is not installed on the dev machine yet
-- ⬜ Live check of a full answer through both CLIs; images through Claude Code
+  (ADR 0015); tested with a fake CLI and live (`provider-probe`) with Codex
+  CLI 0.166 on ChatGPT and Claude Code 2.1.316 on Claude Pro: answers in
+  4–8 s, history, the usage-limit message, and no tools of the CLI (Claude
+  Code reports no tools, MCP servers or commands; Codex cannot run a command)
+- ⬜ Images through Claude Code; a live check inside the desktop app
 - ✅ Verification against real servers (Phase 9): Ollama 0.40.11 and the
   llama.cpp server (the OpenAI-compatible protocol LM Studio speaks); the LM
   Studio app itself is not installed on the dev machine

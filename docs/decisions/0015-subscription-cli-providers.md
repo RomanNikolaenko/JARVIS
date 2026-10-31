@@ -63,8 +63,10 @@ access to the computer, and must keep the cloud opt-in.
 
 - Subscription limits and the vendors' terms apply; JARVIS shows the CLI's
   own limit message.
-- Each request pays the CLI's start-up time, and Codex returns whole messages
-  rather than token-by-token text.
+- Each request pays the CLI's start-up time (about 4–6 s to the first text in
+  live checks). Codex gives its answer at the end of the turn: like
+  `codex exec --output-last-message`, the last agent message is the answer
+  and earlier ones ("I'll run …") are dropped. Claude Code streams text.
 - Sampling options (temperature, output limit) are left to the CLI.
 - The integration follows the CLIs' current flags and JSON events; tests use
   a fake CLI, so a changed CLI shows up only in live checks.

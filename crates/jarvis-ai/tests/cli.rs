@@ -133,20 +133,21 @@ impl FakeCli {
                     .filter(|path| Path::new(path).is_file())
                     .count();
                 let summary = format!(
-                    "model={} sandbox={} tools-off={} images={images} bytes={}",
+                    "model={} sandbox={} tools-off={} images={images} bytes={} cwd={}",
                     value("-m"),
                     value("--sandbox"),
                     args.iter().any(|a| a == "features.shell_tool=false"),
-                    prompt.len()
+                    prompt.len(),
+                    cwd.display()
                 );
                 send(json!({"type": "thread.started", "thread_id": "t"}));
                 send(json!({"type": "turn.started"}));
+                // Commentary before the answer is not part of it.
                 send(
-                    json!({"type": "item.completed", "item": {"id": "1", "type": "agent_message", "text": summary}}),
+                    json!({"type": "item.completed", "item": {"id": "1", "type": "agent_message", "text": "I'll check."}}),
                 );
-                let folder = format!("cwd={}", cwd.display());
                 send(
-                    json!({"type": "item.completed", "item": {"id": "2", "type": "agent_message", "text": folder}}),
+                    json!({"type": "item.completed", "item": {"id": "2", "type": "agent_message", "text": summary}}),
                 );
                 send(
                     json!({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 4}}),
@@ -255,7 +256,8 @@ async fn codex_answers_through_the_cli() {
     )
     .await
     .expect("answer");
-    let (summary, folder) = answer.split_once("cwd=").expect("two messages");
+    // Only the last agent message, without the commentary before it.
+    let (summary, folder) = answer.split_once("cwd=").expect("work folder");
     let summary = summary.trim_end();
     assert!(
         summary.starts_with("model=gpt-test sandbox=read-only tools-off=true images=1 bytes="),
@@ -363,15 +365,16 @@ async fn dropping_the_stream_stops_the_cli() {
             ))
             .await
             .expect("stream");
-        let first = tokio::time::timeout(Duration::from_secs(15), stream.next())
-            .await
-            .expect("first chunk");
-        assert_eq!(first, Some(Ok(ChatChunk::Delta("partial answer".into()))));
-        let record = std::fs::read_to_string(&pid_file).unwrap();
-        let (pid, folder) = record.split_once(' ').unwrap();
-        let pid: u32 = pid.parse().unwrap();
+        if kind == CliKind::ClaudeCode {
+            // Claude Code streams; Codex keeps its answer until the turn ends.
+            let first = tokio::time::timeout(Duration::from_secs(15), stream.next())
+                .await
+                .expect("first chunk");
+            assert_eq!(first, Some(Ok(ChatChunk::Delta("partial answer".into()))));
+        }
+        let (pid, folder) = started_fake(&pid_file).await;
         assert!(jarvis_platform::process_memory(pid).is_some());
-        assert!(Path::new(folder).is_dir());
+        assert!(Path::new(&folder).is_dir());
 
         drop(stream);
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -379,7 +382,23 @@ async fn dropping_the_stream_stops_the_cli() {
             assert!(Instant::now() < deadline, "the CLI kept running");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        wait_until_gone(Path::new(folder)).await;
+        wait_until_gone(Path::new(&folder)).await;
+    }
+}
+
+/// The process id and work folder a hanging fake CLI recorded.
+async fn started_fake(record: &Path) -> (u32, String) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let text = std::fs::read_to_string(record).unwrap_or_default();
+        if let Some((pid, folder)) = text.split_once(' ')
+            && let Ok(pid) = pid.parse()
+            && !folder.is_empty()
+        {
+            return (pid, folder.to_owned());
+        }
+        assert!(Instant::now() < deadline, "the fake CLI did not start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
