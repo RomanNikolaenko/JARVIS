@@ -120,8 +120,10 @@ impl FakeCli {
             writeln!(out, "{event}").unwrap();
             out.flush().unwrap();
         };
+        let cwd = std::env::current_dir().unwrap();
         if let Some(pid_file) = mode.strip_prefix("hang ") {
-            std::fs::write(pid_file, std::process::id().to_string()).unwrap();
+            let record = format!("{} {}", std::process::id(), cwd.display());
+            std::fs::write(pid_file, record).unwrap();
         }
         match (self, mode.as_str()) {
             (FakeCli::Codex, "reply") => {
@@ -141,6 +143,10 @@ impl FakeCli {
                 send(json!({"type": "turn.started"}));
                 send(
                     json!({"type": "item.completed", "item": {"id": "1", "type": "agent_message", "text": summary}}),
+                );
+                let folder = format!("cwd={}", cwd.display());
+                send(
+                    json!({"type": "item.completed", "item": {"id": "2", "type": "agent_message", "text": folder}}),
                 );
                 send(
                     json!({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 4}}),
@@ -249,12 +255,16 @@ async fn codex_answers_through_the_cli() {
     )
     .await
     .expect("answer");
+    let (summary, folder) = answer.split_once("cwd=").expect("two messages");
+    let summary = summary.trim_end();
     assert!(
-        answer.starts_with("model=gpt-test sandbox=read-only tools-off=true images=1 bytes="),
-        "{answer}"
+        summary.starts_with("model=gpt-test sandbox=read-only tools-off=true images=1 bytes="),
+        "{summary}"
     );
-    let bytes: usize = answer.rsplit('=').next().unwrap().parse().unwrap();
+    let bytes: usize = summary.rsplit('=').next().unwrap().parse().unwrap();
     assert!(bytes > 2 * 1024 * 1024);
+    // The work folder with the image goes away with the request.
+    wait_until_gone(Path::new(folder)).await;
 
     let answer = collect(
         &codex,
@@ -357,8 +367,11 @@ async fn dropping_the_stream_stops_the_cli() {
             .await
             .expect("first chunk");
         assert_eq!(first, Some(Ok(ChatChunk::Delta("partial answer".into()))));
-        let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+        let record = std::fs::read_to_string(&pid_file).unwrap();
+        let (pid, folder) = record.split_once(' ').unwrap();
+        let pid: u32 = pid.parse().unwrap();
         assert!(jarvis_platform::process_memory(pid).is_some());
+        assert!(Path::new(folder).is_dir());
 
         drop(stream);
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -366,6 +379,19 @@ async fn dropping_the_stream_stops_the_cli() {
             assert!(Instant::now() < deadline, "the CLI kept running");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        wait_until_gone(Path::new(folder)).await;
+    }
+}
+
+async fn wait_until_gone(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "{} was not deleted",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

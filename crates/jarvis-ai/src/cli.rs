@@ -366,8 +366,8 @@ impl AiProvider for CliProvider {
         drop(stdin);
 
         let run = Run {
-            _process: process,
-            _dir: dir,
+            process,
+            dir: Some(dir),
             output: stream::select(lines(stdout), stderr_chunks(stderr)).boxed(),
             parser: match self.kind {
                 CliKind::Codex => Parser::Codex(CodexParser::default()),
@@ -383,13 +383,40 @@ impl AiProvider for CliProvider {
 
 /// One running request. Dropping it kills the CLI and deletes the folder.
 struct Run {
-    _process: jarvis_platform::OwnedProcess,
-    _dir: tempfile::TempDir,
+    process: jarvis_platform::OwnedProcess,
+    dir: Option<tempfile::TempDir>,
     output: BoxStream<'static, Output>,
     parser: Parser,
     kind: CliKind,
     stderr: Vec<u8>,
     pending: VecDeque<Result<ChatChunk, AiError>>,
+}
+
+impl Drop for Run {
+    fn drop(&mut self) {
+        let _ = self.process.start_kill();
+        if let Some(dir) = self.dir.take() {
+            remove_when_released(dir.keep());
+        }
+    }
+}
+
+/// Deletes a request's work folder, which may hold the conversation's
+/// images. Windows keeps the folder itself while a killed CLI is still
+/// exiting, so deletion is retried for a few seconds.
+fn remove_when_released(path: PathBuf) {
+    if std::fs::remove_dir_all(&path).is_ok() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
+                return;
+            }
+        }
+        tracing::warn!(path = %path.display(), "could not delete a CLI work folder");
+    });
 }
 
 enum Output {
