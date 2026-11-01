@@ -186,7 +186,8 @@ fn read_number(chars: &[char], start: usize, currency: bool) -> (String, usize) 
     }
 
     // Thousands groups: 1 000 000, 1,000,000.
-    if head_len <= 3 {
+    // A number never starts with a zero group: "0,125" is a decimal.
+    if head_len <= 3 && integer != "0" {
         while let Some(&separator) = chars.get(i)
             && matches!(separator, ' ' | '\u{a0}' | ',')
             && digits_at(i + 1) == 3
@@ -358,6 +359,15 @@ mod tests {
         assert_eq!(for_ukrainian_voice("50 %"), "п'ятдесят відсотків");
         assert_eq!(for_ukrainian_voice("12%"), "дванадцять відсотків");
         assert_eq!(for_ukrainian_voice("22%."), "двадцять два відсотки.");
+    }
+
+    #[test]
+    fn decimals_below_one_keep_their_comma() {
+        assert_eq!(for_ukrainian_voice("0,125"), "нуль кома сто двадцять п'ять");
+        assert_eq!(
+            for_ukrainian_voice("-0,125"),
+            "мінус нуль кома сто двадцять п'ять"
+        );
     }
 
     #[test]

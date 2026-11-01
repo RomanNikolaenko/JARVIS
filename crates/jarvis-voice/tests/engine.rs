@@ -520,3 +520,106 @@ async fn wake_word_mode_takes_the_interruption_as_a_command() {
     // No wake word check: the phrase was recognized once.
     assert_eq!(s.fake.lock().recognized.len(), 1);
 }
+
+/// Starts a reply that can be interrupted and waits until the microphone
+/// listens for it.
+async fn interruptible_reply(s: &mut Setup) -> jarvis_voice::SpeechStream {
+    s.engine
+        .apply_settings(interrupt_settings(), SpeechLanguage::Uk);
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Довга відповідь, яку можна перебити. ");
+    wait_state(&mut s.state, "listening for an interruption", |st| {
+        st.interrupt_listening && st.mic_open
+    })
+    .await;
+    speech
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_short_sound_after_barge_in_closes_the_microphone() {
+    let Some(mut s) = setup() else { return };
+    let _speech = interruptible_reply(&mut s).await;
+    // Long enough to interrupt, too short to be a phrase.
+    s.fake.speak_into_mic(0.2).await;
+    let closed = tokio::time::timeout(
+        Duration::from_secs(20),
+        s.state
+            .wait_for(|st| !st.mic_open && st.phase == VoicePhase::Idle),
+    )
+    .await
+    .map(|r| r.is_ok());
+    assert!(matches!(closed, Ok(true)), "{:?}", *s.state.borrow());
+    assert!(s.transcripts.try_recv().is_err(), "no request");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelling_a_barge_in_capture_closes_the_microphone() {
+    let Some(mut s) = setup() else { return };
+    let _speech = interruptible_reply(&mut s).await;
+    s.fake.speak_into_mic(0.2).await;
+    wait_state(&mut s.state, "the interruption", |st| {
+        st.phase == VoicePhase::Listening
+    })
+    .await;
+    s.engine.stop_listening(false);
+    wait_state(&mut s.state, "the microphone off", |st| !st.mic_open).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_interruptions_off_closes_the_microphone() {
+    let Some(mut s) = setup() else { return };
+    let _speech = interruptible_reply(&mut s).await;
+    s.engine.apply_settings(
+        VoiceSettings {
+            interrupt_by_voice: false,
+            ..interrupt_settings()
+        },
+        SpeechLanguage::Uk,
+    );
+    wait_state(&mut s.state, "the microphone off", |st| !st.mic_open).await;
+    s.engine.stop_speaking();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wake_word_mode_ignores_speech_before_the_reply_plays() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(wake_word_settings(), SpeechLanguage::Uk);
+    wait_state(&mut s.state, "wake word mode", |st| st.mic_open).await;
+    // The model is still thinking: nothing plays yet.
+    let _speech = s.engine.speak_reply();
+    s.fake.reply("Джарвіс, котра година");
+    s.fake.speak_into_mic(1.0).await;
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.text, "котра година");
+    assert_eq!(transcript.source, TranscriptSource::WakeWord);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_name_alone_over_a_reply_waits_for_the_command() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(wake_word_settings(), SpeechLanguage::Uk);
+    wait_state(&mut s.state, "wake word mode", |st| st.mic_open).await;
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Довга відповідь, яку можна перебити. ");
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == VoicePhase::Speaking
+    })
+    .await;
+    s.fake.reply("Джарвіс");
+    s.fake.speak_into_mic(0.6).await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while s.fake.lock().recognized.is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the name is recognized");
+    s.fake.reply("відкрий нотатки");
+    s.fake.speak_into_mic(1.0).await;
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.text, "відкрий нотатки");
+}
