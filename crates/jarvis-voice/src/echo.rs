@@ -254,7 +254,7 @@ mod tests {
         // Loud speech at the very start is not taken for the user yet.
         let early = |f: usize| if f < 10 { 0.45 } else { 0.0 };
         assert_eq!(run(31, playback, |_| 0.5, early), None);
-        let later = |f: usize| if f < 10 || f >= 200 { 0.45 } else { 0.0 };
+        let later = |f: usize| if (10..200).contains(&f) { 0.0 } else { 0.45 };
         let (at, _) = run(THIRTY_SECONDS, playback, |_| 0.5, later).expect("barge-in");
         assert!((200 + 11..=200 + 18).contains(&at), "{at}");
     }
