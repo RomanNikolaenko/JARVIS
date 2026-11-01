@@ -9,6 +9,8 @@ use crate::vad::{FRAME, SAMPLE_RATE, SegmenterConfig, SpeechScorer};
 /// Playback this recent may still be heard (output and input latency, the
 /// room).
 const ECHO_WINDOW: Duration = Duration::from_millis(300);
+/// What "playing now" means for the echo envelope.
+const NOW_WINDOW: Duration = Duration::from_millis(20);
 /// Microphone audio kept for the start of the phrase.
 const HISTORY_SAMPLES: usize = SAMPLE_RATE as usize * 3 / 2;
 /// The phrase starts this long before the first speech frame.
@@ -59,7 +61,8 @@ impl BargeInDetector {
             }
             let speech = self.scorer.score(frame) >= self.threshold;
             let reference = self.meter.loudest_within(ECHO_WINDOW);
-            if let Some(frames_back) = self.gate.push(rms(frame), speech, reference) {
+            let playing = self.meter.loudest_within(NOW_WINDOW);
+            if let Some(frames_back) = self.gate.push(rms(frame), speech, reference, playing) {
                 let take = (frames_back * FRAME + PRE_ROLL_SAMPLES).min(self.history.len());
                 let mut phrase: Vec<f32> = self
                     .history
