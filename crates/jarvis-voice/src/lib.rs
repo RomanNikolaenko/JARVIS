@@ -9,6 +9,7 @@
 
 pub mod audio;
 pub mod backend;
+pub mod barge_in;
 pub mod catalog;
 pub mod echo;
 mod engine;
