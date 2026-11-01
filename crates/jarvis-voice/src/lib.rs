@@ -10,6 +10,7 @@
 pub mod audio;
 pub mod backend;
 pub mod catalog;
+pub mod echo;
 mod engine;
 pub mod error;
 pub mod process;

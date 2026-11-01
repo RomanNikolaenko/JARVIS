@@ -22,6 +22,7 @@ use crate::backend::{
     default_launcher_factory,
 };
 use crate::catalog::{self, PIPER_ENGINE, PackageSpec, WHISPER_ENGINE};
+use crate::echo::PlaybackMeter;
 use crate::error::{Result, VoiceError};
 use crate::store::PackageStore;
 use crate::text::SentenceSplitter;
@@ -186,6 +187,8 @@ struct Inner {
     /// The most recently started listener; older ones leave the state alone.
     latest_listener: AtomicU64,
     shutdown: CancellationToken,
+    /// How loud the speakers just played (for barge-in).
+    meter: PlaybackMeter,
 }
 
 #[derive(Clone)]
@@ -251,6 +254,7 @@ impl VoiceEngine {
                 next_id: AtomicU64::new(1),
                 latest_listener: AtomicU64::new(0),
                 shutdown: CancellationToken::new(),
+                meter: PlaybackMeter::default(),
             }),
         }
     }
@@ -923,8 +927,9 @@ impl VoiceEngine {
         }
         let backend = Arc::clone(&self.inner.backend);
         let device = self.config().settings.output_device;
+        let meter = self.inner.meter.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            let output = backend.open_output(device.as_deref())?;
+            let output = backend.open_output(device.as_deref(), meter)?;
             output.enqueue(&samples, 16_000);
             std::thread::sleep(Duration::from_millis(400));
             Ok::<_, VoiceError>(())
@@ -1033,10 +1038,12 @@ impl VoiceEngine {
                 if output.is_none() {
                     let backend = Arc::clone(&self.inner.backend);
                     let device = self.config().settings.output_device;
-                    let opened =
-                        tokio::task::spawn_blocking(move || backend.open_output(device.as_deref()))
-                            .await
-                            .map_err(|err| VoiceError::Device(err.to_string()))??;
+                    let meter = self.inner.meter.clone();
+                    let opened = tokio::task::spawn_blocking(move || {
+                        backend.open_output(device.as_deref(), meter)
+                    })
+                    .await
+                    .map_err(|err| VoiceError::Device(err.to_string()))??;
                     *output = Some(opened);
                 }
                 if cancel.is_cancelled() {

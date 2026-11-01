@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::audio::CaptureEvent;
 use crate::backend::{InputDevice, OutputDevice, Recognizer, Synthesizer, VoiceBackend};
 use crate::catalog::{self, PackageSpec};
+use crate::echo::PlaybackMeter;
 use crate::error::{Result, VoiceError};
 use crate::store::PackageStore;
 use crate::tts::PiperOptions;
@@ -124,12 +125,14 @@ impl Drop for FakeMic {
     }
 }
 
-struct FakeSpeaker(FakeBackend);
+/// Queued audio counts as played at once.
+struct FakeSpeaker(FakeBackend, PlaybackMeter);
 
 impl OutputDevice for FakeSpeaker {
     fn enqueue(&self, samples: &[f32], _rate: u32) {
         assert!(!samples.is_empty(), "empty audio queued");
         self.0.lock().played += 1;
+        self.1.record(samples);
     }
 
     fn clear(&self) {
@@ -215,8 +218,12 @@ impl VoiceBackend for FakeBackend {
         Ok(Box::new(FakeMic(self.clone())))
     }
 
-    fn open_output(&self, _device: Option<&str>) -> Result<Box<dyn OutputDevice>> {
-        Ok(Box::new(FakeSpeaker(self.clone())))
+    fn open_output(
+        &self,
+        _device: Option<&str>,
+        meter: PlaybackMeter,
+    ) -> Result<Box<dyn OutputDevice>> {
+        Ok(Box::new(FakeSpeaker(self.clone(), meter)))
     }
 
     fn scorer(&self) -> Box<dyn SpeechScorer> {

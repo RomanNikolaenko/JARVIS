@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audio::{self, Capture, CaptureEvent, Player};
 use crate::catalog::{self, PIPER_ENGINE, PackageSpec, WHISPER_ENGINE};
+use crate::echo::PlaybackMeter;
 use crate::error::{Result, VoiceError};
 use crate::process::Launcher;
 use crate::store::PackageStore;
@@ -59,7 +60,12 @@ pub trait VoiceBackend: Send + Sync + 'static {
         events: mpsc::Sender<CaptureEvent>,
     ) -> Result<Box<dyn InputDevice>>;
     /// Blocking: waits until the device is open.
-    fn open_output(&self, device: Option<&str>) -> Result<Box<dyn OutputDevice>>;
+    /// The speaker records what it plays into `meter`.
+    fn open_output(
+        &self,
+        device: Option<&str>,
+        meter: PlaybackMeter,
+    ) -> Result<Box<dyn OutputDevice>>;
     fn scorer(&self) -> Box<dyn SpeechScorer>;
     async fn start_recognizer(&self, model: &PackageSpec) -> Result<Box<dyn Recognizer>>;
     async fn start_synthesizer(
@@ -185,8 +191,12 @@ impl VoiceBackend for SystemBackend {
         Ok(Box::new(MicHandle(Capture::start(device, events)?)))
     }
 
-    fn open_output(&self, device: Option<&str>) -> Result<Box<dyn OutputDevice>> {
-        Ok(Box::new(Player::open(device)?))
+    fn open_output(
+        &self,
+        device: Option<&str>,
+        meter: PlaybackMeter,
+    ) -> Result<Box<dyn OutputDevice>> {
+        Ok(Box::new(Player::open(device, meter)?))
     }
 
     fn scorer(&self) -> Box<dyn SpeechScorer> {

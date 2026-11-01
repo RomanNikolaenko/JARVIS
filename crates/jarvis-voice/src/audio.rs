@@ -14,6 +14,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use tokio::sync::mpsc;
 
+use crate::echo::PlaybackMeter;
 use crate::error::{Result, VoiceError};
 use crate::resample::{Resampler, downmix, resample};
 use crate::types::AudioDevice;
@@ -262,7 +263,7 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn open(device: Option<&str>) -> Result<Self> {
+    pub fn open(device: Option<&str>, meter: PlaybackMeter) -> Result<Self> {
         let device = device.map(str::to_owned);
         let queue = Arc::new(Mutex::new(Queue::default()));
         let (ready_tx, ready_rx) = std_mpsc::channel::<Result<u32>>();
@@ -270,16 +271,18 @@ impl Player {
         let shared = Arc::clone(&queue);
         let thread = std::thread::Builder::new()
             .name("jarvis-speaker".into())
-            .spawn(move || match open_output(device.as_deref(), shared) {
-                Ok((stream, rate)) => {
-                    let _ = ready_tx.send(Ok(rate));
-                    let _ = stop_rx.recv();
-                    drop(stream);
-                }
-                Err(err) => {
-                    let _ = ready_tx.send(Err(err));
-                }
-            })
+            .spawn(
+                move || match open_output(device.as_deref(), shared, meter) {
+                    Ok((stream, rate)) => {
+                        let _ = ready_tx.send(Ok(rate));
+                        let _ = stop_rx.recv();
+                        drop(stream);
+                    }
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(err));
+                    }
+                },
+            )
             .map_err(|err| VoiceError::io("starting the playback thread", err))?;
         let mut player = Self {
             queue,
@@ -333,19 +336,23 @@ impl Drop for Player {
     }
 }
 
-fn open_output(device: Option<&str>, queue: Arc<Mutex<Queue>>) -> Result<(cpal::Stream, u32)> {
+fn open_output(
+    device: Option<&str>,
+    queue: Arc<Mutex<Queue>>,
+    meter: PlaybackMeter,
+) -> Result<(cpal::Stream, u32)> {
     let device = pick(false, device)?;
     let config = device.default_output_config().map_err(device_error)?;
     let channels = usize::from(config.channels()).max(1);
     let rate = config.sample_rate();
     let stream_config = config.config();
     let stream = match config.sample_format() {
-        SampleFormat::F32 => build_output::<f32>(&device, stream_config, channels, queue),
-        SampleFormat::I16 => build_output::<i16>(&device, stream_config, channels, queue),
-        SampleFormat::U16 => build_output::<u16>(&device, stream_config, channels, queue),
-        SampleFormat::I32 => build_output::<i32>(&device, stream_config, channels, queue),
-        SampleFormat::U8 => build_output::<u8>(&device, stream_config, channels, queue),
-        SampleFormat::F64 => build_output::<f64>(&device, stream_config, channels, queue),
+        SampleFormat::F32 => build_output::<f32>(&device, stream_config, channels, queue, meter),
+        SampleFormat::I16 => build_output::<i16>(&device, stream_config, channels, queue, meter),
+        SampleFormat::U16 => build_output::<u16>(&device, stream_config, channels, queue, meter),
+        SampleFormat::I32 => build_output::<i32>(&device, stream_config, channels, queue, meter),
+        SampleFormat::U8 => build_output::<u8>(&device, stream_config, channels, queue, meter),
+        SampleFormat::F64 => build_output::<f64>(&device, stream_config, channels, queue, meter),
         other => Err(VoiceError::Device(format!(
             "unsupported speaker sample format {other:?}"
         ))),
@@ -359,6 +366,7 @@ fn build_output<T>(
     config: cpal::StreamConfig,
     channels: usize,
     queue: Arc<Mutex<Queue>>,
+    meter: PlaybackMeter,
 ) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -369,9 +377,19 @@ where
             config,
             move |data: &mut [T], _| {
                 let mut queue = queue.lock().unwrap_or_else(PoisonError::into_inner);
+                // The loudness of what is played, for telling JARVIS's voice
+                // from the user's (no allocation in the audio callback).
+                let mut energy = 0.0_f32;
+                let mut frames = 0_usize;
                 for frame in data.chunks_mut(channels) {
-                    let value = T::from_sample(queue.samples.pop_front().unwrap_or(0.0));
-                    frame.fill(value);
+                    let sample = queue.samples.pop_front().unwrap_or(0.0);
+                    energy += sample * sample;
+                    frames += 1;
+                    frame.fill(T::from_sample(sample));
+                }
+                drop(queue);
+                if frames > 0 {
+                    meter.record_rms((energy / frames as f32).sqrt());
                 }
             },
             move |err| {
