@@ -70,7 +70,12 @@ dependencies must earn their place.
   coupling from the first half second of a reply and counts a frame as
   the user only when the VAD hears speech louder than twice the expected
   echo (or any speech while nothing plays); 12 of 16 such frames stop
-  the reply. The phrase is then cut from 300 ms before the user started
+  the reply, unless the microphone level is just a scaled, delayed copy
+  of the playback (a louder echo after a volume change: the gate learns
+  it instead). Learning skips the first 300 ms, as a Bluetooth echo
+  arrives late. Without a phrase after the interruption the microphone
+  closes after the no-speech timeout; Done/Cancel work as for
+  push-to-talk. The phrase is then cut from 300 ms before the user started
   and becomes the next request (`TranscriptSource::BargeIn`); in wake
   word mode it is the command, without the name.
 - **Text for Ukrainian voices**: the Ukrainian Piper voice reads Cyrillic
