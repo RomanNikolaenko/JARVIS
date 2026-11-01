@@ -435,7 +435,8 @@ See [ADR 0011](docs/decisions/0011-voice-and-vision.md).
 microphone ─cpal─▶ 16 kHz mono ─VAD─▶ phrase ─whisper-server─▶ text
    push-to-talk ─────────────────────────────▶ chat turn (speak: true)
    wake word: «Джарвіс …» ───────────────────▶ chat turn, or wait for the command
-reply deltas ─sentences─▶ Piper (stdin JSON) ─▶ WAV ─▶ speakers   (barge-in cuts it)
+reply deltas ─sentences─▶ (uk: Latin, numbers → Cyrillic words) ─▶ Piper (stdin JSON) ─▶ WAV ─▶ speakers
+   talking over a reply ─echo gate─▶ reply stops ─▶ chat turn (bargeIn)
 
 capture button ─▶ ScreenCapture (xcap │ x11rb │ portal) ─▶ JPEG ≤ 1568 px + preview
    ─▶ CaptureStore (memory, 30 min, used once) ─▶ ChatMessage.images ─▶ vision model
@@ -445,9 +446,14 @@ capture button ─▶ ScreenCapture (xcap │ x11rb │ portal) ─▶ JPEG ≤ 
   loopback with a random port and a secret path prefix, Piper with one JSON
   request per sentence. Every package is pinned with its SHA-256; program
   and library hashes are checked before every start.
-- The microphone opens only for push-to-talk or in wake word mode
-  (`voice.wakeWord`); `VoiceState.micOpen` drives the indicator shown on
-  every screen (`jarvis://voice-state`), and opening/closing is logged.
+- The microphone opens only for push-to-talk, in wake word mode
+  (`voice.wakeWord`), or while a reply to a voice request is read aloud
+  (`voice.interruptByVoice`, `VoiceState.interruptListening`);
+  `VoiceState.micOpen` drives the indicator shown on every screen
+  (`jarvis://voice-state`), and opening/closing is logged.
+- Barge-in by voice: the speaker records its loudness in a
+  `PlaybackMeter`; `EchoGate` compares each microphone frame with it and
+  `BargeInDetector` returns the phrase from 300 ms before the user started.
 - A message with images goes to the `vision` route; cloud models get
   images only with `privacy.shareCapturesWithCloud`. The embedded runtime
   passes a model's projector with `--mmproj`.

@@ -47,8 +47,9 @@ dependencies must earn their place.
   each program and its libraries is recorded and checked before every
   start.
 - **The microphone opens only on request**: push-to-talk (the chat's
-  microphone button) or wake word mode, which the user turns on in
-  Settings → Voice. `VoiceState.micOpen` is true exactly while audio is
+  microphone button), wake word mode, which the user turns on in
+  Settings → Voice, or — with "Interrupt JARVIS by speaking" (on by
+  default) — while a reply to a voice request is read aloud. `VoiceState.micOpen` is true exactly while audio is
   captured; the UI shows a red indicator on every screen, and every opening
   and closing is written to the event log. Audio is processed in memory and
   never saved.
@@ -63,7 +64,22 @@ dependencies must earn their place.
   links and reasoning blocks are not read) and synthesizes the next
   sentence while the previous one plays. The voice follows the text's
   language. **Barge-in**: the wake word, the microphone button or the stop
-  button cut the speech and drop queued audio.
+  button cut the speech and drop queued audio; so does the user talking
+  over a reply to a voice request (2026-11-01). The speaker records how
+  loud it just played; an echo gate learns the speaker-to-microphone
+  coupling from the first half second of a reply and counts a frame as
+  the user only when the VAD hears speech louder than twice the expected
+  echo (or any speech while nothing plays); 12 of 16 such frames stop
+  the reply. The phrase is then cut from 300 ms before the user started
+  and becomes the next request (`TranscriptSource::BargeIn`); in wake
+  word mode it is the command, without the name.
+- **Text for Ukrainian voices**: the Ukrainian Piper voice reads Cyrillic
+  letters only and silently dropped Latin-script words, digits and
+  symbols. Before synthesis they are spelled in Cyrillic: a dictionary of
+  frequent words and names, acronyms with English letter names, compounds
+  split at case changes, approximate English spelling rules, numbers in
+  words (thousands, decimals, versions, times, percentages with the right
+  plural), common symbols as words.
 
 ### Vision (`jarvis-vision`)
 
@@ -112,8 +128,10 @@ dependencies must earn their place.
 - Voice needs about 30 MB of engines plus a Whisper model (60–570 MB) and
   voices (20–80 MB). Wake word mode keeps one CPU core busy while people
   speak near the microphone.
-- No echo cancellation: JARVIS may hear itself while speaking; a phrase must
-  start with the name to count, which keeps false starts rare.
+- No echo cancellation, only an echo gate: with headphones any speech
+  interrupts JARVIS; on laptop speakers the user has to speak louder than
+  JARVIS or in its pauses. Adaptive echo cancellation stays a planned
+  improvement.
 - X11 lets any program read the screen; JARVIS relies on its own UI to
   capture only on request. Wayland portals may keep a copy of each
   screenshot in the user's Pictures folder; JARVIS reads it but does not

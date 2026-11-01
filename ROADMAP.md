@@ -114,6 +114,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   with a long-running Piper process (uk + en voices), wake word «Джарвіс» /
   "Jarvis", push-to-talk, streamed replies read sentence by sentence,
   barge-in, device selection
+- ✅ Interrupting a spoken reply by talking over it (echo gate, the phrase
+  becomes the next request) and Ukrainian voices reading Latin-script
+  words, numbers and symbols (2026-11-01; tested with synthetic audio and
+  fake devices, Piper checked with mixed sentences)
+- ⬜ Live check of interrupting by voice on laptop speakers and headphones
 - ✅ Pinned and checksummed engine/model/voice packages, installed only
   after confirmation; program integrity checked before every start
 - ✅ Microphone indicator on every screen and in the event log; wake word

@@ -4,6 +4,16 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+### Added
+
+- Interrupt JARVIS by speaking: while it reads a reply to a voice request,
+  talking over it stops the reply and what you say becomes the next
+  request (in wake word mode, without saying the name). An echo gate
+  compares the microphone with what the speakers just played, so JARVIS
+  does not interrupt itself; it works best with headphones. The setting
+  "Interrupt JARVIS by speaking" in Settings → Voice is on by default and
+  the microphone indicator stays on while the reply plays.
+
 ### Changed
 
 - A chat reply refused by the privacy settings links to Settings → Privacy.
@@ -14,6 +24,9 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 - The hint for the subscription providers reads as one sentence: the sign-in
   command no longer stands on a line of its own.
+- Ukrainian voices no longer skip foreign words, numbers and symbols:
+  Latin-script words are read in Cyrillic as Ukrainians pronounce them
+  (dictionary, acronyms, spelling rules), numbers and percentages in words.
 
 ## [0.1.2] — 2026-10-31
 
