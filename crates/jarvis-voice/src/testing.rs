@@ -80,6 +80,8 @@ pub struct FakeState {
     pub synthesizer_options: Vec<PiperOptions>,
     pub played: usize,
     pub cleared: usize,
+    /// Opening the microphone fails while set.
+    pub fail_input: bool,
     /// Playback never finishes while set.
     pub hold_playback: bool,
 }
@@ -125,14 +127,14 @@ impl Drop for FakeMic {
     }
 }
 
-/// Queued audio counts as played at once.
-struct FakeSpeaker(FakeBackend, PlaybackMeter);
+/// Like headphones: nothing reaches the playback meter. (Fake audio does
+/// not play in real time; echo handling has its own tests.)
+struct FakeSpeaker(FakeBackend);
 
 impl OutputDevice for FakeSpeaker {
     fn enqueue(&self, samples: &[f32], _rate: u32) {
         assert!(!samples.is_empty(), "empty audio queued");
         self.0.lock().played += 1;
-        self.1.record(samples);
     }
 
     fn clear(&self) {
@@ -213,6 +215,9 @@ impl VoiceBackend for FakeBackend {
         events: mpsc::Sender<CaptureEvent>,
     ) -> Result<Box<dyn InputDevice>> {
         let mut state = self.lock();
+        if state.fail_input {
+            return Err(VoiceError::Device("the test microphone is broken".into()));
+        }
         state.mic = Some(events);
         state.mic_opened += 1;
         Ok(Box::new(FakeMic(self.clone())))
@@ -221,9 +226,9 @@ impl VoiceBackend for FakeBackend {
     fn open_output(
         &self,
         _device: Option<&str>,
-        meter: PlaybackMeter,
+        _meter: PlaybackMeter,
     ) -> Result<Box<dyn OutputDevice>> {
-        Ok(Box::new(FakeSpeaker(self.clone(), meter)))
+        Ok(Box::new(FakeSpeaker(self.clone())))
     }
 
     fn scorer(&self) -> Box<dyn SpeechScorer> {

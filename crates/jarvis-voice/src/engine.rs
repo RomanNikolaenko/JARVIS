@@ -21,6 +21,7 @@ use crate::backend::{
     LauncherFactory, OutputDevice, Recognizer, Synthesizer, SystemBackend, VoiceBackend,
     default_launcher_factory,
 };
+use crate::barge_in::BargeInDetector;
 use crate::catalog::{self, PIPER_ENGINE, PackageSpec, WHISPER_ENGINE};
 use crate::echo::PlaybackMeter;
 use crate::error::{Result, VoiceError};
@@ -42,6 +43,8 @@ const COMMAND_WINDOW: Duration = Duration::from_secs(10);
 const WAKE_PROBE_SAMPLES: usize = SAMPLE_RATE as usize * 3;
 const LEVEL_INTERVAL: Duration = Duration::from_millis(66);
 const PLAYBACK_POLL: Duration = Duration::from_millis(30);
+/// How often an interruption listener checks that the reply still plays.
+const SPEECH_POLL: Duration = Duration::from_millis(100);
 
 /// Language for recognition and synthesis.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -98,6 +101,9 @@ pub struct VoiceEngineOptions {
 enum ListenMode {
     PushToTalk,
     WakeWord,
+    /// While a reply to a voice request is spoken: notices the user
+    /// talking over it.
+    BargeIn,
 }
 
 #[derive(Debug)]
@@ -182,6 +188,8 @@ struct Inner {
     listener: Mutex<Option<Listener>>,
     speech: Mutex<Option<(u64, CancellationToken)>>,
     command_deadline: Mutex<Option<Instant>>,
+    /// Who armed the expected command (the wake word or an interruption).
+    command_source: Mutex<TranscriptSource>,
     installing: Mutex<HashSet<String>>,
     next_id: AtomicU64,
     /// The most recently started listener; older ones leave the state alone.
@@ -250,6 +258,7 @@ impl VoiceEngine {
                 listener: Mutex::new(None),
                 speech: Mutex::new(None),
                 command_deadline: Mutex::new(None),
+                command_source: Mutex::new(TranscriptSource::WakeWord),
                 installing: Mutex::new(HashSet::new()),
                 next_id: AtomicU64::new(1),
                 latest_listener: AtomicU64::new(0),
@@ -340,8 +349,11 @@ impl VoiceEngine {
     fn refresh_wake_word(&self) {
         let wanted = self.config().settings.wake_word && !self.inner.shutdown.is_cancelled();
         match (wanted, self.listening_mode()) {
-            (true, None) => match self.speech_model() {
-                Ok(_) => self.start_listener(ListenMode::WakeWord),
+            (true, None | Some(ListenMode::BargeIn)) => match self.speech_model() {
+                Ok(_) => {
+                    self.stop_listener();
+                    self.start_listener(ListenMode::WakeWord);
+                }
                 Err(err) => self.update(|s| {
                     s.wake_word_active = false;
                     s.last_error = Some(format!("Wake word: {err}"));
@@ -579,12 +591,23 @@ impl VoiceEngine {
     pub fn listen(&self) -> Result<()> {
         self.stop_speaking();
         {
-            let listener = lock(&self.inner.listener);
-            if let Some(active) = listener.as_ref() {
-                if active.mode == ListenMode::WakeWord {
-                    let _ = active.control.send(Control::ExpectCommand);
+            let mut listener = lock(&self.inner.listener);
+            match listener.as_ref().map(|l| l.mode) {
+                Some(ListenMode::WakeWord) => {
+                    if let Some(active) = listener.as_ref() {
+                        let _ = active.control.send(Control::ExpectCommand);
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                Some(ListenMode::PushToTalk) => return Ok(()),
+                // The reply stopped; this request replaces the interruption
+                // listener.
+                Some(ListenMode::BargeIn) => {
+                    if let Some(active) = listener.take() {
+                        active.cancel.cancel();
+                    }
+                }
+                None => {}
             }
         }
         self.speech_model()?;
@@ -640,6 +663,7 @@ impl VoiceEngine {
         self.update(|s| {
             s.last_error = None;
             s.wake_word_active = mode == ListenMode::WakeWord;
+            s.interrupt_listening = mode == ListenMode::BargeIn;
             if mode == ListenMode::PushToTalk {
                 s.phase = VoicePhase::Listening;
             }
@@ -659,6 +683,7 @@ impl VoiceEngine {
                 s.hearing_speech = false;
                 s.awaiting_command = false;
                 s.wake_word_active = false;
+                s.interrupt_listening = false;
                 s.input_device = None;
                 if matches!(s.phase, VoicePhase::Listening | VoicePhase::Transcribing) {
                     s.phase = VoicePhase::Idle;
@@ -701,13 +726,19 @@ impl VoiceEngine {
             s.input_device = Some(input.name());
         });
 
-        let mut segmenter = Segmenter::with_scorer(
-            self.inner.backend.scorer(),
-            SegmenterConfig {
-                end_silence_ms: settings.end_silence_ms,
-                ..SegmenterConfig::default()
-            },
-        );
+        let new_segmenter = || {
+            Segmenter::with_scorer(
+                self.inner.backend.scorer(),
+                SegmenterConfig {
+                    end_silence_ms: settings.end_silence_ms,
+                    ..SegmenterConfig::default()
+                },
+            )
+        };
+        let mut segmenter = new_segmenter();
+        // While JARVIS speaks, only the user talking over it counts.
+        let mut detector: Option<BargeInDetector> = None;
+        let mut interrupted = false;
         // Wake word mode: phrases go to a worker so capture never stalls;
         // when it is busy, new phrases are dropped.
         let (phrases, phrases_rx) = mpsc::channel::<(String, Vec<f32>)>(2);
@@ -725,6 +756,12 @@ impl VoiceEngine {
         let outcome: Result<Option<Vec<f32>>> = loop {
             tokio::select! {
                 () = cancel.cancelled() => break Err(VoiceError::Cancelled),
+                // The reply ended without an interruption.
+                () = tokio::time::sleep(SPEECH_POLL), if mode == ListenMode::BargeIn && !interrupted => {
+                    if !self.is_speaking() {
+                        break Ok(None);
+                    }
+                }
                 Some(message) = control.recv() => match message {
                     Control::Submit => {
                         // Everything captured so far belongs to the request.
@@ -746,6 +783,54 @@ impl VoiceEngine {
                         Some(CaptureEvent::Failed(err)) => break Err(VoiceError::Device(err)),
                         None => break Err(VoiceError::Device("the microphone stopped".into())),
                     };
+                    let watching = match mode {
+                        ListenMode::BargeIn => !interrupted,
+                        ListenMode::WakeWord => {
+                            self.is_speaking() && self.config().settings.interrupt_by_voice
+                        }
+                        ListenMode::PushToTalk => false,
+                    };
+                    if !watching {
+                        detector = None;
+                    }
+                    let mut fresh = None;
+                    if watching {
+                        let found = detector
+                            .get_or_insert_with(|| {
+                                BargeInDetector::new(
+                                    self.inner.backend.scorer(),
+                                    self.inner.meter.clone(),
+                                )
+                            })
+                            .push(&samples);
+                        let Some(start) = found else {
+                            if mode == ListenMode::BargeIn && !self.is_speaking() {
+                                break Ok(None);
+                            }
+                            continue;
+                        };
+                        // Barge-in: JARVIS stops; the user's phrase starts
+                        // where the user started.
+                        self.stop_speaking();
+                        interrupted = true;
+                        detector = None;
+                        heard = true;
+                        segmenter = new_segmenter();
+                        capture_id = uuid::Uuid::new_v4().to_string();
+                        self.update(|s| {
+                            s.capture_id = Some(capture_id.clone());
+                            s.hearing_speech = true;
+                            s.interrupt_listening = false;
+                            if mode == ListenMode::BargeIn {
+                                s.phase = VoicePhase::Listening;
+                            }
+                        });
+                        if mode == ListenMode::WakeWord {
+                            self.expect_command_from(TranscriptSource::BargeIn);
+                        }
+                        fresh = Some(start);
+                    }
+                    let samples = fresh.unwrap_or(samples);
                     let mut finished = None;
                     for event in segmenter.push(&samples) {
                         match event {
@@ -761,7 +846,7 @@ impl VoiceEngine {
                             }
                             SegmentEvent::Finished(phrase) => {
                                 self.update(|s| s.hearing_speech = false);
-                                if mode == ListenMode::PushToTalk {
+                                if mode != ListenMode::WakeWord {
                                     finished = Some(phrase);
                                 } else {
                                     let _ = phrases.try_send((capture_id.clone(), phrase));
@@ -795,6 +880,7 @@ impl VoiceEngine {
             self.update(|s| {
                 s.mic_open = false;
                 s.hearing_speech = false;
+                s.interrupt_listening = false;
                 s.input_device = None;
             });
             let _ = self.inner.levels.send(0.0);
@@ -822,7 +908,12 @@ impl VoiceEngine {
                 "the speech could not be recognized".into(),
             ));
         }
-        self.emit(text, TranscriptSource::PushToTalk, capture_id);
+        let source = if mode == ListenMode::BargeIn {
+            TranscriptSource::BargeIn
+        } else {
+            TranscriptSource::PushToTalk
+        };
+        self.emit(text, source, capture_id);
         Ok(())
     }
 
@@ -854,6 +945,11 @@ impl VoiceEngine {
     }
 
     fn expect_command(&self) {
+        self.expect_command_from(TranscriptSource::WakeWord);
+    }
+
+    fn expect_command_from(&self, source: TranscriptSource) {
+        *lock(&self.inner.command_source) = source;
         let deadline = Instant::now() + COMMAND_WINDOW;
         *lock(&self.inner.command_deadline) = Some(deadline);
         self.update(|s| s.awaiting_command = true);
@@ -886,7 +982,8 @@ impl VoiceEngine {
             // The command may repeat the wake word.
             let command = wake::find(&text).map_or(text, |found| found.command);
             if has_words(&command) {
-                self.emit(command, TranscriptSource::WakeWord, capture_id);
+                let source = *lock(&self.inner.command_source);
+                self.emit(command, source, capture_id);
             }
             return Ok(());
         }
@@ -942,6 +1039,17 @@ impl VoiceEngine {
     /// Starts speaking a reply that arrives in pieces. Any current speech
     /// stops.
     pub fn speak(&self) -> SpeechStream {
+        self.start_speech(false)
+    }
+
+    /// Like [`VoiceEngine::speak`], for a reply to a voice request: with
+    /// "interrupt by voice" on, the microphone listens for the user talking
+    /// over it while the reply plays.
+    pub fn speak_reply(&self) -> SpeechStream {
+        self.start_speech(true)
+    }
+
+    fn start_speech(&self, interruptible: bool) -> SpeechStream {
         self.stop_speaking();
         let id = self.next_id();
         let cancel = self.inner.shutdown.child_token();
@@ -951,7 +1059,9 @@ impl VoiceEngine {
         let token = cancel.clone();
         self.inner.runtime.spawn(async move {
             let mut output = None;
-            let result = engine.run_speech(rx, &token, &mut output).await;
+            let result = engine
+                .run_speech(rx, &token, &mut output, interruptible)
+                .await;
             if let Some(output) = output.take() {
                 if result.is_err() {
                     output.clear();
@@ -991,6 +1101,22 @@ impl VoiceEngine {
         stream.finish();
     }
 
+    fn is_speaking(&self) -> bool {
+        lock(&self.inner.speech).is_some()
+    }
+
+    /// Opens the microphone to notice the user talking over a reply, when
+    /// the settings allow it and nothing else is listening.
+    fn listen_for_interruptions(&self) {
+        if !self.config().settings.interrupt_by_voice
+            || self.listening_mode().is_some()
+            || self.speech_model().is_err()
+        {
+            return;
+        }
+        self.start_listener(ListenMode::BargeIn);
+    }
+
     pub fn stop_speaking(&self) {
         if let Some((_, cancel)) = lock(&self.inner.speech).take() {
             cancel.cancel();
@@ -1012,9 +1138,11 @@ impl VoiceEngine {
         mut input: mpsc::UnboundedReceiver<SpeechInput>,
         cancel: &CancellationToken,
         output: &mut Option<Box<dyn OutputDevice>>,
+        interruptible: bool,
     ) -> Result<()> {
         let mut splitter = SentenceSplitter::new();
         let mut language = None;
+        let mut listening = false;
         let mut finished = false;
         while !finished {
             let message = tokio::select! {
@@ -1052,6 +1180,10 @@ impl VoiceEngine {
                 self.update(|s| s.phase = VoicePhase::Speaking);
                 if let Some(output) = output.as_ref() {
                     output.enqueue(&audio.samples, audio.sample_rate);
+                }
+                if interruptible && !listening {
+                    listening = true;
+                    self.listen_for_interruptions();
                 }
             }
         }

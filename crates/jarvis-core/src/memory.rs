@@ -448,7 +448,8 @@ impl JarvisCore {
         let assistant_id = Uuid::new_v4();
         let (done, outcome) = oneshot::channel();
         // A new spoken request also interrupts the previous reply.
-        let speech = (request.speak && self.voice.speaks_replies()).then(|| self.voice.speak());
+        let speech =
+            (request.speak && self.voice.speaks_replies()).then(|| self.voice.speak_reply());
         let sink = RecordingSink {
             inner: crate::voice::SpeakingSink {
                 inner: sink,

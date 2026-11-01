@@ -105,9 +105,11 @@ impl EchoGate {
     /// `Some(frames_back)` on barge-in: the frames from the first speech
     /// frame of the deciding window to this one, inclusive.
     pub fn push(&mut self, frame_rms: f32, speech: bool, reference: f32) -> Option<usize> {
+        // The floor starts low: the first frames may already be speech.
         let quietest = match self.quietest {
             Some(q) if frame_rms >= q => q + (frame_rms - q) * 0.001,
-            _ => frame_rms,
+            Some(_) => frame_rms,
+            None => frame_rms.min(MIN_FLOOR / 2.0),
         };
         self.quietest = Some(quietest);
         let floor = (2.0 * quietest).max(MIN_FLOOR);
@@ -240,6 +242,14 @@ mod tests {
         let user = |f: usize| if f >= 330 { 0.05 } else { 0.0 };
         let (at, _) = run(THIRTY_SECONDS, playing, |_| 0.5, user).expect("barge-in");
         assert!((330 + 11..=330 + 18).contains(&at), "{at}");
+    }
+
+    #[test]
+    fn speech_from_the_first_frame_triggers() {
+        // Nothing plays and the user is already talking when the
+        // microphone opens.
+        let (at, _) = run(THIRTY_SECONDS, |_| 0.0, |_| 0.5, |_| 0.05).expect("barge-in");
+        assert!((11..=18).contains(&at), "{at}");
     }
 
     #[test]

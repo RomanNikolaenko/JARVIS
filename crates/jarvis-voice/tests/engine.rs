@@ -354,3 +354,169 @@ async fn methods_work_from_threads_without_a_runtime() {
         .expect("no panic");
     wait_state(&mut s.state, "the microphone to close", |st| !st.mic_open).await;
 }
+
+fn interrupt_settings() -> VoiceSettings {
+    VoiceSettings {
+        end_silence_ms: 400,
+        ..VoiceSettings::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn speaking_a_reply_opens_the_microphone_for_interruptions() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(interrupt_settings(), SpeechLanguage::Uk);
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Довга відповідь, яку можна перебити. ");
+    wait_state(&mut s.state, "listening for an interruption", |st| {
+        st.mic_open && st.interrupt_listening && st.phase == VoicePhase::Speaking
+    })
+    .await;
+    assert!(!s.engine.state().wake_word_active);
+    s.engine.stop_speaking();
+    wait_state(&mut s.state, "the microphone off", |st| {
+        !st.mic_open && !st.interrupt_listening
+    })
+    .await;
+
+    // With the setting off the microphone stays closed.
+    s.engine.apply_settings(
+        VoiceSettings {
+            interrupt_by_voice: false,
+            ..interrupt_settings()
+        },
+        SpeechLanguage::Uk,
+    );
+    let speech = s.engine.speak_reply();
+    speech.push("Ще одна відповідь. ");
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == VoicePhase::Speaking
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!s.engine.state().mic_open);
+    assert_eq!(s.fake.lock().mic_opened, 1);
+    s.engine.stop_speaking();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn say_never_opens_the_microphone() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(interrupt_settings(), SpeechLanguage::Uk);
+    s.fake.lock().hold_playback = true;
+    s.engine.say("Перевірка голосу.");
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == VoicePhase::Speaking
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!s.engine.state().mic_open);
+    assert_eq!(s.fake.lock().mic_opened, 0);
+    s.engine.stop_speaking();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn talking_over_a_reply_stops_it_and_becomes_a_request() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(interrupt_settings(), SpeechLanguage::Uk);
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Довга відповідь, яку можна перебити. ");
+    wait_state(&mut s.state, "listening for an interruption", |st| {
+        st.interrupt_listening && st.mic_open
+    })
+    .await;
+
+    s.fake.reply("Стоп, розкажи краще про погоду");
+    s.fake.speak_into_mic(1.0).await;
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.text, "Стоп, розкажи краще про погоду");
+    assert_eq!(transcript.source, TranscriptSource::BargeIn);
+    wait_state(&mut s.state, "idle with the microphone off", |st| {
+        st.phase == VoicePhase::Idle && !st.mic_open
+    })
+    .await;
+    // The stopped reply drops its queued audio.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while s.fake.lock().cleared == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the reply must stop");
+    // The phrase is recognized from its start, not from the barge-in.
+    let recognized = s.fake.lock().recognized.clone();
+    assert!(recognized[0] >= 15_000, "{recognized:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn barge_in_at_the_end_of_a_reply_still_listens() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(interrupt_settings(), SpeechLanguage::Uk);
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Коротка відповідь.");
+    speech.finish();
+    wait_state(&mut s.state, "listening for an interruption", |st| {
+        st.interrupt_listening && st.mic_open
+    })
+    .await;
+    // The user starts talking just as the reply finishes playing.
+    s.fake.reply("А ще одне");
+    let fake = s.fake.clone();
+    let user = tokio::spawn(async move { fake.speak_into_mic(1.0).await });
+    s.fake.lock().hold_playback = false;
+    user.await.expect("the user spoke");
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.text, "А ще одне");
+    assert_eq!(transcript.source, TranscriptSource::BargeIn);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_microphone_does_not_stop_the_reply() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(interrupt_settings(), SpeechLanguage::Uk);
+    s.fake.lock().fail_input = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Перше речення. Друге речення.");
+    speech.finish();
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == VoicePhase::Speaking
+    })
+    .await;
+    wait_state(&mut s.state, "the end of speech", |st| {
+        st.phase == VoicePhase::Idle
+    })
+    .await;
+    let shared = s.fake.lock();
+    assert_eq!(shared.played, 2);
+    assert!(s.engine.state().last_error.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wake_word_mode_takes_the_interruption_as_a_command() {
+    let Some(mut s) = setup() else { return };
+    s.engine
+        .apply_settings(wake_word_settings(), SpeechLanguage::Uk);
+    wait_state(&mut s.state, "wake word mode", |st| st.mic_open).await;
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Довга відповідь, яку можна перебити. ");
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == VoicePhase::Speaking
+    })
+    .await;
+    s.fake.reply("відкрий нотатки");
+    s.fake.speak_into_mic(1.0).await;
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.text, "відкрий нотатки");
+    assert_eq!(transcript.source, TranscriptSource::BargeIn);
+    // No wake word check: the phrase was recognized once.
+    assert_eq!(s.fake.lock().recognized.len(), 1);
+}
