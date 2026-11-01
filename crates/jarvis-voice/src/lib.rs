@@ -14,6 +14,7 @@ mod engine;
 pub mod error;
 pub mod process;
 pub mod resample;
+pub mod spoken;
 pub mod store;
 pub mod stt;
 #[cfg(feature = "test-support")]

@@ -1106,7 +1106,14 @@ impl VoiceEngine {
         let Some((_, synthesizer)) = slot.as_mut() else {
             return Err(VoiceError::Engine("speech synthesis is not running".into()));
         };
-        synthesizer.synthesize(text, cancel).await
+        match language {
+            // Ukrainian voices drop digits, symbols and Latin letters.
+            SpeechLanguage::Uk => {
+                let text = crate::spoken::for_ukrainian_voice(text);
+                synthesizer.synthesize(&text, cancel).await
+            }
+            SpeechLanguage::En => synthesizer.synthesize(text, cancel).await,
+        }
     }
 
     /// Stops listening, speaking, downloads and the engine processes.
