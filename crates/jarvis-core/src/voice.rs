@@ -124,6 +124,9 @@ impl JarvisCore {
                     mic_open = current.mic_open;
                     let message = match (mic_open, current.wake_word_active) {
                         (true, true) => "Microphone on: listening for the wake word".to_owned(),
+                        (true, false) if current.interrupt_listening => {
+                            "Microphone on: JARVIS can be interrupted by voice".to_owned()
+                        }
                         (true, false) => format!(
                             "Microphone on ({})",
                             current.input_device.as_deref().unwrap_or("default device")

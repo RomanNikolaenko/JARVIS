@@ -7,7 +7,7 @@ export type AudioDevice = {
  */
 id: string, name: string, isDefault: boolean, };
 
-export type TranscriptSource = "pushToTalk" | "wakeWord";
+export type TranscriptSource = "pushToTalk" | "wakeWord" | "bargeIn";
 
 /**
  * Language of speech recognition and synthesis.
@@ -78,6 +78,11 @@ speakReplies: boolean,
  */
 wakeWord: boolean, 
 /**
+ * Keep the microphone open while JARVIS reads a reply to a voice
+ * request, so the user can interrupt it by speaking.
+ */
+interruptByVoice: boolean, 
+/**
  * 1.0 is the voice's natural pace.
  */
 speechRate: number, 
@@ -99,6 +104,11 @@ captureId: string | null, phase: VoicePhase, micOpen: boolean,
  * Wake word mode is on (the microphone stays open).
  */
 wakeWordActive: boolean, 
+/**
+ * The microphone is open only to notice the user speaking over a
+ * spoken reply.
+ */
+interruptListening: boolean, 
 /**
  * The wake word was heard without a command; the next phrase is one.
  */

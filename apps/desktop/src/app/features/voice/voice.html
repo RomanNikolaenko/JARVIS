@@ -199,6 +199,15 @@
           The microphone then stays open and the red indicator at the top stays on. Speech is recognized locally by whisper.cpp;
           only phrases that start with the name become requests. Saying the name also interrupts JARVIS while it speaks.
         </p>
+        <label class="check">
+          <input type="checkbox" formControlName="interruptByVoice" />
+          <span>Interrupt JARVIS by speaking</span>
+        </label>
+        <p class="hint">
+          <jv-icon name="shield" [size]="14" />
+          The microphone stays on while JARVIS reads a reply to a spoken request, so you can talk over it; what you say becomes
+          the next request. Works best with headphones; on laptop speakers speak a little louder than JARVIS.
+        </p>
 
         <div class="actions">
           @if (saveError(); as e) {

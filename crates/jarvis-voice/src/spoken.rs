@@ -141,12 +141,16 @@ fn push_word(out: &mut String, word: &str) {
     out.push(' ');
 }
 
-/// Collapses spaces and removes those before punctuation.
+/// Collapses spaces and removes those before punctuation and inside
+/// brackets.
 fn tidy(text: &str) -> String {
     let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out = String::with_capacity(joined.len());
     for c in joined.chars() {
-        if matches!(c, ',' | '.' | '!' | '?' | ':' | ';') && out.ends_with(' ') {
+        if c == ' ' && (out.ends_with('(') || out.ends_with('[')) {
+            continue;
+        }
+        if matches!(c, ',' | '.' | '!' | '?' | ':' | ';' | ')' | ']') && out.ends_with(' ') {
             out.pop();
         }
         out.push(c);
@@ -412,6 +416,14 @@ mod tests {
         assert_eq!(for_ukrainian_voice("user"), "юзер");
         assert_eq!(for_ukrainian_voice("system"), "систем");
         assert_eq!(for_ukrainian_voice("home"), "хоум");
+    }
+
+    #[test]
+    fn brackets_keep_their_spacing() {
+        assert_eq!(
+            for_ukrainian_voice("[echo] (GitHub, 2 рази)"),
+            "[ечо] (ґітхаб, два рази)"
+        );
     }
 
     #[test]

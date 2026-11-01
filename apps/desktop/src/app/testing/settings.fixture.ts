@@ -67,6 +67,7 @@ export const SETTINGS = {
     speakerEn: 0,
     speakReplies: true,
     wakeWord: false,
+    interruptByVoice: true,
     speechRate: 1,
     endSilenceMs: 800,
   },

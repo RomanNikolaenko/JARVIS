@@ -75,6 +75,7 @@ export class VoicePage {
     speakerEn: new FormControl(0, { nonNullable: true }),
     speakReplies: new FormControl(true, { nonNullable: true }),
     wakeWord: new FormControl(false, { nonNullable: true }),
+    interruptByVoice: new FormControl(true, { nonNullable: true }),
     speechRate: new FormControl(1, {
       nonNullable: true,
       validators: [Validators.required, Validators.min(0.5), Validators.max(2)],
@@ -212,6 +213,7 @@ function toFormValue(voice: VoiceSettings) {
     speakerEn: voice.speakerEn,
     speakReplies: voice.speakReplies,
     wakeWord: voice.wakeWord,
+    interruptByVoice: voice.interruptByVoice,
     speechRate: voice.speechRate,
     endSilenceMs: voice.endSilenceMs,
   };
@@ -230,6 +232,7 @@ function fromFormValue(value: ReturnType<typeof toFormValue>): VoiceSettings {
     speakerEn: Number(value.speakerEn),
     speakReplies: value.speakReplies,
     wakeWord: value.wakeWord,
+    interruptByVoice: value.interruptByVoice,
     speechRate: Number(value.speechRate),
     endSilenceMs: Number(value.endSilenceMs),
   };

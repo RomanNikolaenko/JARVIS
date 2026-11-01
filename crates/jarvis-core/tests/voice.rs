@@ -109,7 +109,8 @@ async fn replies_to_voice_requests_are_read_aloud() {
     wait_idle(&test).await;
     assert_eq!(
         test.fake.lock().synthesized,
-        vec!["[echo] Яка погода?", "Дякую."]
+        // Ukrainian voices hear Latin words in Cyrillic.
+        vec!["[ечо] Яка погода?", "Дякую."]
     );
 
     // With speaking turned off, nothing is read.

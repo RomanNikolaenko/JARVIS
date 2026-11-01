@@ -45,6 +45,9 @@ pub struct VoiceSettings {
     /// Keep the microphone open and react to «Джарвіс». Off by default; the
     /// microphone indicator stays on while it is enabled.
     pub wake_word: bool,
+    /// Keep the microphone open while JARVIS reads a reply to a voice
+    /// request, so the user can interrupt it by speaking.
+    pub interrupt_by_voice: bool,
     /// 1.0 is the voice's natural pace.
     pub speech_rate: f32,
     /// Silence that ends an utterance.
@@ -64,6 +67,7 @@ impl Default for VoiceSettings {
             speaker_en: 0,
             speak_replies: true,
             wake_word: false,
+            interrupt_by_voice: true,
             speech_rate: 1.0,
             end_silence_ms: 800,
         }
@@ -140,6 +144,9 @@ pub struct VoiceState {
     pub mic_open: bool,
     /// Wake word mode is on (the microphone stays open).
     pub wake_word_active: bool,
+    /// The microphone is open only to notice the user speaking over a
+    /// spoken reply.
+    pub interrupt_listening: bool,
     /// The wake word was heard without a command; the next phrase is one.
     pub awaiting_command: bool,
     /// Voice activity detection hears speech right now.
@@ -157,6 +164,8 @@ pub enum TranscriptSource {
     PushToTalk,
     /// A phrase that started with the wake word.
     WakeWord,
+    /// The user spoke over JARVIS's spoken reply.
+    BargeIn,
 }
 
 /// Recognized speech meant as a request.
@@ -229,4 +238,20 @@ pub struct VoiceStatus {
     pub can_speak: bool,
     pub state: VoiceState,
     pub voice_dir: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_allow_interrupting() {
+        let settings: VoiceSettings = serde_json::from_str("{}").expect("settings");
+        assert!(settings.interrupt_by_voice);
+        assert_eq!(
+            serde_json::to_value(TranscriptSource::BargeIn).expect("source"),
+            "bargeIn"
+        );
+        assert!(!VoiceState::default().interrupt_listening);
+    }
 }

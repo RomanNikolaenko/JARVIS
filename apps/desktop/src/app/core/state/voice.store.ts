@@ -14,6 +14,7 @@ const IDLE: VoiceState = {
   phase: 'idle',
   micOpen: false,
   wakeWordActive: false,
+  interruptListening: false,
   awaitingCommand: false,
   hearingSpeech: false,
   inputDevice: null,

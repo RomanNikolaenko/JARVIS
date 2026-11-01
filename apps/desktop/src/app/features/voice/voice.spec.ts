@@ -86,6 +86,18 @@ describe('VoicePage', () => {
     expect(saved[0].voice).toEqual({ ...SETTINGS.voice, wakeWord: true });
   });
 
+  it('saves whether JARVIS can be interrupted by speaking', async () => {
+    const { fixture, element } = await render();
+    const interrupt = element.querySelector<HTMLInputElement>('input[formControlName="interruptByVoice"]');
+    expect(interrupt?.parentElement?.textContent).toContain('Interrupt JARVIS by speaking');
+    expect(interrupt!.checked).toBe(true);
+    interrupt!.click();
+    fixture.detectChanges();
+    button(element, 'Save').click();
+    await fixture.whenStable();
+    expect(saved[0].voice).toEqual({ ...SETTINGS.voice, interruptByVoice: false });
+  });
+
   it('offers the speakers of an installed multi-speaker voice', async () => {
     api.getVoiceStatus.mockResolvedValue(
       voiceStatus({
