@@ -5,6 +5,8 @@
 //! Latin-script words vanish from the speech. [`for_ukrainian_voice`] spells
 //! them out in Cyrillic first.
 
+mod latin;
+
 /// Digit runs longer than this are read digit by digit (phone numbers, IDs).
 const MAX_NUMBER_DIGITS: usize = 9;
 
@@ -85,6 +87,34 @@ pub fn for_ukrainian_voice(text: &str) -> String {
             currency = false;
             push_word(&mut out, &words);
             i = next;
+            continue;
+        }
+        if latin::is_latin(c) {
+            // Letters with inner hyphens, apostrophes and dots: USB-C, Wi-Fi,
+            // don't, setup.exe.
+            let mut end = i + 1;
+            while end < chars.len() {
+                let joins = matches!(chars[end], '-' | '\'' | '.')
+                    && chars.get(end + 1).is_some_and(|&n| latin::is_latin(n));
+                if latin::is_latin(chars[end]) || joins {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            let token: String = chars[i..end].iter().collect();
+            push_word(&mut out, &latin::latin_word(&token));
+            i = end;
+            continue;
+        }
+        // A hyphen between a word and a number (GPT-4) is not read.
+        if c == '-'
+            && chars.get(i + 1).is_some_and(char::is_ascii_digit)
+            && i > 0
+            && chars[i - 1].is_alphabetic()
+        {
+            out.push(' ');
+            i += 1;
             continue;
         }
         match c {
@@ -341,8 +371,79 @@ mod tests {
         assert_eq!(for_ukrainian_voice("20°"), "двадцять градусів");
         assert_eq!(for_ukrainian_voice("п’ять і пʼять"), "п'ять і п'ять");
         assert_eq!(for_ukrainian_voice("так/ні"), "так ні");
-        assert_eq!(for_ukrainian_voice("x=1 & y"), "x дорівнює один і y");
+        assert_eq!(for_ukrainian_voice("x=1 & y"), "екс дорівнює один і вай");
         assert_eq!(for_ukrainian_voice("$5"), "п'ять доларів");
+    }
+
+    #[test]
+    fn dictionary_words() {
+        assert_eq!(
+            for_ukrainian_voice("Запусти Python і відкрий GitHub"),
+            "Запусти пайтон і відкрий ґітхаб"
+        );
+        assert_eq!(
+            for_ukrainian_voice("Windows, Google, Claude, email"),
+            "віндовс, ґуґл, клод, імейл"
+        );
+        assert_eq!(for_ukrainian_voice("Wi-Fi"), "вай-фай");
+    }
+
+    #[test]
+    fn acronyms_are_spelled() {
+        assert_eq!(for_ukrainian_voice("API"), "ей-пі-ай");
+        assert_eq!(for_ukrainian_voice("USB і PDF"), "ю-ес-бі і пі-ді-еф");
+        assert_eq!(for_ukrainian_voice("GPT-4"), "джі-пі-ті чотири");
+        assert_eq!(for_ukrainian_voice("ChatGPT"), "чат джі-пі-ті");
+        assert_eq!(for_ukrainian_voice("USB-C"), "ю-ес-бі-сі");
+    }
+
+    #[test]
+    fn compounds_split_at_case_and_digits() {
+        assert_eq!(for_ukrainian_voice("JavaScript"), "джава скрипт");
+        assert_eq!(for_ukrainian_voice("v2"), "ві два");
+    }
+
+    #[test]
+    fn other_words_follow_spelling_rules() {
+        assert_eq!(for_ukrainian_voice("update"), "апдейт");
+        assert_eq!(for_ukrainian_voice("file"), "файл");
+        assert_eq!(for_ukrainian_voice("cargo test"), "карґо тест");
+        assert_eq!(for_ukrainian_voice("café"), "кафе");
+        assert_eq!(for_ukrainian_voice("user"), "юзер");
+        assert_eq!(for_ukrainian_voice("system"), "систем");
+        assert_eq!(for_ukrainian_voice("home"), "хоум");
+    }
+
+    #[test]
+    fn file_names_and_domains() {
+        assert_eq!(
+            for_ukrainian_voice("Відкрий setup.exe."),
+            "Відкрий сетап крапка екзе."
+        );
+        assert_eq!(for_ukrainian_voice("PowerShell"), "павер шел");
+    }
+
+    #[test]
+    fn cyrillic_text_is_untouched() {
+        assert_eq!(for_ukrainian_voice("УВАГА, ЗСУ!"), "УВАГА, ЗСУ!");
+    }
+
+    #[test]
+    fn the_voice_can_read_every_output_character() {
+        // The symbol set of uk_UA-ukrainian_tts-medium (Piper lowercases).
+        let readable = |c: char| {
+            c.is_whitespace()
+                || "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя'-,.!?:;—"
+                    .contains(c.to_lowercase().next().unwrap_or(c))
+        };
+        for text in [
+            "Python 3.12, GitHub API, 50% & USB-C @home #1",
+            "Ok, iPhone 15 Pro за $999",
+            "Naïve façade: Größe, piñata.",
+        ] {
+            let out = for_ukrainian_voice(text);
+            assert!(out.chars().all(readable), "{out}");
+        }
     }
 
     #[test]
