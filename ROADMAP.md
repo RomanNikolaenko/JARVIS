@@ -118,7 +118,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   becomes the next request) and Ukrainian voices reading Latin-script
   words, numbers and symbols (2026-11-01; tested with synthetic audio and
   fake devices, Piper checked with mixed sentences)
-- ⬜ Live check of interrupting by voice on laptop speakers and headphones
+- ✅ Live check of interrupting by voice with a laptop's built-in
+  microphone (2026-11-02): long replies play to the end without
+  interrupting themselves; talking over a reply stops it and the phrase
+  becomes the next request (Claude Code provider, twice in a row)
+- ⬜ Live check with a Bluetooth headset (its longer playback delay)
 - ✅ Pinned and checksummed engine/model/voice packages, installed only
   after confirmation; program integrity checked before every start
 - ✅ Microphone indicator on every screen and in the event log; wake word
