@@ -125,11 +125,7 @@ async fn task_deadline_withdraws_approval_without_running_the_tool() {
         r#"{"tool":"write_file","input":{"path":"out.txt","content":"late"}}"#,
     ]);
     let start = h.manager.start(short_task(), model).await.unwrap();
-    wait_for(&h.manager, start.id, |task| {
-        task.status == TaskStatus::WaitingForApproval
-    })
-    .await;
-    let approval = h.approvals.pending()[0].id;
+    let approval = wait_for_approval(&h.approvals, start.id).await.id;
     expire_task_time().await;
     let done = finished(&h.manager, start.id).await;
     assert_task_timed_out(&done);
@@ -175,25 +171,19 @@ async fn task_deadline_interrupts_a_program_and_retains_its_journal() {
         ("sleep", serde_json::json!(["60"]))
     };
     let h = harness_with(1, Duration::from_secs(300), &[program]);
+    let tool = SignalRun::wrap("run_command");
+    let (manager, _) = manager_with_tool(&h, tool.clone());
     let call = serde_json::json!({"tool":"run_command","input":{"program":program,"args":args}})
         .to_string();
-    let start = h
-        .manager
+    let start = manager
         .start(short_task(), ScriptedModel::new(&[&call]))
         .await
         .unwrap();
-    wait_for(&h.manager, start.id, |task| {
-        task.status == TaskStatus::WaitingForApproval
-    })
-    .await;
-    assert!(h.approvals.resolve(h.approvals.pending()[0].id, true));
-    wait_for(&h.manager, start.id, |task| {
-        task.status == TaskStatus::Running
-    })
-    .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let approval = wait_for_approval(&h.approvals, start.id).await;
+    assert!(h.approvals.resolve(approval.id, true));
+    tool.wait_until_running().await;
     expire_task_time().await;
-    let done = finished(&h.manager, start.id).await;
+    let done = finished(&manager, start.id).await;
     assert_task_timed_out(&done);
     assert_eq!(actions(&done).len(), 1);
     assert_eq!(actions(&done)[0].outcome, StepOutcome::Unknown);
@@ -343,12 +333,8 @@ async fn native_writes_wait_for_approval_and_honor_denial() {
             .start(task("Write out.txt"), model.clone())
             .await
             .unwrap();
-        wait_for(&h.manager, start.id, |t| {
-            t.status == TaskStatus::WaitingForApproval
-        })
-        .await;
+        let approval = wait_for_approval(&h.approvals, start.id).await;
         assert!(!h.dir.path().join("out.txt").exists());
-        let approval = &h.approvals.pending()[0];
         assert_eq!(approval.tool, "write_file");
         assert!(h.approvals.resolve(approval.id, approved));
         let done = finished(&h.manager, start.id).await;
@@ -937,23 +923,61 @@ impl jarvis_tools::Tool for InterruptAfterEffect {
     }
 }
 
-fn interrupting_manager(
+/// Signals when the orchestrator hands the call to the real tool, that is
+/// once the tool runs under its deadline and the task's cancellation.
+#[derive(Debug)]
+struct SignalRun {
+    inner: Arc<dyn jarvis_tools::Tool>,
+    entered: Notify,
+}
+
+impl SignalRun {
+    fn wrap(tool_name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            inner: ToolRegistry::builtin().get(tool_name).unwrap(),
+            entered: Notify::new(),
+        })
+    }
+
+    async fn wait_until_running(&self) {
+        tokio::time::timeout(Duration::from_secs(5), self.entered.notified())
+            .await
+            .expect("the approved tool did not start");
+    }
+}
+
+#[async_trait]
+impl jarvis_tools::Tool for SignalRun {
+    fn spec(&self) -> &jarvis_tools::ToolSpec {
+        self.inner.spec()
+    }
+
+    fn prepare(
+        &self,
+        input: &serde_json::Value,
+        ctx: &jarvis_tools::ToolContext,
+    ) -> Result<jarvis_tools::PreparedCall, jarvis_tools::ToolError> {
+        self.inner.prepare(input, ctx)
+    }
+
+    async fn run(
+        &self,
+        call: &jarvis_tools::PreparedCall,
+        ctx: &jarvis_tools::ToolContext,
+    ) -> Result<jarvis_tools::ToolOutput, jarvis_tools::ToolError> {
+        self.entered.notify_one();
+        self.inner.run(call, ctx).await
+    }
+}
+
+/// A manager on the harness's store and settings with `tool` in place of
+/// the built-in tool of the same name.
+fn manager_with_tool(
     h: &Harness,
-    tool_name: &str,
-    interruption: ToolInterruption,
-) -> (
-    Arc<AgentManager>,
-    AgentEnvironment,
-    Arc<InterruptAfterEffect>,
-) {
+    tool: Arc<dyn jarvis_tools::Tool>,
+) -> (Arc<AgentManager>, AgentEnvironment) {
     let mut tools = ToolRegistry::builtin();
-    let tool = Arc::new(InterruptAfterEffect {
-        inner: tools.get(tool_name).unwrap(),
-        interruption,
-        entered: Notify::new(),
-        runs: std::sync::atomic::AtomicUsize::new(0),
-    });
-    tools.register(tool.clone());
+    tools.register(tool);
     let settings = h.settings.clone();
     let env = AgentEnvironment {
         store: h.store.clone(),
@@ -964,7 +988,26 @@ fn interrupting_manager(
         settings: Arc::new(move || settings.lock().unwrap().clone()),
         max_concurrent: 1,
     };
-    (AgentManager::new(env.clone()), env, tool)
+    (AgentManager::new(env.clone()), env)
+}
+
+fn interrupting_manager(
+    h: &Harness,
+    tool_name: &str,
+    interruption: ToolInterruption,
+) -> (
+    Arc<AgentManager>,
+    AgentEnvironment,
+    Arc<InterruptAfterEffect>,
+) {
+    let tool = Arc::new(InterruptAfterEffect {
+        inner: ToolRegistry::builtin().get(tool_name).unwrap(),
+        interruption,
+        entered: Notify::new(),
+        runs: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let (manager, env) = manager_with_tool(h, tool.clone());
+    (manager, env, tool)
 }
 
 #[tokio::test]
@@ -1231,11 +1274,8 @@ async fn a_crash_after_effect_recovers_as_unknown_and_cannot_replay() {
         r#"{"tool":"write_file","input":{"path":"effect.txt","content":"once"}}"#,
     ]);
     let start = manager.start(task("Write"), model).await.unwrap();
-    wait_for(&manager, start.id, |t| {
-        t.status == TaskStatus::WaitingForApproval
-    })
-    .await;
-    assert!(h.approvals.resolve(h.approvals.pending()[0].id, true));
+    let approval = wait_for_approval(&h.approvals, start.id).await;
+    assert!(h.approvals.resolve(approval.id, true));
     tokio::time::timeout(Duration::from_secs(5), async {
         while manager.running_count() != 0 {
             tokio::task::yield_now().await;
@@ -1421,12 +1461,9 @@ async fn journal_failure_after_approval_prevents_the_write() {
         r#"{"tool":"write_file","input":{"path":"out.txt","content":"must not run"}}"#,
     ]);
     let start = h.manager.start(task("Write"), model).await.unwrap();
-    wait_for(&h.manager, start.id, |task| {
-        task.status == TaskStatus::WaitingForApproval
-    })
-    .await;
+    let approval = wait_for_approval(&h.approvals, start.id).await;
     reject_task_saves(&h, true).await;
-    assert!(h.approvals.resolve(h.approvals.pending()[0].id, true));
+    assert!(h.approvals.resolve(approval.id, true));
     let done = finished(&h.manager, start.id).await;
     assert_eq!(done.status, TaskStatus::Failed);
     assert!(!h.dir.path().join("out.txt").exists());
@@ -1460,11 +1497,8 @@ async fn execution_intent_must_save_before_effect_and_survives_failed_result_sav
             r#"{"final":"must not be requested"}"#,
         ]);
         let start = h.manager.start(task("Write"), model.clone()).await.unwrap();
-        wait_for(&h.manager, start.id, |t| {
-            t.status == TaskStatus::WaitingForApproval
-        })
-        .await;
-        assert!(h.approvals.resolve(h.approvals.pending()[0].id, true));
+        let approval = wait_for_approval(&h.approvals, start.id).await;
+        assert!(h.approvals.resolve(approval.id, true));
         let done = finished(&h.manager, start.id).await;
         assert_eq!(done.status, TaskStatus::Failed);
         assert_eq!(model.turns_seen(), 1);
@@ -1502,11 +1536,8 @@ async fn audit_failures_stop_before_execution_or_before_the_next_action() {
             .start(task("Write files"), model.clone())
             .await
             .unwrap();
-        wait_for(&h.manager, start.id, |task| {
-            task.status == TaskStatus::WaitingForApproval
-        })
-        .await;
-        assert!(h.approvals.resolve(h.approvals.pending()[0].id, true));
+        let approval = wait_for_approval(&h.approvals, start.id).await;
+        assert!(h.approvals.resolve(approval.id, true));
         let done = finished(&h.manager, start.id).await;
         assert_eq!(done.status, TaskStatus::Failed);
         assert!(done.error.as_deref().unwrap().contains("audit"));
@@ -1676,16 +1707,20 @@ async fn wait_for(
     );
 }
 
+/// The task once its run has ended. A failed save or audit marks the task
+/// failed at once, while the run still replaces the in-progress action and
+/// saves again, so a terminal status alone is not the final journal.
 async fn finished(manager: &AgentManager, id: Uuid) -> AgentTask {
-    let task = wait_for(manager, id, |t| t.status.is_finished()).await;
-    // The run removes itself from the running set right after saving.
-    for _ in 0..100 {
+    wait_for(manager, id, |t| t.status.is_finished()).await;
+    // Each test runs one task per manager; a run leaves the running set
+    // only after its last checkpoint.
+    for _ in 0..500 {
         if manager.running_count() == 0 {
-            break;
+            return manager.get(id).await.unwrap();
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    task
+    panic!("the run did not end: {:#?}", manager.get(id).await.unwrap());
 }
 
 async fn wait_for_turns(model: &ScriptedModel, count: usize) {
@@ -1823,6 +1858,8 @@ async fn writes_wait_for_approval_and_run_once_approved() {
         "nothing runs before approval"
     );
 
+    // The status is saved before the broker publishes the request.
+    wait_for_approval(&h.approvals, started.id).await;
     let pending = h.approvals.pending();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].tool, "write_file");
@@ -1861,13 +1898,9 @@ async fn a_denied_action_does_not_run_and_the_model_is_told() {
         .start(task("Delete a.txt"), model.clone())
         .await
         .unwrap();
-    wait_for(&h.manager, started.id, |t| {
-        t.status == TaskStatus::WaitingForApproval
-    })
-    .await;
-    let pending = h.approvals.pending();
-    assert_eq!(pending[0].risk, jarvis_security::RiskLevel::High);
-    assert!(h.approvals.resolve(pending[0].id, false));
+    let approval = wait_for_approval(&h.approvals, started.id).await;
+    assert_eq!(approval.risk, jarvis_security::RiskLevel::High);
+    assert!(h.approvals.resolve(approval.id, false));
 
     let done = finished(&h.manager, started.id).await;
     assert_eq!(done.status, TaskStatus::Completed);
@@ -1990,10 +2023,7 @@ async fn injected_instructions_in_tool_output_cannot_skip_approval() {
         .start(task("Summarize notes.txt"), model.clone())
         .await
         .unwrap();
-    wait_for(&h.manager, started.id, |t| {
-        t.status == TaskStatus::WaitingForApproval
-    })
-    .await;
+    wait_for_approval(&h.approvals, started.id).await;
 
     let observation = model.last_message(1);
     assert_eq!(observation.matches("</tool_result>").count(), 1);
@@ -2177,10 +2207,7 @@ async fn cancel_withdraws_a_pending_approval() {
         r#"{"tool": "write_file", "input": {"path": "x.txt", "content": "x"}}"#,
     ]);
     let started = h.manager.start(task("Write x.txt"), model).await.unwrap();
-    wait_for(&h.manager, started.id, |t| {
-        t.status == TaskStatus::WaitingForApproval
-    })
-    .await;
+    wait_for_approval(&h.approvals, started.id).await;
     assert_eq!(h.approvals.pending().len(), 1);
     h.manager.cancel(started.id).await.unwrap();
     let done = finished(&h.manager, started.id).await;
@@ -2325,23 +2352,20 @@ async fn an_action_interrupted_by_cancel_stays_in_the_journal() {
         ("sleep", serde_json::json!(["30"]))
     };
     let h = harness_with(2, Duration::from_secs(30), &[program]);
+    let tool = SignalRun::wrap("run_command");
+    let (manager, _) = manager_with_tool(&h, tool.clone());
     let call =
         serde_json::json!({"tool": "run_command", "input": {"program": program, "args": args}})
             .to_string();
     let model = ScriptedModel::new(&[&call]);
-    let started = h.manager.start(task("Wait a while"), model).await.unwrap();
-    wait_for(&h.manager, started.id, |t| {
-        t.status == TaskStatus::WaitingForApproval
-    })
-    .await;
-    let pending = h.approvals.pending();
-    assert!(h.approvals.resolve(pending[0].id, true));
-    wait_for(&h.manager, started.id, |t| t.status == TaskStatus::Running).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let started = manager.start(task("Wait a while"), model).await.unwrap();
+    let approval = wait_for_approval(&h.approvals, started.id).await;
+    assert!(h.approvals.resolve(approval.id, true));
+    tool.wait_until_running().await;
 
     let begun = std::time::Instant::now();
-    h.manager.cancel(started.id).await.unwrap();
-    let done = finished(&h.manager, started.id).await;
+    manager.cancel(started.id).await.unwrap();
+    let done = finished(&manager, started.id).await;
     assert!(
         begun.elapsed() < Duration::from_secs(10),
         "the program was stopped"

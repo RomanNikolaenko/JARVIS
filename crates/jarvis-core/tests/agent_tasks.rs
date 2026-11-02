@@ -15,6 +15,7 @@ use jarvis_ai::{
 use jarvis_core::jarvis_agent::{
     AgentTask, StepKind, StepOutcome, TaskLimits, TaskStatus, TaskStep, TaskStore,
 };
+use jarvis_core::jarvis_security::PendingApproval;
 use jarvis_core::{AgentStartRequest, AppPaths, CoreOptions, ErrorCode, JarvisCore, Settings};
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -247,6 +248,38 @@ async fn wait_for(core: &JarvisCore, id: Uuid, done: impl Fn(&AgentTask) -> bool
     );
 }
 
+/// The task saves "waiting for approval" before the broker publishes the
+/// request, so wait for the request itself, as the approval dialog does.
+async fn wait_for_approval(core: &JarvisCore, task_id: Uuid) -> PendingApproval {
+    for _ in 0..500 {
+        if let Some(approval) = core
+            .pending_approvals()
+            .into_iter()
+            .find(|approval| approval.task_id == Some(task_id))
+        {
+            return approval;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the task did not publish its approval request");
+}
+
+/// System events come from listeners that run apart from the task.
+async fn wait_for_event(core: &JarvisCore, prefix: &str) {
+    for _ in 0..500 {
+        if core
+            .events()
+            .recent(200)
+            .iter()
+            .any(|event| event.message.starts_with(prefix))
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("no event starts with {prefix:?}");
+}
+
 const READ_NOTES: &str =
     r#"{"thought": "read first", "tool": "read_file", "input": {"path": "notes.txt"}}"#;
 const WRITE_SUMMARY: &str =
@@ -287,9 +320,12 @@ async fn a_task_reads_asks_before_writing_and_is_audited() {
             .count(),
         1
     );
+    wait_for_approval(&t.core, task.id).await;
     let pending = t.core.pending_approvals();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].tool, "write_file");
+    // The listener sees only the latest pending list: check while it is pending.
+    wait_for_event(&t.core, "Approval needed (medium risk)").await;
     assert!(!t.workspace.join("summary.txt").exists());
     assert!(t.core.resolve_approval(pending[0].id, true));
     assert!(
@@ -315,23 +351,7 @@ async fn a_task_reads_asks_before_writing_and_is_audited() {
     let audit = t.core.audit_log(50, None).await.unwrap();
     assert_eq!(audit.len(), 4, "{audit:#?}");
     assert!(t.core.verify_audit_log().await.unwrap().intact);
-    let messages: Vec<String> = t
-        .core
-        .events()
-        .recent(200)
-        .into_iter()
-        .map(|e| e.message)
-        .collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.starts_with("Approval needed (medium risk)"))
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.starts_with("Agent task completed"))
-    );
+    wait_for_event(&t.core, "Agent task completed").await;
 
     let listed = t.core.list_agent_tasks(10).await.unwrap();
     assert_eq!(listed.len(), 1);
@@ -573,10 +593,7 @@ async fn disabling_agents_while_an_approval_is_pending_prevents_the_write() {
         .start_agent_task(goal("Write a summary after approval"))
         .await
         .unwrap();
-    wait_for(&t.core, task.id, |task| {
-        task.status == TaskStatus::WaitingForApproval
-    })
-    .await;
+    wait_for_approval(&t.core, task.id).await;
     let pending = t.core.pending_approvals();
     assert_eq!(pending.len(), 1);
 
