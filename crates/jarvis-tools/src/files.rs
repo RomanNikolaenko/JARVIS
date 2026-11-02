@@ -81,10 +81,23 @@ fn shown(path: &Path) -> String {
     path.display().to_string()
 }
 
-async fn read_text(path: &Path, max_bytes: u64) -> Result<(String, bool), ToolError> {
+/// A failure to open `path`. A missing path is named as the model wrote
+/// it, relative to the workspace, so it can correct a guessed name.
+fn open_error(ctx: &ToolContext, context: &str, path: &Path, err: std::io::Error) -> ToolError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        return ToolError::Failed(format!(
+            "\"{}\" does not exist (paths start in the workspace folder)",
+            ctx.scope.relative(path)
+        ));
+    }
+    ToolError::io(format!("{context} {}", shown(path)), err)
+}
+
+async fn read_text(ctx: &ToolContext, path: &Path) -> Result<(String, bool), ToolError> {
+    let max_bytes = ctx.limits.max_read_bytes;
     let file = tokio::fs::File::open(path)
         .await
-        .map_err(|err| ToolError::io(format!("opening {}", shown(path)), err))?;
+        .map_err(|err| open_error(ctx, "opening", path, err))?;
     let size = file
         .metadata()
         .await
@@ -157,7 +170,7 @@ impl Tool for ListDirectory {
             .ensure_inside(Path::new(&args.path.unwrap_or_default()))?;
         let mut reader = tokio::fs::read_dir(&path)
             .await
-            .map_err(|err| ToolError::io(format!("listing {}", shown(&path)), err))?;
+            .map_err(|err| open_error(ctx, "listing", &path, err))?;
         let mut entries = Vec::new();
         let mut more = false;
         while let Some(entry) = reader
@@ -266,7 +279,7 @@ impl Tool for ReadFile {
     async fn run(&self, call: &PreparedCall, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let args: ReadArgs = args_of(call)?;
         let path = ctx.scope.ensure_inside(Path::new(&args.path))?;
-        let (text, cut) = read_text(&path, ctx.limits.max_read_bytes).await?;
+        let (text, cut) = read_text(ctx, &path).await?;
         let start = args.start_line.unwrap_or(1).max(1) as usize;
         let lines: Vec<&str> = text.lines().collect();
         let total = lines.len();
@@ -670,7 +683,7 @@ impl Tool for EditFile {
     async fn run(&self, call: &PreparedCall, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let args: EditArgs = args_of(call)?;
         let path = ctx.scope.ensure_inside(Path::new(&args.path))?;
-        let (text, cut) = read_text(&path, ctx.limits.max_read_bytes).await?;
+        let (text, cut) = read_text(ctx, &path).await?;
         if cut {
             return Err(ToolError::Failed(
                 "the file is too large to edit".to_owned(),

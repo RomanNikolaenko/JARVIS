@@ -50,7 +50,9 @@ A passing run requires all of the following:
 Requests have a 60-second deadline. The task permits four steps and 180 seconds,
 plus a bounded shutdown allowance. Exit codes: `0` for pass, `1` for a failed
 probe, `2` for invalid arguments or configuration. A fluent answer without the
-actual read is a failure.
+actual read is a failure. A failed run prints the task journal, one line per
+step with the tool input and its result, so a live failure shows what the
+model actually asked for.
 
 Offline HTTP contract tests exercise both protocols and verify rejection of
 a task that answers without reading:
@@ -82,6 +84,43 @@ loopback servers. Both Ollama and OpenAI-compatible protocols cover:
   replaying the tool.
 
 These tests run in the workspace test suite. They do not launch a desktop
-WebView or prove model/template compatibility. Live validation is still pending:
-the standard loopback endpoints on ports 11434, 1234 and 8080 refused
-connections during the 2026-10-29 check.
+WebView or prove model/template compatibility; see the live results below.
+
+## Live results
+
+### 2026-11-02: llama.cpp server, Qwen2.5 3B
+
+- Server: llama.cpp b12002 (commit 418f905a4), official Windows CPU build as
+  installed by JARVIS (all 30 files matched their recorded SHA-256), started
+  by hand on loopback:
+  `llama-server -m qwen2.5-3b-instruct-q4_k_m.gguf --alias qwen2.5-3b-instruct --host 127.0.0.1 --port 1234 --jinja -c 8192 --no-webui`
+- Model: `Qwen/Qwen2.5-3B-Instruct-GGUF`, file `qwen2.5-3b-instruct-q4_k_m.gguf`
+  (SHA-256 `626b4a66…5c62d` as recorded by JARVIS), on the CPU with 4 threads.
+- Command:
+  `cargo run -p jarvis-agent --example native-agent-probe -- openai-compatible http://127.0.0.1:1234/v1 qwen2.5-3b-instruct`
+
+Before the fix, 3 runs out of 3 failed. The model called `read_file` natively,
+but with a path copied from the instructions' example (`"src/main.rs"`):
+
+```text
+#1 Action read_file {"maxLines":1,"path":"src/probe.txt"} Failed -> I/O error while opening …\src\probe.txt: The system cannot find the path specified. (os error 3)
+#2 Answer -  Succeeded -> JARVIS encountered an issue while trying to read the file. …
+```
+
+With a concrete file name as the example (`"notes.txt"`) it read
+`notes.txt` instead. After a failed read it did not try another path; it
+answered in plain text that it would retry, which ends the turn. The path
+rule now shows placeholders only (`"<file name>"`, `"<folder>/<file name>"`)
+and forbids invented names, and a missing path is reported as the model wrote
+it (`"src/probe.txt" does not exist (paths start in the workspace folder)`).
+After the fix, 4 runs out of 4 passed:
+
+```text
+PASS: 2 native turns; fixture read, correlated result, final marker and audit verified
+```
+
+The runs used temperature 0, so they say little about variance. One small
+model and one task are not a quality claim about native tools in general.
+Not covered: Ollama (not installed on the dev machine; the 2026-10-29 check
+found no server on ports 11434, 1234 or 8080) and the embedded runtime through
+the Agents screen.

@@ -261,8 +261,15 @@ against protocol mocks only.
 - ✅ Opt individual embedded runtime chat models into native tools, launch
   with Jinja and expose the active capability after restart; lifecycle tests
   cover exact selection, disabling and embedding isolation
-- ⬜ Verify native agent turns with live models; OpenAI-compatible servers
-  with unknown tool capabilities still use the text fallback
+- ✅ Native agent turns with a live model (2026-11-02): llama.cpp server
+  b12002 (CPU, `--jinja`) with Qwen2.5 3B Instruct Q4_K_M through the
+  OpenAI-compatible protocol passed the native agent probe 4 times out of 4
+  after a fix; before it, the model copied the instructions' example paths
+  and failed 3 runs out of 3 (see
+  [validation](docs/NATIVE-TOOLS-VALIDATION.md#live-results))
+- ⬜ Native agent turns with a live Ollama server and through the app's
+  embedded runtime; OpenAI-compatible servers with unknown tool capabilities
+  still use the text fallback
 - ✅ Core HTTP integration contracts for both protocols: real file writes
   behind approval, denial, cancellation, invalid calls, verifier failures and
   persisted results after reopening the core (scripted servers)
@@ -273,8 +280,9 @@ against protocol mocks only.
 
 ## Next iteration
 
-Phase 9: live validation of native agent tool calling with Ollama and explicitly
-configured OpenAI-compatible models, including llama.cpp.
+Phase 9: live validation of native agent tool calling with Ollama (not
+installed on the dev machine any more) and through the app's embedded
+runtime in the Agents screen; llama.cpp passed the probe on 2026-11-02.
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
 voice, third-party MCP servers, the Linux Secret Service integration, cloud
 providers with real keys.

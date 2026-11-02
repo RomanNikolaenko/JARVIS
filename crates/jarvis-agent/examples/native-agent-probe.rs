@@ -11,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use jarvis_agent::{
     AgentEnvironment, AgentError, AgentManager, AgentModel, AgentSettings, NewTask, StepKind,
-    StepOutcome, TaskLimits, TaskStatus, TaskStore,
+    StepOutcome, TaskLimits, TaskStatus, TaskStep, TaskStore,
 };
 use jarvis_ai::{
     AiProvider, ChatMessage, ChatRequest, DataLocality, GenerationOptions, HttpProviderFactory,
@@ -206,13 +206,42 @@ async fn probe(provider: Arc<dyn AiProvider>, model: String) -> Result<String, S
             .is_some_and(|answer| answer.contains(&marker))
     {
         return Err(format!(
-            "native probe failed: status={:?}, native_turns={calls}, journal_read={read}, audited={audited}, audit_intact={intact}, error={:?}",
-            finished.status, finished.error
+            "native probe failed: status={:?}, native_turns={calls}, journal_read={read}, audited={audited}, audit_intact={intact}, error={:?}{}",
+            finished.status,
+            finished.error,
+            journal(&finished.steps)
         ));
     }
     Ok(format!(
         "PASS: {calls} native turns; fixture read, correlated result, final marker and audit verified"
     ))
+}
+
+/// The journal of a failed run, one line per step, so a live failure shows
+/// what the model actually asked for.
+fn journal(steps: &[TaskStep]) -> String {
+    const LIMIT: usize = 300;
+    let clip = |text: &str| -> String {
+        let text = text.replace('\n', " ");
+        match text.char_indices().nth(LIMIT) {
+            Some((end, _)) => format!("{}…", &text[..end]),
+            None => text,
+        }
+    };
+    steps
+        .iter()
+        .map(|step| {
+            format!(
+                "\n  #{} {:?} {} {} {:?} -> {}",
+                step.index,
+                step.kind,
+                step.tool.as_deref().unwrap_or("-"),
+                clip(step.input.as_deref().unwrap_or("")),
+                step.outcome,
+                clip(step.output.as_deref().unwrap_or(""))
+            )
+        })
+        .collect()
 }
 
 #[tokio::main]

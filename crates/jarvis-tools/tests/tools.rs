@@ -239,6 +239,30 @@ async fn a_successful_file_write_is_fully_visible_to_synchronous_readers() {
     }
 }
 
+#[tokio::test]
+async fn a_missing_path_is_named_relative_to_the_workspace() {
+    let w = workspace();
+    std::fs::create_dir_all(w.root.join("notes")).unwrap();
+    // A missing file, a missing folder, and a missing folder in the middle
+    // of the path (a different OS error on Windows).
+    for (tool, path) in [
+        ("read_file", "probe.txt"),
+        ("read_file", "notes/probe.txt"),
+        ("read_file", "src/probe.txt"),
+        ("list_directory", "src"),
+        ("list_directory", "src/inner"),
+    ] {
+        let Err(ToolError::Failed(message)) = w.call(tool, json!({"path": path})).await else {
+            panic!("{tool} {path} must fail as missing");
+        };
+        assert_eq!(
+            message,
+            format!("\"{path}\" does not exist (paths start in the workspace folder)"),
+            "{tool}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn file_tools_refuse_escapes_binary_files_and_unknown_fields() {
     let w = workspace();

@@ -4,6 +4,16 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+### Fixed
+
+- Agents on small local models read the files you name. The agent's
+  instructions showed example paths, and a 3B model copied them into its
+  calls ("src/probe.txt", "notes.txt") instead of the name in the task; the
+  rule now uses placeholders and forbids invented file and folder names.
+- Reading or listing a missing file or folder tells the agent the path it
+  asked for, relative to the workspace ("src/probe.txt" does not exist),
+  instead of an operating-system error with the full path.
+
 ## [0.1.3] — 2026-11-02
 
 Interrupt JARVIS by talking over a spoken reply, Ukrainian voices that read
