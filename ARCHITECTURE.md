@@ -961,6 +961,8 @@ must be granted by a capability; anything not granted is denied. See
   used by task reads/listings, preventing stale persisted states from appearing
   resumable. Clearing finished tasks first persists inactive cached failures;
   if storage still rejects writes, the cache is retained and an error returned.
+  It skips tasks whose run is still active: a latched failure is stored before
+  the run's final journal, and that save would re-create a cleared task.
   Cached failures do not survive process exit. Each tool execution first saves
   an `inProgress` journal entry identified by task UUID and step index. The
   result replaces that entry. Recovery converts an unfinished intent to

@@ -379,7 +379,12 @@ impl AgentManager {
             self.env.store.save(&task).await?;
             self.unsaved().remove(&task.id);
         }
-        self.env.store.delete_finished().await
+        // A run that cannot save or audit stores its failed status at once
+        // and its final journal later; deleting the row in between would let
+        // that final save bring the task back. No run starts meanwhile:
+        // launches hold `transitions`.
+        let running: Vec<Uuid> = self.running().keys().copied().collect();
+        self.env.store.delete_finished(&running).await
     }
 
     /// Deletes only the journal explicitly selected after manual review.

@@ -131,19 +131,24 @@ impl TaskStore {
     }
 
     /// Deletes finished tasks with known outcomes; retains unresolved action
-    /// journals for manual review and returns how many tasks were deleted.
-    pub async fn delete_finished(&self) -> Result<usize> {
+    /// journals for manual review and the tasks in `running`, whose runs
+    /// still save. Returns how many tasks were deleted.
+    pub async fn delete_finished(&self, running: &[Uuid]) -> Result<usize> {
+        let running =
+            serde_json::to_string(&running.iter().map(Uuid::to_string).collect::<Vec<_>>())
+                .map_err(AgentError::internal)?;
         Ok(self
             .db
-            .call(|conn| {
+            .call(move |conn| {
                 Ok::<_, StorageError>(conn.execute(
                     "DELETE FROM agent_tasks
                      WHERE status IN ('completed', 'unverified', 'failed', 'cancelled')
+                       AND id NOT IN (SELECT value FROM json_each(?1))
                        AND NOT EXISTS (
                            SELECT 1 FROM json_each(agent_tasks.steps) AS step
                            WHERE json_extract(step.value, '$.outcome') IN ('unknown', 'inProgress')
                        )",
-                    [],
+                    [running],
                 )?)
             })
             .await?)

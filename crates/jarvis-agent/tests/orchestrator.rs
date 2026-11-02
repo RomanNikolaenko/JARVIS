@@ -1208,6 +1208,36 @@ async fn reviewed_journal_deletion_refuses_running_and_paused_tasks() {
     );
 }
 
+#[tokio::test]
+async fn clearing_finished_tasks_keeps_a_run_that_has_not_ended() {
+    let h = harness();
+    let model = ScriptedModel::new(&["<block>"]);
+    let start = h
+        .manager
+        .start(task("Still running"), model.clone())
+        .await
+        .unwrap();
+    wait_for_turns(&model, 1).await;
+    // A failed save or audit stores the failed status at once; the run then
+    // saves its final journal. Clearing in between must not delete the row,
+    // or that final save brings the cleared task back.
+    let mut early = h.store.get(start.id).await.unwrap();
+    early.status = TaskStatus::Failed;
+    early.finished_at_ms = Some(early.updated_at_ms);
+    h.store.save(&early).await.unwrap();
+    assert_eq!(h.manager.delete_finished().await.unwrap(), 0);
+    assert_eq!(h.store.get(start.id).await.unwrap(), early);
+
+    h.manager.cancel(start.id).await.unwrap();
+    let done = finished(&h.manager, start.id).await;
+    assert_eq!(done.status, TaskStatus::Cancelled);
+    assert_eq!(h.manager.delete_finished().await.unwrap(), 1);
+    assert!(matches!(
+        h.manager.get(start.id).await,
+        Err(AgentError::NotFound)
+    ));
+}
+
 #[async_trait]
 impl jarvis_tools::Tool for CrashAfterEffect {
     fn spec(&self) -> &jarvis_tools::ToolSpec {
