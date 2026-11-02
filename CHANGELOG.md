@@ -4,6 +4,11 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-11-02
+
+Interrupt JARVIS by talking over a spoken reply, Ukrainian voices that read
+English words, numbers and symbols, and restoring a vision model's projector.
+
 ### Added
 
 - Interrupt JARVIS by speaking: while it reads a reply to a voice request,
@@ -30,6 +35,8 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   Existing projectors can be replaced through the native file picker.
 - Downloaded projectors are checked against their recorded checksum before
   startup, so same-size corruption is refused before stopping a healthy server.
+- "Clear finished" no longer brings back an agent task whose run was still
+  saving its final journal after a journal or audit write error.
 - The hint for the subscription providers reads as one sentence: the sign-in
   command no longer stands on a line of its own.
 - Ukrainian voices no longer skip foreign words, numbers and symbols:
