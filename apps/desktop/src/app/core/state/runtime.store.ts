@@ -2,6 +2,7 @@ import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core'
 import type {
   CuratedModel,
   HardwareInfo,
+  LocalModel,
   ModelDownloadRequest,
   RuntimeBackend,
   RuntimeRelease,
@@ -42,6 +43,18 @@ function servedModelKey(server: ServerState): string | null {
   return server.phase === 'running'
     ? JSON.stringify([server.modelId, server.port, server.contextSize, server.vision, server.toolCalling])
     : null;
+}
+
+/** Catalog identity is independent of the local ID assigned on import/download. */
+export function matchesCuratedModel(local: LocalModel, curated: CuratedModel): boolean {
+  const source = local.source;
+  return (
+    source.kind === 'downloaded' &&
+    source.repo === curated.repo &&
+    source.file === curated.file &&
+    source.revision === curated.revision &&
+    local.sha256 === curated.sha256
+  );
 }
 
 /** State of the embedded llama.cpp runtime (Runtime screen). */
@@ -195,12 +208,49 @@ export class RuntimeStore {
 
   /** Lets the user pick a vision projector (mmproj) for a model. */
   attachProjector(modelId: string): Promise<boolean> {
+    if (this.isCuratedBusyForModel(modelId)) return Promise.resolve(false);
     return this.command(`model:${modelId}`, `Add vision to ${modelId}`, () => this.api.attachProjector(modelId));
   }
 
   downloadCurated(id: string): Promise<boolean> {
     if (this.isCuratedDownloading(id)) return Promise.resolve(false);
+    const model = this.curatedLibraryModel(id);
+    if (model && this.isPending(`model:${model.id}`)) return Promise.resolve(false);
     return this.command(`curated:${id}`, `Download ${id}`, () => this.api.downloadCuratedModel(id));
+  }
+
+  repairCurated(id: string): Promise<boolean> {
+    const pending = this.commands.get(`curated:${id}`);
+    if (pending) return pending;
+    const curated = this.curated().find((entry) => entry.id === id);
+    const model = this.curatedLibraryModel(id);
+    if (!curated?.projector || !model?.available || this.isPending(`model:${model.id}`) || this.isCuratedDownloading(id)) {
+      return Promise.resolve(false);
+    }
+    return this.command(`curated:${id}`, `Restore vision for ${curated.displayName}`, () => this.api.repairCuratedModel(id));
+  }
+
+  curatedLibraryModel(id: string): LocalModel | undefined {
+    const curated = this.curated().find((entry) => entry.id === id);
+    if (!curated) return undefined;
+    const matches = this.status()?.models.filter((local) => matchesCuratedModel(local, curated)) ?? [];
+    return matches.find((local) => local.available) ?? matches[0];
+  }
+
+  isCuratedBusyForModel(modelId: string): boolean {
+    const model = this.status()?.models.find((entry) => entry.id === modelId);
+    return (
+      !!model &&
+      this.curated().some(
+        (curated) =>
+          matchesCuratedModel(model, curated) &&
+          (this.isPending(`curated:${curated.id}`) || this.isCuratedDownloading(curated.id))
+      )
+    );
+  }
+
+  isModelPending(modelId: string): boolean {
+    return this.isPending(`model:${modelId}`) || this.isCuratedBusyForModel(modelId);
   }
 
   isCuratedDownloading(id: string): boolean {
@@ -226,10 +276,12 @@ export class RuntimeStore {
   }
 
   removeModel(id: string, deleteFile: boolean): Promise<boolean> {
+    if (this.isCuratedBusyForModel(id)) return Promise.resolve(false);
     return this.command(`model:${id}`, `Remove ${id}`, () => this.api.removeModel(id, deleteFile));
   }
 
   start(modelId: string, role: ServerRole): Promise<boolean> {
+    if (this.isCuratedBusyForModel(modelId)) return Promise.resolve(false);
     return this.command(`server:${role}`, `Start ${role} model`, () => this.api.startLocalModel(modelId, role));
   }
 

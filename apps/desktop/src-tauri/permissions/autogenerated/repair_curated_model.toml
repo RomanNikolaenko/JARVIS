@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-repair-curated-model"
+description = "Enables the repair_curated_model command without any pre-configured scope."
+commands.allow = ["repair_curated_model"]
+
+[[permission]]
+identifier = "deny-repair-curated-model"
+description = "Denies the repair_curated_model command without any pre-configured scope."
+commands.deny = ["repair_curated_model"]

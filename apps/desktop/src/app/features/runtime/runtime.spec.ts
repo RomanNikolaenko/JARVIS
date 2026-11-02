@@ -1,4 +1,5 @@
 import type {
+  CuratedModel,
   DownloadStatus,
   LocalModel,
   PoolingType,
@@ -180,8 +181,38 @@ function model(pooling: PoolingType | null): LocalModel {
   };
 }
 
+function visionCatalog(): CuratedModel {
+  return {
+    id: 'vision-model',
+    displayName: 'Catalog vision',
+    repo: 'owner/vision',
+    file: 'vision-model.gguf',
+    revision: 'pinned-commit',
+    sha256: 'ab'.repeat(32),
+    sizeBytes: 100,
+    license: 'MIT',
+    description: '',
+    role: 'chat',
+    projector: { file: 'mmproj.gguf', sha256: 'cd'.repeat(32), sizeBytes: 50 },
+  };
+}
+
+function visionModel(available: boolean, id = 'vision-model-2'): LocalModel {
+  const curated = visionCatalog();
+  return {
+    ...model(null),
+    id,
+    displayName: 'Vision model',
+    path: '/models/vision-model.gguf',
+    sizeBytes: curated.sizeBytes,
+    sha256: curated.sha256,
+    source: { kind: 'downloaded', repo: curated.repo, file: curated.file, revision: curated.revision },
+    projector: { path: '/models/mmproj.gguf', sizeBytes: 50, sha256: curated.projector!.sha256, available },
+  };
+}
+
 describe('Runtime model library', () => {
-  async function render(overrides: Partial<RuntimeStatus> = {}) {
+  async function render(overrides: Partial<RuntimeStatus> = {}, curated: CuratedModel[] = []) {
     const stopped: ServerState = {
       phase: 'stopped',
       modelId: null,
@@ -210,7 +241,7 @@ describe('Runtime model library', () => {
     const api = {
       getRuntimeStatus: vi.fn(async () => status),
       getHardwareInfo: vi.fn(async () => null),
-      listCuratedModels: vi.fn(async () => []),
+      listCuratedModels: vi.fn(async () => curated),
       checkRuntimeRelease: vi.fn(),
       installRuntime: vi.fn(),
       selectRuntimeBinary: vi.fn(),
@@ -219,6 +250,10 @@ describe('Runtime model library', () => {
       listAiModels: vi.fn(async () => []),
       getModelRoutes: vi.fn(async () => []),
       updateSettings: vi.fn(async (settings: Settings) => settings),
+      repairCuratedModel: vi.fn(async () => 'repair-job'),
+      downloadCuratedModel: vi.fn(async () => 'download-job'),
+      attachProjector: vi.fn(async (): Promise<LocalModel | null> => null),
+      removeModel: vi.fn(async (): Promise<void> => undefined),
     };
     TestBed.configureTestingModule({
       imports: [RuntimePage],
@@ -310,6 +345,188 @@ describe('Runtime model library', () => {
     expect(button, `${role}: ${label}`).toBeDefined();
     return button!;
   }
+
+  function action(element: ParentNode, label: string): HTMLButtonElement {
+    const button = [...element.querySelectorAll('button')].find((entry) => entry.textContent?.trim() === label);
+    expect(button, label).toBeDefined();
+    return button!;
+  }
+
+  it('restores missing catalog vision without an engine and keeps the selected local model ID', async () => {
+    const local = visionModel(false);
+    const { element, api, store } = await render({ models: [local] }, [visionCatalog()]);
+    const library = element.querySelector('.library')!;
+    expect(library.textContent).toContain('Vision projector missing or changed: /models/mmproj.gguf');
+    expect(library.textContent).toContain('Vision changes apply on the next start or restart.');
+    expect(action(library, 'Start').disabled).toBe(true);
+    expect(action(library, 'Change vision…').disabled).toBe(false);
+    expect(action(library, 'Restore vision').disabled).toBe(false);
+    const restore = action(element.querySelector('.catalog')!, 'Restore vision');
+    expect(restore.disabled).toBe(false);
+    restore.click();
+    await vi.waitFor(() => expect(api.repairCuratedModel).toHaveBeenCalledWith('vision-model'));
+    expect(api.downloadCuratedModel).not.toHaveBeenCalled();
+    expect(api.startLocalModel).not.toHaveBeenCalled();
+    expect(store.status()?.models[0]).toEqual(local);
+  });
+
+  it('keeps Start blocked for a missing chat projector but allows replacing its file', async () => {
+    const local = { ...visionModel(false), source: { kind: 'imported' as const } };
+    const { element, api } = await render({ ...serving('chat'), models: [local] });
+    const library = element.querySelector('.library')!;
+    expect(action(library, 'Start').disabled).toBe(true);
+    action(library, 'Change vision…').click();
+    await vi.waitFor(() => expect(api.attachProjector).toHaveBeenCalledWith(local.id));
+    expect(api.repairCuratedModel).not.toHaveBeenCalled();
+    expect(api.startLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('ignores an unused vision projector when starting an embedding model', async () => {
+    const local = { ...model('mean'), projector: visionModel(false).projector };
+    const { element, api } = await render({ ...serving('chat'), models: [local] });
+    const library = element.querySelector('.library')!;
+    expect(library.textContent).not.toContain('Vision projector missing');
+    expect(library.textContent).not.toContain('Change vision');
+    const start = action(library, 'Start embeddings');
+    expect(start.disabled).toBe(false);
+    start.click();
+    await vi.waitFor(() => expect(api.startLocalModel).toHaveBeenCalledWith(local.id, 'embeddings'));
+  });
+
+  it('downloads absent catalog weights instead of requesting projector-only recovery', async () => {
+    const local = { ...visionModel(false), available: false };
+    const { element, api } = await render({ models: [local] }, [visionCatalog()]);
+    expect(action(element.querySelector('.library')!, 'Restore vision').disabled).toBe(true);
+    const download = action(element.querySelector('.catalog')!, 'Download');
+    expect(download.disabled).toBe(false);
+    download.click();
+    await vi.waitFor(() => expect(api.downloadCuratedModel).toHaveBeenCalledWith('vision-model'));
+    expect(api.repairCuratedModel).not.toHaveBeenCalled();
+  });
+
+  it('uses source identity for suffixed models and never labels an imported lookalike Downloaded', async () => {
+    const local = visionModel(true);
+    const { element, api, store, fixture } = await render({ models: [local] }, [visionCatalog()]);
+    expect(action(element.querySelector('.catalog')!, 'Downloaded').disabled).toBe(true);
+    action(element.querySelector('.library')!, 'Restore vision').click();
+    await vi.waitFor(() => expect(api.repairCuratedModel).toHaveBeenCalledWith('vision-model'));
+    await vi.waitFor(() => expect(store.isPending('curated:vision-model')).toBe(false));
+    store.status.update((status) => ({ ...status!, models: [{ ...local, id: 'vision-model', source: { kind: 'imported' } }] }));
+    fixture.detectChanges();
+    expect(element.querySelector('.library')?.textContent).not.toContain('Restore vision');
+    const download = action(element.querySelector('.catalog')!, 'Download');
+    expect(download.disabled).toBe(false);
+    download.click();
+    await vi.waitFor(() => expect(api.downloadCuratedModel).toHaveBeenCalledWith('vision-model'));
+    expect(api.repairCuratedModel).toHaveBeenCalledOnce();
+  });
+
+  it('keeps vision recovery pending through the native job and enables Start only after the projector returns', async () => {
+    const local = visionModel(false);
+    const { element, api, store, fixture } = await render({ ...serving('chat'), models: [local] }, [visionCatalog()]);
+    let finish!: (job: string) => void;
+    api.repairCuratedModel.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      })
+    );
+    const restore = action(element.querySelector('.library')!, 'Restore vision');
+    restore.click();
+    restore.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    action(element.querySelector('.library')!, 'Change vision…').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(api.repairCuratedModel).toHaveBeenCalledOnce();
+    expect(api.attachProjector).not.toHaveBeenCalled();
+    api.getRuntimeStatus.mockResolvedValue({
+      ...store.status()!,
+      downloads: [
+        {
+          id: 'repair-job',
+          kind: 'model',
+          label: visionCatalog().displayName,
+          phase: 'verifying',
+          receivedBytes: 50,
+          totalBytes: 50,
+          bytesPerSecond: 0,
+          error: null,
+          startedAtMs: 1,
+        },
+      ],
+    });
+    finish('repair-job');
+    await vi.waitFor(() => expect(store.isPending('curated:vision-model')).toBe(false));
+    fixture.detectChanges();
+    expect(restore.disabled).toBe(true);
+    expect(action(element.querySelector('.library')!, 'Change vision…').disabled).toBe(true);
+    expect(action(element.querySelector('.library')!, 'Remove').disabled).toBe(true);
+    expect(action(element.querySelector('.library')!, 'Start').disabled).toBe(true);
+    expect(action(element.querySelector('.catalog')!, 'Downloading…').disabled).toBe(true);
+    store.status.update((status) => ({ ...status!, downloads: [], models: [visionModel(true)] }));
+    fixture.detectChanges();
+    expect(action(element.querySelector('.catalog')!, 'Downloaded').disabled).toBe(true);
+    expect(action(element.querySelector('.library')!, 'Start').disabled).toBe(false);
+    expect(api.startLocalModel).not.toHaveBeenCalled();
+  });
+
+  it.each(['source', 'projector', 'removed', 'status'] as const)(
+    'refuses a queued Restore vision click after %s changes',
+    async (change) => {
+      const local = visionModel(false);
+      const { element, api, store } = await render({ models: [local] }, [visionCatalog()]);
+      const restore = action(element.querySelector('.library')!, 'Restore vision');
+      if (change === 'status') store.statusError.set(new IpcError('unavailable', 'Status is stale'));
+      else
+        store.status.update((status) => ({
+          ...status!,
+          models:
+            change === 'removed'
+              ? []
+              : [
+                  {
+                    ...local,
+                    ...(change === 'source' ? { source: { kind: 'imported' as const } } : {}),
+                    ...(change === 'projector' ? { projector: { ...local.projector!, path: '/my/new-projector.gguf' } } : {}),
+                  },
+                ],
+        }));
+      restore.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(api.repairCuratedModel).not.toHaveBeenCalled();
+    }
+  );
+
+  it('retains a failed repair and its missing row for an explicit retry', async () => {
+    const local = visionModel(false);
+    const { element, api, store, fixture } = await render({ models: [local] }, [visionCatalog()]);
+    api.repairCuratedModel.mockRejectedValueOnce(new Error('Storage unavailable'));
+    action(element.querySelector('.library')!, 'Restore vision').click();
+    await vi.waitFor(() => expect(store.isPending('curated:vision-model')).toBe(false));
+    fixture.detectChanges();
+    expect(element.textContent).toContain('Storage unavailable');
+    expect(store.status()?.models[0]).toEqual(local);
+    action(element.querySelector('.library')!, 'Restore vision').click();
+    await vi.waitFor(() => expect(api.repairCuratedModel).toHaveBeenCalledTimes(2));
+    expect(api.startLocalModel).not.toHaveBeenCalled();
+  });
+
+  it('disables catalog recovery while a manual projector selection is pending', async () => {
+    const local = visionModel(false);
+    const { element, api, store, fixture } = await render({ models: [local] }, [visionCatalog()]);
+    let finish!: (projector: LocalModel | null) => void;
+    api.attachProjector.mockReturnValueOnce(
+      new Promise<LocalModel | null>((resolve) => {
+        finish = resolve;
+      })
+    );
+    const restore = action(element.querySelector('.catalog')!, 'Restore vision');
+    action(element.querySelector('.library')!, 'Change vision…').click();
+    fixture.detectChanges();
+    expect(restore.disabled).toBe(true);
+    restore.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(api.repairCuratedModel).not.toHaveBeenCalled();
+    finish(null);
+    await vi.waitFor(() => expect(store.isModelPending(local.id)).toBe(false));
+    fixture.detectChanges();
+    expect(restore.disabled).toBe(false);
+  });
 
   it.each(['chat', 'embeddings'] as const)('restarts only the running %s model on an explicit click', async (role) => {
     const { element, api } = await render(serving(role));

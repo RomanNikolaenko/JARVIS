@@ -279,6 +279,17 @@ files are reused only after size/hash verification. Final publication uses an
 exclusive hard link or exclusive file creation on other file systems, so a file
 appearing during transfer is never overwritten.
 
+Projector availability is computed from the file's presence and recorded size
+in library snapshots. Startup also verifies a downloaded projector's checksum
+before stopping the current server. Restore vision resolves the exact catalog
+source/checksum, reuses the registered weights and restores the default projector
+without overwriting existing files. A conflicting projector is preserved while
+a digest-specific or unique destination receives the verified replacement.
+Registration rechecks cancellation and attachment identity under the library
+write lock, so removal or a changed manual selection prevents a stale repair
+from replacing the recorded attachment. Restoration keeps the model ID and
+requires an explicit subsequent start/restart to use the new projector.
+
 ### 4.3 Chat orchestration (`jarvis-core::chat`)
 
 `ChatService::start(request, sink)`:
@@ -554,6 +565,7 @@ notification instead of blocking publishers.
 | `select_runtime_binary` | – (native picker in Rust) | `RuntimeBinary \| null` |
 | `import_model` | – (native picker in Rust) | `LocalModel \| null` |
 | `download_curated_model` / `download_model` | `id` / `request: ModelDownloadRequest` | download id |
+| `repair_curated_model` | `id` (installed catalog vision model) | download id |
 | `cancel_download` | `id` | `boolean` |
 | `remove_model` | `id`, `deleteFile` | – |
 | `start_local_model` / `stop_local_model` | `modelId` / – | – |

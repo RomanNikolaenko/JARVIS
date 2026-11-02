@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{Result, RuntimeError};
 use crate::gguf;
@@ -146,6 +147,10 @@ impl ModelLibrary {
             .map(|mut model| {
                 model.available = std::fs::metadata(&model.path)
                     .is_ok_and(|meta| meta.is_file() && meta.len() == model.size_bytes);
+                if let Some(projector) = &mut model.projector {
+                    projector.available = std::fs::metadata(&projector.path)
+                        .is_ok_and(|meta| meta.is_file() && meta.len() == projector.size_bytes);
+                }
                 model
             })
             .collect()
@@ -235,6 +240,56 @@ impl ModelLibrary {
         self.commit(models).await?;
         self.get(id)
             .ok_or_else(|| RuntimeError::NotFound(format!("model \"{id}\" is not in the library")))
+    }
+
+    /// A transfer must not replace a projector the user changed while it ran.
+    pub(crate) async fn set_projector_if_unchanged(
+        &self,
+        expected: &LocalModel,
+        projector: ProjectorFile,
+        cancel: &CancellationToken,
+    ) -> Result<LocalModel> {
+        let _guard = self.write_lock.lock().await;
+        if cancel.is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
+        let mut models = self.snapshot();
+        let model = models
+            .iter_mut()
+            .find(|model| model.id == expected.id)
+            .ok_or_else(|| {
+                RuntimeError::NotFound(format!(
+                    "model \"{}\" is no longer in the library",
+                    expected.id
+                ))
+            })?;
+        let projector_identity = |value: &Option<ProjectorFile>| {
+            value.as_ref().map(|projector| {
+                (
+                    projector.path.clone(),
+                    projector.size_bytes,
+                    projector.sha256.clone(),
+                )
+            })
+        };
+        if model.path != expected.path
+            || model.source != expected.source
+            || model.sha256 != expected.sha256
+            || model.added_at_ms != expected.added_at_ms
+            || projector_identity(&model.projector) != projector_identity(&expected.projector)
+        {
+            return Err(RuntimeError::InvalidInput(
+                "The model or its vision projector changed during the transfer; retry using the current model.".into(),
+            ));
+        }
+        model.projector = Some(projector);
+        self.commit(models).await?;
+        self.get(&expected.id).ok_or_else(|| {
+            RuntimeError::NotFound(format!(
+                "model \"{}\" is no longer in the library",
+                expected.id
+            ))
+        })
     }
 
     /// Removes a model from the library. The file is deleted only when
@@ -510,6 +565,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn projector_availability_tracks_files_and_legacy_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let library = ModelLibrary::load(dir.path().join("models"))
+            .await
+            .expect("library");
+        let path = library.download_path("model.gguf");
+        std::fs::write(&path, sample_gguf(&[])).expect("weights");
+        let model = library.import(&path).await.expect("model");
+        let projector_path = library.download_path("mmproj.gguf");
+        let projector: ProjectorFile = serde_json::from_value(serde_json::json!({
+            "path": projector_path.display().to_string(), "sizeBytes": 9, "sha256": null
+        }))
+        .expect("old record without availability");
+        assert!(!projector.available);
+        library
+            .set_projector(&model.id, Some(projector))
+            .await
+            .expect("projector record");
+        assert!(
+            !library
+                .get(&model.id)
+                .expect("model")
+                .projector
+                .expect("projector")
+                .available
+        );
+        for bytes in [
+            b"too small".as_slice(),
+            b"x".as_slice(),
+            b"projector".as_slice(),
+        ] {
+            std::fs::write(&projector_path, bytes).expect("projector");
+            let listed = library.get(&model.id).expect("model");
+            assert!(listed.available);
+            assert_eq!(
+                listed.projector.expect("projector").available,
+                bytes.len() == 9
+            );
+        }
+        std::fs::remove_file(projector_path).expect("remove projector");
+        assert!(
+            !library
+                .get(&model.id)
+                .expect("model")
+                .projector
+                .expect("projector")
+                .available
+        );
+        assert!(library.get(&model.id).expect("model").available);
+    }
+
+    #[tokio::test]
+    async fn an_old_repair_cannot_replace_a_new_projector_or_a_removed_model() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let library = ModelLibrary::load(dir.path().join("models"))
+            .await
+            .expect("library");
+        let path = library.download_path("model.gguf");
+        std::fs::write(&path, sample_gguf(&[])).expect("weights");
+        let original = library.import(&path).await.expect("model");
+        let projector = ProjectorFile {
+            path: "new-projector.gguf".into(),
+            size_bytes: 9,
+            sha256: None,
+            available: false,
+        };
+        library
+            .set_projector(&original.id, Some(projector.clone()))
+            .await
+            .expect("newer choice");
+        let current = library.list();
+        let error = library
+            .set_projector_if_unchanged(&original, projector.clone(), &CancellationToken::new())
+            .await
+            .expect_err("stale repair");
+        assert!(matches!(error, RuntimeError::InvalidInput(_)));
+        assert_unchanged(&library, &current).await;
+        let current = library.get(&original.id).expect("model");
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            library
+                .set_projector_if_unchanged(&current, projector.clone(), &cancelled)
+                .await,
+            Err(RuntimeError::Cancelled)
+        ));
+        assert_unchanged(&library, &[current]).await;
+        library
+            .remove(&original.id, false)
+            .await
+            .expect("removed model");
+        assert!(matches!(
+            library
+                .set_projector_if_unchanged(&original, projector, &CancellationToken::new())
+                .await,
+            Err(RuntimeError::NotFound(_))
+        ));
+        assert_unchanged(&library, &[]).await;
+    }
+
+    #[tokio::test]
     async fn failed_import_does_not_publish_a_model_and_can_be_retried() {
         let dir = tempfile::tempdir().expect("tempdir");
         let library = ModelLibrary::load(dir.path().join("models"))
@@ -555,6 +711,7 @@ mod tests {
                     path: "original-projector.gguf".into(),
                     size_bytes: 123,
                     sha256: Some("22".repeat(32)),
+                    available: false,
                 }),
             )
             .await
@@ -663,6 +820,7 @@ mod tests {
                     path: "vision.gguf".into(),
                     size_bytes: 123,
                     sha256: None,
+                    available: false,
                 }),
             )
             .await
@@ -695,6 +853,7 @@ mod tests {
                 path: "vision.gguf".into(),
                 size_bytes: 123,
                 sha256: None,
+                available: false,
             }),
             None,
         ] {
@@ -740,6 +899,7 @@ mod tests {
                         path: projector.display().to_string(),
                         size_bytes: 9,
                         sha256: None,
+                        available: true,
                     }),
                 )
                 .await

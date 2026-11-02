@@ -353,6 +353,9 @@
                 @if (!model.available) {
                   <div class="error-text">File missing or changed: {{ model.path }}</div>
                 }
+                @if (model.projector && !model.projector.available && !isEmbeddingModel(model)) {
+                  <div class="error-text" role="status">Vision projector missing or changed: {{ model.projector.path }}</div>
+                }
               </td>
               <td class="dim">
                 {{ model.gguf.architecture ?? '?' }}
@@ -375,62 +378,77 @@
               </td>
               <td class="num mono">{{ formatBytes(model.sizeBytes) }}</td>
               <td class="actions-cell">
-                @if (confirmingRemoval() === model.id) {
-                  <button
-                    type="button"
-                    class="ghost small"
-                    (click)="remove(model, false)"
-                    [disabled]="store.isPending('model:' + model.id)">
-                    Remove from list
-                  </button>
-                  @if (model.managed) {
-                    <button
-                      type="button"
-                      class="danger small"
-                      (click)="remove(model, true)"
-                      [disabled]="store.isPending('model:' + model.id)">
-                      Delete file
-                    </button>
-                  }
-                  <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">Cancel</button>
-                } @else {
-                  <button
-                    type="button"
-                    class="primary small"
-                    (click)="store.start(model.id, roleOf(model))"
-                    [disabled]="!canStart(model)"
-                    [title]="
-                      !store.installed()
-                        ? 'Install the engine first'
-                        : roleOf(model) === 'embeddings'
-                          ? 'Serve it for semantic memory search, next to the chat model'
-                          : ''
-                    ">
-                    {{ roleOf(model) === 'embeddings' ? 'Start embeddings' : 'Start' }}
-                  </button>
-                  @if (!model.projector && !isEmbeddingModel(model)) {
+                <div class="model-actions">
+                  @if (confirmingRemoval() === model.id) {
                     <button
                       type="button"
                       class="ghost small"
-                      (click)="store.attachProjector(model.id)"
-                      [disabled]="store.isPending('model:' + model.id)"
-                      title="Add the model's vision projector (mmproj GGUF) so it can see images">
-                      Add vision
+                      (click)="remove(model, false)"
+                      [disabled]="store.isModelPending(model.id)">
+                      Remove from list
+                    </button>
+                    @if (model.managed) {
+                      <button
+                        type="button"
+                        class="danger small"
+                        (click)="remove(model, true)"
+                        [disabled]="store.isModelPending(model.id)">
+                        Delete file
+                      </button>
+                    }
+                    <button type="button" class="ghost small" (click)="confirmingRemoval.set(null)">Cancel</button>
+                  } @else {
+                    <button
+                      type="button"
+                      class="primary small"
+                      (click)="start(model)"
+                      [disabled]="!canStart(model)"
+                      [title]="
+                        !store.installed()
+                          ? 'Install the engine first'
+                          : roleOf(model) === 'embeddings'
+                            ? 'Serve it for semantic memory search, next to the chat model'
+                            : ''
+                      ">
+                      {{ roleOf(model) === 'embeddings' ? 'Start embeddings' : 'Start' }}
+                    </button>
+                    @if (!isEmbeddingModel(model)) {
+                      <button
+                        type="button"
+                        class="ghost small"
+                        (click)="changeVision(model)"
+                        [disabled]="store.isModelPending(model.id) || !!store.statusError()"
+                        title="Choose a vision projector (mmproj GGUF); start or restart the model to apply it">
+                        {{ model.projector ? 'Change vision…' : 'Add vision' }}
+                      </button>
+                      @if (curatedForModel(model)) {
+                        <button
+                          type="button"
+                          class="ghost small"
+                          (click)="restoreVision(model)"
+                          [disabled]="!canRestoreVision(model)"
+                          title="Restore the catalog vision projector without overwriting existing files; start or restart the model to apply it">
+                          Restore vision
+                        </button>
+                      }
+                    }
+                    <button
+                      type="button"
+                      class="ghost small"
+                      (click)="confirmingRemoval.set(model.id)"
+                      [disabled]="store.isModelPending(model.id)">
+                      Remove
                     </button>
                   }
-                  <button
-                    type="button"
-                    class="ghost small"
-                    (click)="confirmingRemoval.set(model.id)"
-                    [disabled]="store.isPending('model:' + model.id)">
-                    Remove
-                  </button>
-                }
+                </div>
               </td>
             </tr>
           }
         </tbody>
       </table>
+      @if (chatModels().length) {
+        <p class="hint">Vision changes apply on the next start or restart.</p>
+      }
     } @else {
       <p class="dim">No models yet. Import a GGUF file or download one below.</p>
     }
@@ -493,11 +511,17 @@
           <button
             type="button"
             class="small"
-            (click)="store.downloadCurated(model.id)"
-            [disabled]="
-              isCuratedPresent(model.id) || store.isPending('curated:' + model.id) || store.isCuratedDownloading(model.id)
-            ">
-            {{ isCuratedPresent(model.id) ? 'Downloaded' : store.isCuratedDownloading(model.id) ? 'Downloading…' : 'Download' }}
+            (click)="downloadFromCatalog(model)"
+            [disabled]="isCuratedPresent(model.id) || catalogPending(model.id)">
+            {{
+              store.isCuratedDownloading(model.id)
+                ? 'Downloading…'
+                : isCuratedPresent(model.id)
+                  ? 'Downloaded'
+                  : catalogNeedsVision(model.id)
+                    ? 'Restore vision'
+                    : 'Download'
+            }}
           </button>
         </li>
       }

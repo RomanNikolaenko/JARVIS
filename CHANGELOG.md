@@ -13,6 +13,9 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   does not interrupt itself; it works best with headphones. The setting
   "Interrupt JARVIS by speaking" in Settings → Voice is on by default and
   the microphone indicator stays on while the reply plays.
+- Runtime can restore the catalog vision projector for an installed model.
+  Verified weights are reused, existing files are preserved and restored files
+  are registered without changing the model ID or restarting its server.
 
 ### Changed
 
@@ -22,6 +25,11 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Fixed
 
+- Missing or size-changed vision projectors are shown in the model library.
+  They block chat startup and no longer leave the catalog stuck on Downloaded.
+  Existing projectors can be replaced through the native file picker.
+- Downloaded projectors are checked against their recorded checksum before
+  startup, so same-size corruption is refused before stopping a healthy server.
 - The hint for the subscription providers reads as one sentence: the sign-in
   command no longer stands on a line of its own.
 - Ukrainian voices no longer skip foreign words, numbers and symbols:

@@ -196,6 +196,9 @@ pub struct ProjectorFile {
     pub size_bytes: u64,
     /// Verified SHA-256 (downloaded projectors only).
     pub sha256: Option<String>,
+    /// The file exists and has the recorded size (computed when listing).
+    #[serde(default)]
+    pub available: bool,
 }
 
 /// An additional file of a curated model (same repository and revision).

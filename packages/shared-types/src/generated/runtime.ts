@@ -113,7 +113,11 @@ export type ProjectorFile = { path: string, sizeBytes: number,
 /**
  * Verified SHA-256 (downloaded projectors only).
  */
-sha256: string | null, };
+sha256: string | null, 
+/**
+ * The file exists and has the recorded size (computed when listing).
+ */
+available: boolean, };
 
 /**
  * Compute backend of a llama.cpp build.

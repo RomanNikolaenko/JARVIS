@@ -253,11 +253,14 @@
 
 .actions-cell {
   text-align: right;
-  white-space: nowrap;
+}
 
-  button + button {
-    margin-left: 4px;
-  }
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 12rem;
 }
 
 .curated {

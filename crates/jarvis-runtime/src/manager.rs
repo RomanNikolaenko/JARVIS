@@ -500,6 +500,7 @@ impl RuntimeManager {
                     path: path.display().to_string(),
                     size_bytes,
                     sha256: None,
+                    available: true,
                 }),
             )
             .await?;
@@ -538,6 +539,45 @@ impl RuntimeManager {
         let resolved = catalog::resolve(&self.client, &request).await?;
         let label = format!("{} / {}", resolved.repo, resolved.file);
         self.start_download(resolved, label, None).await
+    }
+
+    /// Verifies and restores the catalog's projector without replacing the
+    /// model's weights, identity or files already present on disk.
+    pub async fn repair_curated(self: &Arc<Self>, id: &str) -> Result<String> {
+        let curated = catalog::curated_models()
+            .into_iter()
+            .find(|model| model.id == id)
+            .ok_or_else(|| RuntimeError::NotFound(format!("unknown catalog model \"{id}\"")))?;
+        let projector = curated.projector.as_ref().ok_or_else(|| {
+            RuntimeError::InvalidInput(
+                "This catalog model has no vision projector to restore.".into(),
+            )
+        })?;
+        let resolved = ResolvedFile::from_curated(&curated)?;
+        let projector = ResolvedFile::from_curated_projector(&curated, projector)?;
+        self.repair_resolved(resolved, curated.display_name, projector)
+            .await
+    }
+
+    async fn repair_resolved(
+        self: &Arc<Self>,
+        resolved: ResolvedFile,
+        label: String,
+        projector: ResolvedFile,
+    ) -> Result<String> {
+        let source = ModelSource::Downloaded {
+            repo: resolved.repo.clone(),
+            file: resolved.file.clone(),
+            revision: resolved.revision.clone(),
+        };
+        let model = self.library.list().into_iter().find(|model| {
+            model.source == source && model.sha256.as_deref() == Some(&resolved.expected.sha256)
+                && model.available
+        }).ok_or_else(|| RuntimeError::InvalidInput(
+            "Download this catalog model's original weights before restoring its vision projector.".into(),
+        ))?;
+        let dest = PathBuf::from(&model.path);
+        self.begin_transfer(resolved, label, Some(projector), dest, Some(model))
     }
 
     async fn start_download(
@@ -586,13 +626,36 @@ impl RuntimeManager {
             Path::new(&m.path) == dest.as_path()
                 && m.available
                 && m.sha256.as_deref() == Some(&resolved.expected.sha256)
-                && (projector.is_none() || m.projector.is_some())
+                && (projector.is_none()
+                    || m.projector
+                        .as_ref()
+                        .is_some_and(|projector| projector.available))
         });
         if already {
             return Err(RuntimeError::InvalidInput(format!(
                 "{label} is already downloaded"
             )));
         }
+        self.begin_transfer(resolved, label, projector, dest, None)
+    }
+
+    fn begin_transfer(
+        self: &Arc<Self>,
+        resolved: ResolvedFile,
+        label: String,
+        projector: Option<ResolvedFile>,
+        dest: PathBuf,
+        existing: Option<LocalModel>,
+    ) -> Result<String> {
+        download::check_source(&resolved.url)?;
+        if let Some(projector) = &projector {
+            download::check_source(&projector.url)?;
+        }
+        let source = ModelSource::Downloaded {
+            repo: resolved.repo.clone(),
+            file: resolved.file.clone(),
+            revision: resolved.revision.clone(),
+        };
         let handle = self.downloads.begin_model(label.clone(), dest.clone())?;
         let id = handle.id().to_owned();
         let this = Arc::clone(self);
@@ -606,18 +669,21 @@ impl RuntimeManager {
                     &handle,
                 )
                 .await?;
-                let model = this
-                    .library
-                    .add_downloaded(dest.clone(), source, resolved.expected.sha256.clone())
-                    .await?;
+                let model = match existing {
+                    // Repair never recreates an entry removed while it ran.
+                    Some(model) => model,
+                    None => {
+                        this.library
+                            .add_downloaded(dest.clone(), source, resolved.expected.sha256.clone())
+                            .await?
+                    }
+                };
                 let Some(projector) = projector else {
                     return Ok(model);
                 };
-                // Generic projector names (mmproj-model-f16.gguf) would
-                // collide between models.
-                let projector_dest =
-                    this.library
-                        .download_path(&format!("{}.{}", model.id, projector.file_name()));
+                let projector_dest = this
+                    .projector_destination(&model, &projector, handle.cancel_token())
+                    .await?;
                 download::fetch_verified(
                     &this.client,
                     &projector.url,
@@ -627,13 +693,15 @@ impl RuntimeManager {
                 )
                 .await?;
                 this.library
-                    .set_projector(
-                        &model.id,
-                        Some(ProjectorFile {
+                    .set_projector_if_unchanged(
+                        &model,
+                        ProjectorFile {
                             path: projector_dest.display().to_string(),
                             size_bytes: projector.expected.size.unwrap_or_default(),
                             sha256: Some(projector.expected.sha256.clone()),
-                        }),
+                            available: true,
+                        },
+                        handle.cancel_token(),
                     )
                     .await
             }
@@ -661,6 +729,69 @@ impl RuntimeManager {
             handle.finish(&result.map(|_| ()));
         });
         Ok(id)
+    }
+
+    async fn projector_destination(
+        &self,
+        model: &LocalModel,
+        projector: &ResolvedFile,
+        cancel: &CancellationToken,
+    ) -> Result<PathBuf> {
+        if cancel.is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
+        if !library::is_valid_model_id(&model.id) {
+            return Err(RuntimeError::InvalidInput(
+                "The saved model has an invalid ID; remove its library entry and import it again."
+                    .into(),
+            ));
+        }
+        if let Some(current) = &model.projector {
+            let path = PathBuf::from(&current.path);
+            if projector_matches(&path, &projector.expected, cancel).await? {
+                return Ok(path);
+            }
+        }
+        let names = [
+            format!("{}.{}", model.id, projector.file_name()),
+            format!(
+                "{}.{}.{}",
+                model.id,
+                projector.expected.sha256,
+                projector.file_name()
+            ),
+        ];
+        for name in names {
+            let path = self.library.download_path(&name);
+            if projector_destination_free(&path).await?
+                || projector_matches(&path, &projector.expected, cancel).await?
+            {
+                return Ok(path);
+            }
+        }
+        // Preserve even a conflicting repair file; a fresh destination is
+        // cheaper than destroying bytes the user may still need to inspect.
+        let digest_prefix: String = projector.expected.sha256.chars().take(16).collect();
+        for attempt in 2..=1024 {
+            if cancel.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
+            let path = self.library.download_path(&format!(
+                "{}.{}.repair-{attempt}.{}",
+                model.id,
+                digest_prefix,
+                projector.file_name()
+            ));
+            if projector_destination_free(&path).await?
+                || projector_matches(&path, &projector.expected, cancel).await?
+            {
+                return Ok(path);
+            }
+        }
+        Err(RuntimeError::InvalidInput(
+            "Too many conflicting projector files; move unused repair files before retrying."
+                .into(),
+        ))
     }
 
     pub fn cancel_download(&self, id: &str) -> bool {
@@ -718,6 +849,16 @@ impl RuntimeManager {
                         "the vision projector of \"{}\" is missing or changed: {}",
                         model.display_name, projector.path
                     )));
+                }
+                if let Some(expected) = &projector.sha256 {
+                    let actual = download::sha256_file(Path::new(&projector.path)).await?;
+                    if !actual.eq_ignore_ascii_case(expected) {
+                        return Err(RuntimeError::IntegrityMismatch {
+                            file: projector.path.clone(),
+                            expected: expected.clone(),
+                            actual,
+                        });
+                    }
                 }
                 Some(projector.clone())
             }
@@ -1061,6 +1202,37 @@ impl RuntimeManager {
     }
 }
 
+async fn projector_destination_free(path: &Path) -> Result<bool> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(_) => Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(RuntimeError::io("checking the projector destination", err)),
+    }
+}
+
+async fn projector_matches(
+    path: &Path,
+    expected: &Expected,
+    cancel: &CancellationToken,
+) -> Result<bool> {
+    if cancel.is_cancelled() {
+        return Err(RuntimeError::Cancelled);
+    }
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(RuntimeError::io("checking the vision projector", err)),
+    };
+    if !metadata.file_type().is_file() || expected.size.is_some_and(|size| metadata.len() != size) {
+        return Ok(false);
+    }
+    let actual = tokio::select! {
+        () = cancel.cancelled() => return Err(RuntimeError::Cancelled),
+        result = download::sha256_file(path) => result?,
+    };
+    Ok(actual.eq_ignore_ascii_case(&expected.sha256))
+}
+
 fn same_download_path(left: &Path, right: &Path) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -1208,6 +1380,397 @@ mod tests {
     use jarvis_platform::{CpuFeatures, GpuInfo, GpuVendor};
     use sha2::{Digest, Sha256};
 
+    async fn repair_fixture() -> (
+        tempfile::TempDir,
+        Arc<RuntimeManager>,
+        LocalModel,
+        ResolvedFile,
+        ResolvedFile,
+        Vec<u8>,
+    ) {
+        let dir = tempfile::tempdir().expect("temporary runtime");
+        let mut manager = RuntimeManager::new(RuntimeOptions {
+            data_dir: dir.path().to_path_buf(),
+            events: EventBus::default(),
+            ai_http: Arc::new(HttpClient::new()),
+            command_factory: None,
+        })
+        .await
+        .expect("runtime");
+        // If a regression attempts HTTP instead of reusing the seeded files,
+        // it can only reach loopback and fails quickly; no real model is fetched.
+        Arc::get_mut(&mut manager).expect("unique runtime").client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("huggingface.co", "127.0.0.1:0".parse().expect("loopback"))
+            .connect_timeout(Duration::from_millis(100))
+            .timeout(Duration::from_millis(200))
+            .build()
+            .expect("offline client");
+        let weights = crate::testing::fake_gguf_bytes();
+        let imported = dir.path().join("vision-model.gguf");
+        tokio::fs::write(&imported, &weights)
+            .await
+            .expect("existing imported name");
+        manager
+            .library
+            .import(&imported)
+            .await
+            .expect("reserve original id");
+        let path = manager.library.download_path("vision-model.gguf");
+        tokio::fs::write(&path, &weights)
+            .await
+            .expect("downloaded weights");
+        let source = ModelSource::Downloaded {
+            repo: "owner/vision".into(),
+            file: "vision-model.gguf".into(),
+            revision: "pinned-revision".into(),
+        };
+        let digest = download::hex(&Sha256::digest(&weights));
+        let model = manager
+            .library
+            .add_downloaded(path, source, digest.clone())
+            .await
+            .expect("downloaded model");
+        assert_eq!(model.id, "vision-model-2");
+        let resolved = ResolvedFile {
+            repo: "owner/vision".into(),
+            file: "vision-model.gguf".into(),
+            revision: "pinned-revision".into(),
+            url: url::Url::parse(
+                "https://huggingface.co:0/owner/vision/resolve/pinned-revision/vision-model.gguf",
+            )
+            .expect("source"),
+            expected: Expected {
+                sha256: digest,
+                size: Some(weights.len() as u64),
+            },
+        };
+        let bytes = crate::testing::fake_projector_gguf_bytes();
+        let projector = ResolvedFile {
+            repo: "owner/vision".into(),
+            file: "mmproj.gguf".into(),
+            revision: "pinned-revision".into(),
+            url: url::Url::parse(
+                "https://huggingface.co:0/owner/vision/resolve/pinned-revision/mmproj.gguf",
+            )
+            .expect("source"),
+            expected: Expected {
+                sha256: download::hex(&Sha256::digest(&bytes)),
+                size: Some(bytes.len() as u64),
+            },
+        };
+        (dir, manager, model, resolved, projector, bytes)
+    }
+
+    async fn finished_download(manager: &RuntimeManager, id: &str) -> crate::types::DownloadStatus {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = manager
+                    .downloads
+                    .snapshot()
+                    .into_iter()
+                    .find(|status| status.id == id)
+                    .expect("download");
+                if status.phase.is_finished() {
+                    return status;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("offline repair finishes")
+    }
+
+    #[tokio::test]
+    async fn repair_reuses_verified_files_and_preserves_the_base_identity_and_old_projectors() {
+        for issue in ["missing", "size", "checksum", "custom", "occupied repair"] {
+            let (dir, manager, model, resolved, projector, bytes) = repair_fixture().await;
+            let primary =
+                manager
+                    .library
+                    .download_path(&format!("{}.{}", model.id, projector.file_name()));
+            let alternate = manager.library.download_path(&format!(
+                "{}.{}.{}",
+                model.id,
+                projector.expected.sha256,
+                projector.file_name()
+            ));
+            let old = if issue == "missing" || issue == "custom" {
+                dir.path().join("user.mmproj.gguf")
+            } else {
+                primary.clone()
+            };
+            let previous_bytes = if issue == "missing" {
+                None
+            } else {
+                let old_bytes = if issue == "size" {
+                    b"short".to_vec()
+                } else {
+                    vec![42; bytes.len()]
+                };
+                tokio::fs::write(&old, &old_bytes)
+                    .await
+                    .expect("old projector");
+                Some(old_bytes)
+            };
+            let old_size = if issue == "custom" {
+                previous_bytes.as_ref().expect("custom").len() as u64
+            } else {
+                bytes.len() as u64
+            };
+            manager
+                .library
+                .set_projector(
+                    &model.id,
+                    Some(ProjectorFile {
+                        path: old.display().to_string(),
+                        size_bytes: old_size,
+                        sha256: (issue != "custom").then(|| projector.expected.sha256.clone()),
+                        available: false,
+                    }),
+                )
+                .await
+                .expect("old projector record");
+            let expected_target = if issue == "missing" || issue == "custom" {
+                primary.clone()
+            } else if issue == "occupied repair" {
+                tokio::fs::write(&alternate, b"keep conflicting repair file")
+                    .await
+                    .expect("occupied repair");
+                manager.library.download_path(&format!(
+                    "{}.{}.repair-2.{}",
+                    model.id,
+                    &projector.expected.sha256[..16],
+                    projector.file_name()
+                ))
+            } else {
+                alternate.clone()
+            };
+            tokio::fs::write(&expected_target, &bytes)
+                .await
+                .expect("verified staged projector");
+            let before = manager.library.get(&model.id).expect("model");
+            let weights = tokio::fs::read(&model.path).await.expect("weights");
+            let id = manager
+                .repair_resolved(resolved, "Vision model".into(), projector.clone())
+                .await
+                .expect("repair starts");
+            let download = finished_download(&manager, &id).await;
+            assert_eq!(
+                download.phase,
+                DownloadPhase::Completed,
+                "{issue}: {:?}",
+                download.error
+            );
+            let after = manager.library.get(&model.id).expect("same model");
+            assert_eq!(after.id, before.id);
+            assert_eq!(after.path, before.path);
+            assert_eq!(after.source, before.source);
+            assert_eq!(after.added_at_ms, before.added_at_ms);
+            assert_eq!(
+                tokio::fs::read(&model.path).await.expect("weights"),
+                weights
+            );
+            let restored = after.projector.expect("restored projector");
+            assert!(restored.available);
+            assert_eq!(restored.path, expected_target.display().to_string());
+            assert_eq!(
+                restored.sha256.as_deref(),
+                Some(projector.expected.sha256.as_str())
+            );
+            assert_eq!(
+                tokio::fs::read(&expected_target)
+                    .await
+                    .expect("new projector"),
+                bytes
+            );
+            if let Some(previous_bytes) = previous_bytes {
+                assert_eq!(
+                    tokio::fs::read(&old).await.expect("old file preserved"),
+                    previous_bytes
+                );
+            }
+            if issue == "occupied repair" {
+                assert_eq!(
+                    tokio::fs::read(&alternate)
+                        .await
+                        .expect("conflict preserved"),
+                    b"keep conflicting repair file"
+                );
+            }
+            assert_eq!(
+                manager.server_state(ServerRole::Chat).phase,
+                ServerPhase::Stopped
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_refuses_other_sources_missing_weights_and_nonvision_catalog_entries() {
+        let (_dir, manager, model, mut resolved, projector, _bytes) = repair_fixture().await;
+        resolved.revision = "different-revision".into();
+        assert!(
+            manager
+                .repair_resolved(resolved.clone(), "Other revision".into(), projector.clone())
+                .await
+                .is_err()
+        );
+        resolved.revision = "pinned-revision".into();
+        tokio::fs::remove_file(&model.path)
+            .await
+            .expect("missing weights");
+        assert!(
+            manager
+                .repair_resolved(resolved, "Missing weights".into(), projector)
+                .await
+                .is_err()
+        );
+        assert!(
+            manager
+                .repair_curated("qwen2.5-0.5b-instruct-q4_k_m")
+                .await
+                .is_err()
+        );
+        assert!(manager.repair_curated("unknown").await.is_err());
+        assert!(manager.downloads.snapshot().is_empty());
+        assert_eq!(manager.library.list().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn projector_planning_refuses_path_components_in_a_saved_model_id() {
+        let (_dir, manager, mut model, _resolved, projector, _bytes) = repair_fixture().await;
+        let mut before = tokio::fs::read_dir(manager.library.dir())
+            .await
+            .expect("model folder");
+        let mut original = Vec::new();
+        while let Some(entry) = before.next_entry().await.expect("entry") {
+            original.push(entry.file_name());
+        }
+        original.sort();
+        for id in ["../escape", "..\\escape", "/absolute", "bad id"] {
+            model.id = id.into();
+            let error = manager
+                .projector_destination(&model, &projector, &CancellationToken::new())
+                .await
+                .expect_err("invalid model id");
+            assert!(
+                matches!(error, RuntimeError::InvalidInput(_)),
+                "{id}: {error}"
+            );
+        }
+        let mut after = tokio::fs::read_dir(manager.library.dir())
+            .await
+            .expect("model folder");
+        let mut current = Vec::new();
+        while let Some(entry) = after.next_entry().await.expect("entry") {
+            current.push(entry.file_name());
+        }
+        current.sort();
+        assert_eq!(current, original);
+    }
+
+    #[tokio::test]
+    async fn downloading_again_can_finish_an_incomplete_vision_model() {
+        let (_dir, manager, model, resolved, projector, bytes) = repair_fixture().await;
+        manager
+            .library
+            .set_projector(
+                &model.id,
+                Some(ProjectorFile {
+                    path: manager
+                        .library
+                        .download_path("missing.mmproj.gguf")
+                        .display()
+                        .to_string(),
+                    size_bytes: bytes.len() as u64,
+                    sha256: Some(projector.expected.sha256.clone()),
+                    available: false,
+                }),
+            )
+            .await
+            .expect("incomplete model");
+        let target =
+            manager
+                .library
+                .download_path(&format!("{}.{}", model.id, projector.file_name()));
+        tokio::fs::write(&target, &bytes)
+            .await
+            .expect("verified projector");
+        let id = manager
+            .start_download(
+                resolved.clone(),
+                "Vision model".into(),
+                Some(projector.clone()),
+            )
+            .await
+            .expect("retry allowed");
+        assert_eq!(
+            finished_download(&manager, &id).await.phase,
+            DownloadPhase::Completed
+        );
+        assert_eq!(
+            manager
+                .library
+                .get(&model.id)
+                .expect("same model")
+                .projector
+                .expect("projector")
+                .path,
+            target.display().to_string()
+        );
+        let error = manager
+            .start_download(resolved, "Vision model".into(), Some(projector))
+            .await
+            .expect_err("complete model is already downloaded");
+        assert!(error.to_string().contains("already downloaded"));
+        assert_eq!(manager.downloads.snapshot().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_repair_index_write_or_cancellation_does_not_change_projector_metadata() {
+        for cancel in [false, true] {
+            let (_dir, manager, model, resolved, projector, bytes) = repair_fixture().await;
+            let primary =
+                manager
+                    .library
+                    .download_path(&format!("{}.{}", model.id, projector.file_name()));
+            tokio::fs::write(&primary, &bytes)
+                .await
+                .expect("verified projector");
+            let before = manager.library.get(&model.id).expect("model");
+            let weights = tokio::fs::read(&model.path).await.expect("weights");
+            if !cancel {
+                tokio::fs::create_dir(manager.library.dir().join("library.json.tmp"))
+                    .await
+                    .expect("blocked index");
+            }
+            let id = manager
+                .repair_resolved(resolved, "Repair".into(), projector)
+                .await
+                .expect("repair");
+            if cancel {
+                // This current-thread test has not yielded to the spawned
+                // worker yet, so cancellation precedes its first file read.
+                assert!(manager.cancel_download(&id));
+            }
+            let download = finished_download(&manager, &id).await;
+            assert_eq!(
+                download.phase,
+                if cancel {
+                    DownloadPhase::Cancelled
+                } else {
+                    DownloadPhase::Failed
+                }
+            );
+            assert_eq!(manager.library.get(&model.id).expect("model"), before);
+            assert_eq!(
+                tokio::fs::read(&model.path).await.expect("weights"),
+                weights
+            );
+            assert_eq!(tokio::fs::read(&primary).await.expect("projector"), bytes);
+        }
+    }
+
     #[tokio::test]
     async fn model_downloads_preserve_occupied_library_paths_and_metadata() {
         for conflict in [
@@ -1259,6 +1822,7 @@ mod tests {
                             path: projector_path.display().to_string(),
                             size_bytes: 18,
                             sha256: None,
+                            available: true,
                         }),
                     )
                     .await

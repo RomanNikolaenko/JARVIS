@@ -84,6 +84,7 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         runtime_commands::select_runtime_binary,
         runtime_commands::import_model,
         runtime_commands::download_curated_model,
+        runtime_commands::repair_curated_model,
         runtime_commands::download_model,
         runtime_commands::cancel_download,
         runtime_commands::remove_model,

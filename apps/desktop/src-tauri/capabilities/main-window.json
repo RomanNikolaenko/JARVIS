@@ -29,6 +29,7 @@
     "allow-select-runtime-binary",
     "allow-import-model",
     "allow-download-curated-model",
+    "allow-repair-curated-model",
     "allow-download-model",
     "allow-cancel-download",
     "allow-remove-model",

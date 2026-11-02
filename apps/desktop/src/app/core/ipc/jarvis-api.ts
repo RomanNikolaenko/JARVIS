@@ -196,6 +196,10 @@ export class JarvisApi {
     return this.bridge.invoke('download_curated_model', { id });
   }
 
+  repairCuratedModel(id: string): Promise<string> {
+    return this.bridge.invoke('repair_curated_model', { id });
+  }
+
   downloadModel(request: ModelDownloadRequest): Promise<string> {
     return this.bridge.invoke('download_model', { request });
   }

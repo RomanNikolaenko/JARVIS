@@ -133,7 +133,7 @@ pub async fn attach_projector<R: Runtime>(
     let picked = crate::dialogs::selection(|complete| {
         app.dialog()
             .file()
-            .set_title("Add a vision projector (mmproj)")
+            .set_title("Choose a vision projector (mmproj)")
             .add_filter("GGUF projector", &["gguf"])
             .pick_file(complete)
     })
@@ -162,6 +162,18 @@ pub async fn download_curated_model(
         .core()
         .runtime()
         .download_curated(&id)
+        .await
+        .map_err(payload)
+}
+
+/// Verifies a downloaded catalog vision model and restores its projector.
+/// Existing files are preserved; the runtime is not restarted automatically.
+#[tauri::command]
+pub async fn repair_curated_model(state: State<'_, AppState>, id: String) -> CommandResult<String> {
+    state
+        .core()
+        .runtime()
+        .repair_curated(&id)
         .await
         .map_err(payload)
 }

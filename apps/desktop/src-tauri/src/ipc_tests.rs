@@ -118,6 +118,7 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "select_runtime_binary",
         "import_model",
         "download_curated_model",
+        "repair_curated_model",
         "download_model",
         "cancel_download",
         "remove_model",
@@ -573,6 +574,10 @@ fn runtime_commands_report_errors_without_touching_the_network() {
 
     let error = invoke(&h.main, "download_curated_model", json!({ "id": "nope" }))
         .expect_err("unknown catalog entry");
+    assert_eq!(error["code"], "notFound");
+
+    let error = invoke(&h.main, "repair_curated_model", json!({ "id": "nope" }))
+        .expect_err("unknown repair entry");
     assert_eq!(error["code"], "notFound");
 
     assert_eq!(

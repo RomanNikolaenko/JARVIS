@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, injec
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import type {
   BinarySource,
+  CuratedModel,
   GpuOffload,
   LocalModel,
   RuntimeBackend,
@@ -12,7 +13,7 @@ import type {
 } from '@jarvis/shared-types';
 
 import { pollWhileVisible } from '../../core/state/poll';
-import { RuntimeStore, recommendedBackend } from '../../core/state/runtime.store';
+import { RuntimeStore, matchesCuratedModel, recommendedBackend } from '../../core/state/runtime.store';
 import { downloadPercent, formatBytes, formatUptime } from '../../shared/format';
 
 export { downloadPercent };
@@ -210,9 +211,19 @@ export class RuntimePage {
   }
 
   protected canStart(model: LocalModel): boolean {
-    if (this.store.isPending(`server:${roleOf(model)}`) || this.store.isPending(`model:${model.id}`)) return false;
+    if (this.store.isPending(`server:${roleOf(model)}`) || this.store.isModelPending(model.id)) return false;
     const server = roleOf(model) === 'embeddings' ? this.store.embeddingServer() : this.store.server();
-    return !!this.store.installed() && model.available && !(isActive(server) && server?.modelId === model.id);
+    return (
+      !!this.store.installed() &&
+      model.available &&
+      (isEmbeddingModel(model) || !model.projector || model.projector.available) &&
+      !(isActive(server) && server?.modelId === model.id)
+    );
+  }
+
+  protected start(model: LocalModel): void {
+    const current = this.currentModel(model);
+    if (current && this.canStart(current)) void this.store.start(current.id, roleOf(current));
   }
 
   protected canRestart(role: ServerRole, rendered: ServerState): boolean {
@@ -227,7 +238,7 @@ export class RuntimePage {
       !!this.store.installed() &&
       !this.store.statusError() &&
       !this.store.isPending(`server:${role}`) &&
-      !this.store.isPending(`model:${current.modelId}`) &&
+      !this.store.isModelPending(current.modelId) &&
       !this.store.isPending('engine') &&
       !this.runtimeDownloads().some((download) => !['completed', 'failed', 'cancelled'].includes(download.phase)) &&
       !this.store.savingSettings() &&
@@ -260,10 +271,76 @@ export class RuntimePage {
   }
 
   protected isCuratedPresent(id: string): boolean {
-    return this.models().some((m) => m.id === id && m.available);
+    const curated = this.store.curated().find((entry) => entry.id === id);
+    const model = this.store.curatedLibraryModel(id);
+    return !!model?.available && (!curated?.projector || !!model.projector?.available);
+  }
+
+  protected curatedForModel(model: LocalModel): CuratedModel | undefined {
+    return this.store.curated().find((curated) => !!curated.projector && matchesCuratedModel(model, curated));
+  }
+
+  protected canRestoreVision(model: LocalModel): boolean {
+    const current = this.currentModel(model);
+    const curated = current && this.curatedForModel(current);
+    return (
+      !!current?.available &&
+      !!curated &&
+      !this.store.statusError() &&
+      !this.store.isModelPending(current.id) &&
+      !this.store.isPending(`curated:${curated.id}`) &&
+      !this.store.isCuratedDownloading(curated.id)
+    );
+  }
+
+  protected restoreVision(model: LocalModel): void {
+    if (!this.canRestoreVision(model)) return;
+    const curated = this.curatedForModel(model);
+    if (curated) void this.store.repairCurated(curated.id);
+  }
+
+  protected changeVision(model: LocalModel): void {
+    const current = this.currentModel(model);
+    if (current && !isEmbeddingModel(current) && !this.store.isModelPending(current.id) && !this.store.statusError()) {
+      void this.store.attachProjector(current.id);
+    }
+  }
+
+  protected catalogNeedsVision(id: string): boolean {
+    const curated = this.store.curated().find((entry) => entry.id === id);
+    return !!curated?.projector && !!this.store.curatedLibraryModel(id)?.available && !this.isCuratedPresent(id);
+  }
+
+  protected catalogPending(id: string): boolean {
+    const local = this.store.curatedLibraryModel(id);
+    return (
+      this.store.isPending(`curated:${id}`) ||
+      this.store.isCuratedDownloading(id) ||
+      (!!local && this.store.isModelPending(local.id))
+    );
+  }
+
+  protected downloadFromCatalog(expected: CuratedModel): void {
+    const current = this.store.curated().find((entry) => entry.id === expected.id);
+    if (
+      !current ||
+      JSON.stringify(current) !== JSON.stringify(expected) ||
+      this.isCuratedPresent(current.id) ||
+      this.catalogPending(current.id)
+    )
+      return;
+    const local = this.store.curatedLibraryModel(current.id);
+    if (local && this.catalogNeedsVision(current.id)) this.restoreVision(local);
+    else void this.store.downloadCurated(current.id);
+  }
+
+  private currentModel(expected: LocalModel): LocalModel | undefined {
+    const current = this.models().find((model) => model.id === expected.id);
+    return current && JSON.stringify(current) === JSON.stringify(expected) ? current : undefined;
   }
 
   protected async remove(model: LocalModel, deleteFile: boolean): Promise<void> {
+    if (!this.currentModel(model) || this.store.isModelPending(model.id)) return;
     this.confirmingRemoval.set(null);
     await this.store.removeModel(model.id, deleteFile);
   }

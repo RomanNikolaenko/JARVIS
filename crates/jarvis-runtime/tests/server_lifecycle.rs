@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 
 use jarvis_ai::{ChatMessage, ChatRequest, EmbeddingRequest, GenerationOptions, HttpClient};
 use jarvis_events::{EventBus, EventCategory, EventLevel};
+use jarvis_runtime::library::ModelLibrary;
 use jarvis_runtime::process::{CommandFactory, LaunchPlan};
 use jarvis_runtime::testing::{self, FAKE_ENV};
 use jarvis_runtime::{
-    RUNTIME_EMBEDDINGS_PROVIDER_ID, RUNTIME_PROVIDER_ID, RuntimeError, RuntimeManager,
-    RuntimeOptions, RuntimeSettings, ServerPhase, ServerRole,
+    ProjectorFile, RUNTIME_EMBEDDINGS_PROVIDER_ID, RUNTIME_PROVIDER_ID, RuntimeError,
+    RuntimeManager, RuntimeOptions, RuntimeSettings, ServerPhase, ServerRole,
 };
+use sha2::{Digest, Sha256};
 
 const CHAT: ServerRole = ServerRole::Chat;
 const EMBEDDINGS: ServerRole = ServerRole::Embeddings;
@@ -687,6 +689,74 @@ async fn invalid_replacements_preserve_the_running_servers() {
         .unwrap()
         .vectors;
     assert_eq!(vectors, vec![testing::fake_embedding("my cat")]);
+    h.manager.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_same_size_changed_downloaded_projector_preserves_the_running_model() {
+    let mut h = harness("slow").await;
+    let vision_model = h
+        .import("downloaded-vision.gguf", &testing::fake_gguf_bytes())
+        .await;
+    let projector = h.data_dir.join("verified.mmproj.gguf");
+    let bytes = testing::fake_projector_gguf_bytes();
+    std::fs::write(&projector, &bytes).unwrap();
+    // Seed the verified download record before a manager loads the index.
+    let library = ModelLibrary::load(h.data_dir.join("models")).await.unwrap();
+    library
+        .set_projector(
+            &vision_model,
+            Some(ProjectorFile {
+                path: projector.display().to_string(),
+                size_bytes: bytes.len() as u64,
+                sha256: Some(jarvis_runtime::download::hex(&Sha256::digest(&bytes))),
+                available: true,
+            }),
+        )
+        .await
+        .unwrap();
+    h.manager = RuntimeManager::new(RuntimeOptions {
+        data_dir: h.data_dir.clone(),
+        events: h.events.clone(),
+        ai_http: Arc::new(HttpClient::new()),
+        command_factory: Some(fake_command("slow")),
+    })
+    .await
+    .unwrap();
+    h.manager
+        .start(CHAT, &h.model_id, &settings(30))
+        .await
+        .unwrap();
+    assert_eq!(
+        h.manager
+            .wait_settled(CHAT, Duration::from_secs(30))
+            .await
+            .phase,
+        ServerPhase::Running
+    );
+    let before = h.manager.server_state(CHAT);
+    let provider = h.manager.provider(CHAT).unwrap();
+    std::fs::write(&projector, vec![42; bytes.len()]).unwrap();
+    let error = h
+        .manager
+        .start(CHAT, &vision_model, &settings(30))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, RuntimeError::IntegrityMismatch { .. }),
+        "{error}"
+    );
+    assert_eq!(h.manager.server_state(CHAT), before);
+    assert!(Arc::ptr_eq(&h.manager.provider(CHAT).unwrap(), &provider));
+    let reply = provider
+        .chat(ChatRequest {
+            model: h.model_id.clone(),
+            messages: vec![ChatMessage::user("ping")],
+            options: GenerationOptions::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.content, "pong");
     h.manager.shutdown().await;
 }
 

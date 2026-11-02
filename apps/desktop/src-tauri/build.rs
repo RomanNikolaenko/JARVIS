@@ -34,6 +34,7 @@ const COMMANDS: &[&str] = &[
     "select_runtime_binary",
     "import_model",
     "download_curated_model",
+    "repair_curated_model",
     "download_model",
     "cancel_download",
     "remove_model",

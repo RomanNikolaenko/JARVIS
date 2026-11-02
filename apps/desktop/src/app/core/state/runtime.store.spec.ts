@@ -1,5 +1,13 @@
 import { TestBed } from '@angular/core/testing';
-import type { HardwareInfo, RuntimeRelease, RuntimeStatus, ServerPhase, ServerState } from '@jarvis/shared-types';
+import type {
+  CuratedModel,
+  HardwareInfo,
+  LocalModel,
+  RuntimeRelease,
+  RuntimeStatus,
+  ServerPhase,
+  ServerState,
+} from '@jarvis/shared-types';
 
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ModelsStore } from './models.store';
@@ -73,6 +81,54 @@ describe('RuntimeStore', () => {
   let api: Record<string, ReturnType<typeof vi.fn>>;
   let refreshModels: ReturnType<typeof vi.fn>;
   let store: RuntimeStore;
+
+  function seedVision(): { curated: CuratedModel; model: LocalModel } {
+    const curated: CuratedModel = {
+      id: 'vision',
+      displayName: 'Vision catalog',
+      repo: 'owner/vision',
+      file: 'vision.gguf',
+      revision: 'commit',
+      sha256: 'ab'.repeat(32),
+      sizeBytes: 100,
+      role: 'chat',
+      license: 'MIT',
+      description: '',
+      projector: { file: 'mmproj.gguf', sha256: 'cd'.repeat(32), sizeBytes: 50 },
+    };
+    const model: LocalModel = {
+      id: 'vision-2',
+      displayName: 'Vision',
+      path: '/models/vision.gguf',
+      sizeBytes: 100,
+      sha256: curated.sha256,
+      source: { kind: 'downloaded', repo: curated.repo, file: curated.file, revision: curated.revision },
+      gguf: {
+        architecture: 'llama',
+        name: null,
+        sizeLabel: null,
+        quantization: null,
+        contextLength: null,
+        blockCount: null,
+        embeddingLength: null,
+        headCount: null,
+        headCountKv: null,
+        pooling: null,
+      },
+      managed: true,
+      available: true,
+      addedAtMs: 1,
+      projector: { path: '/models/mmproj.gguf', sizeBytes: 50, sha256: curated.projector!.sha256, available: false },
+    };
+    const current = { ...status('stopped'), models: [model] };
+    store.curated.set([curated]);
+    store.status.set(current);
+    api['getRuntimeStatus']!.mockResolvedValue(current);
+    api['repairCuratedModel'] = vi.fn(async () => 'repair-job');
+    api['downloadCuratedModel'] = vi.fn(async () => 'download-job');
+    api['attachProjector'] = vi.fn(async () => null);
+    return { curated, model };
+  }
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -367,6 +423,90 @@ describe('RuntimeStore', () => {
     }
     await store.downloadCurated('q');
     expect(api['downloadCuratedModel']).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the catalog guard for repair/download and blocks model edits throughout the repair job', async () => {
+    const { curated, model } = seedVision();
+    const action = deferred<string>();
+    api['repairCuratedModel']!.mockReturnValueOnce(action.promise);
+    const first = store.repairCurated(curated.id);
+    expect(store.repairCurated(curated.id)).toBe(first);
+    expect(store.downloadCurated(curated.id)).toBe(first);
+    expect(await store.attachProjector(model.id)).toBe(false);
+    expect(await store.removeModel(model.id, true)).toBe(false);
+    expect(await store.start(model.id, 'chat')).toBe(false);
+    expect(api['attachProjector']).not.toHaveBeenCalled();
+    expect(api['removeModel']).not.toHaveBeenCalled();
+    expect(api['startLocalModel']).not.toHaveBeenCalled();
+    expect(api['downloadCuratedModel']).not.toHaveBeenCalled();
+    api['getRuntimeStatus']!.mockResolvedValue({
+      ...store.status()!,
+      downloads: [
+        {
+          id: 'repair-job',
+          kind: 'model',
+          label: curated.displayName,
+          phase: 'verifying',
+          receivedBytes: 50,
+          totalBytes: 50,
+          bytesPerSecond: 0,
+          error: null,
+          startedAtMs: 1,
+        },
+      ],
+    });
+    action.resolve('repair-job');
+    expect(await first).toBe(true);
+    expect(store.isPending(`curated:${curated.id}`)).toBe(false);
+    expect(store.isModelPending(model.id)).toBe(true);
+    expect(await store.repairCurated(curated.id)).toBe(false);
+    expect(await store.attachProjector(model.id)).toBe(false);
+    expect(await store.removeModel(model.id, false)).toBe(false);
+    expect(api['repairCuratedModel']).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses repair while the projector picker or removal owns the model', async () => {
+    const { curated, model } = seedVision();
+    const choosing = deferred<null>();
+    api['attachProjector']!.mockReturnValueOnce(choosing.promise);
+    const picker = store.attachProjector(model.id);
+    expect(await store.repairCurated(curated.id)).toBe(false);
+    expect(await store.downloadCurated(curated.id)).toBe(false);
+    expect(api['repairCuratedModel']).not.toHaveBeenCalled();
+    choosing.resolve(null);
+    await picker;
+    expect(await store.repairCurated(curated.id)).toBe(true);
+    expect(api['repairCuratedModel']).toHaveBeenCalledWith(curated.id);
+  });
+
+  it('requires exact downloaded catalog weights before requesting vision recovery', async () => {
+    const { curated, model } = seedVision();
+    for (const changed of [
+      { ...model, available: false },
+      { ...model, source: { kind: 'imported' as const } },
+      { ...model, sha256: 'other-hash' },
+      { ...model, source: { kind: 'downloaded' as const, repo: curated.repo, file: curated.file, revision: 'other-commit' } },
+    ]) {
+      store.status.set({ ...status('stopped'), models: [changed] });
+      expect(await store.repairCurated(curated.id)).toBe(false);
+    }
+    expect(api['repairCuratedModel']).not.toHaveBeenCalled();
+    store.status.set({ ...status('stopped'), models: [model] });
+    store.curated.set([{ ...curated, projector: null }]);
+    expect(await store.repairCurated(curated.id)).toBe(false);
+    expect(await store.repairCurated('unknown')).toBe(false);
+  });
+
+  it('retains failed recovery metadata and releases the guard for an explicit retry', async () => {
+    const { curated, model } = seedVision();
+    api['repairCuratedModel']!.mockRejectedValueOnce(new Error('Index unavailable'));
+    expect(await store.repairCurated(curated.id)).toBe(false);
+    expect(store.status()?.models[0]).toEqual(model);
+    expect(store.actionErrors()[0]?.error.message).toBe('Index unavailable');
+    expect(store.isModelPending(model.id)).toBe(false);
+    expect(await store.repairCurated(curated.id)).toBe(true);
+    expect(store.actionErrors()).toEqual([]);
+    expect(api['repairCuratedModel']).toHaveBeenCalledTimes(2);
   });
 
   it('reads a new snapshot after an action instead of keeping the earlier poll result', async () => {

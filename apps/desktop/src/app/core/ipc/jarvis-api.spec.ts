@@ -101,6 +101,16 @@ describe('JarvisApi', () => {
     ]);
   });
 
+  it('requests explicit catalog vision recovery with the curated ID', async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      return 'repair-job';
+    });
+    expect(await api.repairCuratedModel('catalog-vision')).toBe('repair-job');
+    expect(calls).toEqual([{ cmd: 'repair_curated_model', args: { id: 'catalog-vision' } }]);
+  });
+
   it('sends the full exclusive history cursor over IPC', async () => {
     const calls: { cmd: string; args: unknown }[] = [];
     mockIPC((cmd, args) => {
