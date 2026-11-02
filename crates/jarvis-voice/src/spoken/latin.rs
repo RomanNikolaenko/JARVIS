@@ -131,6 +131,35 @@ const PATTERNS: &[(&str, &str)] = &[
     ("ue", "ю"),
 ];
 
+/// The Cyrillic letter a Latin one looks like (typed in the wrong layout).
+pub(super) fn look_alike(c: char) -> Option<char> {
+    Some(match c {
+        'a' => 'а',
+        'c' => 'с',
+        'e' => 'е',
+        'i' => 'і',
+        'o' => 'о',
+        'p' => 'р',
+        'x' => 'х',
+        'y' => 'у',
+        'k' => 'к',
+        'A' => 'А',
+        'B' => 'В',
+        'C' => 'С',
+        'E' => 'Е',
+        'H' => 'Н',
+        'I' => 'І',
+        'K' => 'К',
+        'M' => 'М',
+        'O' => 'О',
+        'P' => 'Р',
+        'T' => 'Т',
+        'X' => 'Х',
+        'Y' => 'У',
+        _ => return None,
+    })
+}
+
 /// Whether `c` is a Latin letter, with or without diacritics.
 pub(super) fn is_latin(c: char) -> bool {
     c.is_ascii_alphabetic() || fold(c).is_some()

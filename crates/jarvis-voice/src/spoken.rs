@@ -71,7 +71,12 @@ const SCALES: [(&str, &str, &str, bool); 4] = [
 pub fn for_ukrainian_voice(text: &str) -> String {
     let chars: Vec<char> = text
         .chars()
-        .map(|c| if matches!(c, '’' | 'ʼ') { '\'' } else { c })
+        .map(|c| match c {
+            '’' | 'ʼ' => '\'',
+            // The typographic minus.
+            '−' => '-',
+            _ => c,
+        })
         .collect();
     let mut out = String::with_capacity(text.len() * 2);
     let mut currency = false;
@@ -87,6 +92,15 @@ pub fn for_ukrainian_voice(text: &str) -> String {
             currency = false;
             push_word(&mut out, &words);
             i = next;
+            continue;
+        }
+        // A Latin letter typed inside a Ukrainian word (кiлька, Kиїв).
+        let near_cyrillic = |j: usize| chars.get(j).is_some_and(|n| is_cyrillic(*n));
+        if let Some(cyrillic) = latin::look_alike(c)
+            && ((i > 0 && near_cyrillic(i - 1)) || near_cyrillic(i + 1))
+        {
+            out.push(cyrillic);
+            i += 1;
             continue;
         }
         if latin::is_latin(c) {
@@ -123,8 +137,14 @@ pub fn for_ukrainian_voice(text: &str) -> String {
             '=' => push_word(&mut out, "дорівнює"),
             '&' => push_word(&mut out, "і"),
             '@' => push_word(&mut out, "ет"),
-            '°' => push_word(&mut out, "градусів"),
-            '#' => push_word(&mut out, "номер"),
+            '°' => {
+                push_word(&mut out, "градусів");
+                if let Some(scale) = temperature_scale(chars.get(i + 1)) {
+                    push_word(&mut out, scale);
+                    i += 1;
+                }
+            }
+            '#' | '№' => push_word(&mut out, "номер"),
             '%' => push_word(&mut out, "відсотків"),
             '/' | '_' => out.push(' '),
             _ => out.push(c),
@@ -132,6 +152,19 @@ pub fn for_ukrainian_voice(text: &str) -> String {
         i += 1;
     }
     tidy(&out)
+}
+
+/// «за Цельсієм» after "°C", «за Фаренгейтом» after "°F".
+fn temperature_scale(letter: Option<&char>) -> Option<&'static str> {
+    match letter {
+        Some('C' | 'С') => Some("за Цельсієм"),
+        Some('F') => Some("за Фаренгейтом"),
+        _ => None,
+    }
+}
+
+fn is_cyrillic(c: char) -> bool {
+    ('\u{0400}'..='\u{04ff}').contains(&c)
 }
 
 /// Adds a spoken word with spaces around it.
@@ -189,7 +222,7 @@ fn read_number(chars: &[char], start: usize, currency: bool) -> (String, usize) 
     // A number never starts with a zero group: "0,125" is a decimal.
     if head_len <= 3 && integer != "0" {
         while let Some(&separator) = chars.get(i)
-            && matches!(separator, ' ' | '\u{a0}' | ',')
+            && matches!(separator, ' ' | '\u{a0}' | '\u{2009}' | '\u{202f}' | ',')
             && digits_at(i + 1) == 3
         {
             integer.extend(&chars[i + 1..i + 4]);
@@ -228,6 +261,17 @@ fn read_number(chars: &[char], start: usize, currency: bool) -> (String, usize) 
             plural(&integer, "відсоток", "відсотки", "відсотків").to_owned()
         });
         i = after_space + 1;
+    } else if chars.get(after_space) == Some(&'°') {
+        words.push(if fraction {
+            "градуса".to_owned()
+        } else {
+            plural(&integer, "градус", "градуси", "градусів").to_owned()
+        });
+        i = after_space + 1;
+        if let Some(scale) = temperature_scale(chars.get(i)) {
+            words.push(scale.to_owned());
+            i += 1;
+        }
     }
     if currency {
         words.push(if fraction {
@@ -359,6 +403,45 @@ mod tests {
         assert_eq!(for_ukrainian_voice("50 %"), "п'ятдесят відсотків");
         assert_eq!(for_ukrainian_voice("12%"), "дванадцять відсотків");
         assert_eq!(for_ukrainian_voice("22%."), "двадцять два відсотки.");
+    }
+
+    #[test]
+    fn temperatures_and_degrees() {
+        assert_eq!(
+            for_ukrainian_voice("+15°C"),
+            "плюс п'ятнадцять градусів за Цельсієм"
+        );
+        assert_eq!(for_ukrainian_voice("1°"), "один градус");
+        assert_eq!(
+            for_ukrainian_voice("−3 °C"),
+            "мінус три градуси за Цельсієм"
+        );
+        assert_eq!(
+            for_ukrainian_voice("72°F"),
+            "сімдесят два градуси за Фаренгейтом"
+        );
+        assert_eq!(
+            for_ukrainian_voice("36,6°"),
+            "тридцять шість кома шість градуса"
+        );
+    }
+
+    #[test]
+    fn numbers_signs_and_separators() {
+        assert_eq!(for_ukrainian_voice("№5"), "номер п'ять");
+        assert_eq!(
+            for_ukrainian_voice("1\u{202f}500 грн"),
+            "одна тисяча п'ятсот грн"
+        );
+        assert_eq!(for_ukrainian_voice("1\u{2009}500"), "одна тисяча п'ятсот");
+    }
+
+    #[test]
+    fn latin_look_alikes_inside_ukrainian_words() {
+        // «i», «o», «a», «e», «c», «p» typed in the Latin layout.
+        assert_eq!(for_ukrainian_voice("кiлька днiв"), "кілька днів");
+        assert_eq!(for_ukrainian_voice("Kиїв"), "Київ");
+        assert_eq!(for_ukrainian_voice("cпасибi"), "спасибі");
     }
 
     #[test]

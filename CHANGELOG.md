@@ -26,7 +26,8 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   command no longer stands on a line of its own.
 - Ukrainian voices no longer skip foreign words, numbers and symbols:
   Latin-script words are read in Cyrillic as Ukrainians pronounce them
-  (dictionary, acronyms, spelling rules), numbers and percentages in words.
+  (dictionary, acronyms, spelling rules); numbers, percentages and
+  temperatures are read in words.
 
 ## [0.1.2] — 2026-10-31
 
