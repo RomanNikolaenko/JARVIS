@@ -70,6 +70,20 @@ node e2e/smoke.mjs ../../target/release/jarvis.exe --plugin ../../examples/plugi
 node e2e/install-test.mjs nsis ../../target/release/bundle --allow-install
 ```
 
+Cargo never deletes old build output, so `target/` grows with every
+compiler, dependency and mode (dev, tests, Clippy, release, features); it
+once reached 175 GB, 126 GB of it the incremental compilation cache.
+`pnpm run tauri …` therefore runs `scripts/clean-target.mjs` first (as
+AstraBrowser does): incremental caches not touched for 7 days are removed,
+keeping the newest of every crate, and if `target/` is still over the limit
+in the script it is removed entirely, so the next build starts from scratch.
+Run it by hand after long `cargo test`/`cargo clippy` sessions:
+`node apps/desktop/scripts/clean-target.mjs` (from the repository root). It
+does nothing on CI. Dependencies are built with line tables only
+(`[profile.dev.package."*"] debug = "line-tables-only"` in `Cargo.toml`):
+backtraces keep function names and lines, but a debugger cannot step through
+library code.
+
 ```bash
 # Rust: format, lint, test (from the repository root)
 cargo fmt --all

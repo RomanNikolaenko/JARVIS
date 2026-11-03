@@ -18,7 +18,7 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "quality": "pnpm run format:check && pnpm run lint && pnpm run test:ci && pnpm run build",
-    "tauri": "tauri"
+    "tauri": "node scripts/clean-target.mjs && tauri"
   },
   "packageManager": "pnpm@12.16.1",
   "engines": {

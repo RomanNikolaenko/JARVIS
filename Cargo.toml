@@ -120,6 +120,12 @@ codegen-units = 1
 lto = "thin"
 strip = "debuginfo"
 
+# Dependencies keep line numbers only: backtraces still name functions and
+# lines, while target stays much smaller and links faster. Stepping through
+# library code in a debugger is not possible this way.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 # Image decoding, resizing and encoding are unusably slow without
 # optimizations, even in development builds.
 [profile.dev.package.image]
