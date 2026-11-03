@@ -59,6 +59,10 @@ fn execution_prompt(tools: &[ToolSpec], roots: &[PathBuf], native: bool) -> Stri
             .collect::<Vec<_>>()
             .join(", ")
     };
+    // Native functions carry these descriptions too, but keep the list: on
+    // 2026-11-03 Qwen2.5 3B without it wrote to a file from a listing instead
+    // of the goal's new file in 3 runs of 4, with it in none of 5 (about 375
+    // tokens per request, see docs/NATIVE-TOOLS-VALIDATION.md).
     let line = |tool: &ToolSpec| {
         format!(
             "- {}: {} Input: {}",

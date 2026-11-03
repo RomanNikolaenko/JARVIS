@@ -7,7 +7,7 @@
 //! model is told what happened and decides what to do next, and risky
 //! actions need approval every time.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -454,6 +454,9 @@ struct Run {
     pause: watch::Receiver<bool>,
     /// Model replies and the observations that answered them.
     history: Vec<(String, String)>,
+    /// Actions the user denied in this run (tool and normalized input).
+    /// Asked for again, they are refused without another approval request.
+    denied: HashSet<String>,
     started: Instant,
     persistence_error: Option<String>,
 }
@@ -474,6 +477,7 @@ impl Run {
             cancel,
             pause,
             history,
+            denied: HashSet::new(),
             started: Instant::now(),
             persistence_error: None,
         }
@@ -981,6 +985,22 @@ impl Run {
                 return (finish(step, StepOutcome::Denied, output), None);
             }
             PolicyDecision::RequireApproval { reason } => {
+                // Paths in the prepared input are resolved, so "a.txt" and
+                // "./a.txt" are the same action.
+                let denial_key = format!("{}\n{}", action.tool, prepared.args);
+                if self.denied.contains(&denial_key) {
+                    self.record(audit(
+                        AuditEvent::Denied,
+                        "asked again after you denied it in this task".to_owned(),
+                    ))
+                    .await;
+                    step.decision = Some("already denied by you".to_owned());
+                    let output = "Not asked again: the user already denied this exact action \
+                                  in this task. Do not repeat it; find another way or explain in \
+                                  your final answer what you could not do."
+                        .to_owned();
+                    return (finish(step, StepOutcome::Denied, output), None);
+                }
                 self.task.status = TaskStatus::WaitingForApproval;
                 self.checkpoint().await;
                 if let Some(stop) = self.stop_requested() {
@@ -1032,6 +1052,9 @@ impl Run {
                         return (finish(step, StepOutcome::Denied, output), Some(stop));
                     }
                     _ => {
+                        if outcome == ApprovalOutcome::Denied {
+                            self.denied.insert(denial_key);
+                        }
                         let output = format!("The user did not allow this action ({text})");
                         return (finish(step, StepOutcome::Denied, output), None);
                     }

@@ -4,6 +4,16 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+### Changed
+
+- An agent no longer asks you again for an action you denied in the same
+  task. A 3B model requested the same file three times after "Deny"; now the
+  repeated request is refused at once, marked "already denied by you" in the
+  journal and the audit log, and the model is told not to insist. Adding
+  `overwrite: true` to a denied new file is the same request.
+- An approved "Create" of a new file never replaces a file that appears
+  before the write runs.
+
 ### Fixed
 
 - Agents on small local models read the files you name. The agent's

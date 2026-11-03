@@ -1946,6 +1946,95 @@ async fn a_denied_action_does_not_run_and_the_model_is_told() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_denied_action_is_not_asked_for_again_in_the_same_task() {
+    let h = harness();
+    // A small model asked for the same denied write again and again in a
+    // live run; the same action spelled differently is still the same.
+    let model = ScriptedModel::new(&[
+        r#"{"tool": "delete_path", "input": {"path": "a.txt"}}"#,
+        r#"{"tool": "delete_path", "input": {"path": "./a.txt"}}"#,
+        r#"{"tool": "read_file", "input": {"path": "b.txt"}}"#,
+        r#"{"tool": "delete_path", "input": {"path": "b.txt"}}"#,
+        r#"{"final": "I was not allowed to delete the files"}"#,
+    ]);
+    let started = h
+        .manager
+        .start(task("Delete a.txt and b.txt"), model.clone())
+        .await
+        .unwrap();
+    let first = wait_for_approval(&h.approvals, started.id).await;
+    assert!(first.summary.ends_with("a.txt"), "{}", first.summary);
+    assert!(h.approvals.resolve(first.id, false));
+    // A different action is still the user's decision.
+    let second = wait_for_approval(&h.approvals, started.id).await;
+    assert!(second.summary.ends_with("b.txt"), "{}", second.summary);
+    assert!(h.approvals.resolve(second.id, false));
+
+    let done = finished(&h.manager, started.id).await;
+    assert_eq!(done.status, TaskStatus::Completed, "{done:#?}");
+    assert!(h.dir.path().join("a.txt").exists() && h.dir.path().join("b.txt").exists());
+    let decisions: Vec<_> = actions(&done)
+        .iter()
+        .map(|step| (step.outcome, step.decision.as_deref()))
+        .collect();
+    assert_eq!(
+        decisions,
+        [
+            (StepOutcome::Denied, Some("denied by you")),
+            (StepOutcome::Denied, Some("already denied by you")),
+            (StepOutcome::Succeeded, Some("allowed (read-only)")),
+            (StepOutcome::Denied, Some("denied by you")),
+        ]
+    );
+    assert!(
+        model
+            .last_message(2)
+            .contains("already denied this exact action")
+    );
+    assert_eq!(
+        audit_events(&h.audit).await,
+        [
+            ("delete_path".to_owned(), AuditEvent::Denied),
+            ("delete_path".to_owned(), AuditEvent::Denied),
+            ("read_file".to_owned(), AuditEvent::Allowed),
+            ("read_file".to_owned(), AuditEvent::Succeeded),
+            ("delete_path".to_owned(), AuditEvent::Denied),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn adding_overwrite_to_a_denied_create_is_the_same_action() {
+    let h = harness();
+    // Seen live: after "Deny" the model added `overwrite: true` to the same
+    // new file, which the user would see as the same "Create" request.
+    let model = ScriptedModel::new(&[
+        r#"{"tool": "write_file", "input": {"path": "note.txt", "content": "hi"}}"#,
+        r#"{"tool": "write_file", "input": {"path": "note.txt", "content": "hi", "overwrite": true}}"#,
+        r#"{"final": "I was not allowed to create note.txt"}"#,
+    ]);
+    let started = h
+        .manager
+        .start(task("Create note.txt"), model.clone())
+        .await
+        .unwrap();
+    let approval = wait_for_approval(&h.approvals, started.id).await;
+    assert!(h.approvals.resolve(approval.id, false));
+
+    let done = finished(&h.manager, started.id).await;
+    assert_eq!(done.status, TaskStatus::Completed, "{done:#?}");
+    assert!(!h.dir.path().join("note.txt").exists());
+    let decisions: Vec<_> = actions(&done)
+        .iter()
+        .map(|step| step.decision.as_deref())
+        .collect();
+    assert_eq!(
+        decisions,
+        [Some("denied by you"), Some("already denied by you")]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_unanswered_approval_times_out_as_not_allowed() {
     let h = harness_with(2, Duration::from_millis(200), &[]);
     let model = ScriptedModel::new(&[

@@ -267,9 +267,12 @@ against protocol mocks only.
   after a fix; before it, the model copied the instructions' example paths
   and failed 3 runs out of 3 (see
   [validation](docs/NATIVE-TOOLS-VALIDATION.md#live-results))
-- ⬜ Native agent turns with a live Ollama server and through the app's
-  embedded runtime; OpenAI-compatible servers with unknown tool capabilities
-  still use the text fallback
+- ✅ Native agent turns through the app's embedded runtime (2026-11-03):
+  the Runtime setting, a read-only task, approval denial and cancellation in
+  the Agents screen with Qwen2.5 3B; a denied action is no longer put to the
+  user again in the same task
+- ⬜ Native agent turns with a live Ollama server; OpenAI-compatible servers
+  with unknown tool capabilities still use the text fallback
 - ✅ Core HTTP integration contracts for both protocols: real file writes
   behind approval, denial, cancellation, invalid calls, verifier failures and
   persisted results after reopening the core (scripted servers)
@@ -281,8 +284,8 @@ against protocol mocks only.
 ## Next iteration
 
 Phase 9: live validation of native agent tool calling with Ollama (not
-installed on the dev machine any more) and through the app's embedded
-runtime in the Agents screen; llama.cpp passed the probe on 2026-11-02.
+installed on the dev machine any more); llama.cpp passed the probe on
+2026-11-02 and the Agents screen check on 2026-11-03.
 Open items: live checks on Linux (Phases 6 and 7), the wake word with a live
 voice, third-party MCP servers, the Linux Secret Service integration, cloud
 providers with real keys.

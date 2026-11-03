@@ -189,6 +189,9 @@ pub trait AiProvider: Send + Sync + Debug {
   exact chat model IDs for OpenAI-compatible endpoints (editable on Models);
   embedding-only models are never upgraded. Missing configuration defaults
   to an empty list. Saving rebuilds providers and refreshes capabilities.
+  In native mode the agent's system prompt still lists the tools that the
+  functions describe: without the list a 3B model chose wrong file names
+  (see [validation](docs/NATIVE-TOOLS-VALIDATION.md#live-results)).
 
 Implementations ([ADR 0006](docs/decisions/0006-http-ai-providers.md)):
 
@@ -400,8 +403,14 @@ current scope and limits, verifies that
 the registered tool and prepared action have not changed, and re-evaluates
 the current policy before execution. A revoked permission, changed target,
 increased risk or replaced plugin tool refuses the call and is audited;
-the model must propose a fresh action to obtain a new approval. Protected
-paths: JARVIS's config, data and log folders.
+the model must propose a fresh action to obtain a new approval. An action
+the user denied (same tool, same input after paths are resolved) is not put
+to the user again in the same run: it is refused at once, journaled as
+"already denied by you" and audited as denied. `write_file` fixes
+`overwrite` to whether the file exists when the call is prepared, so a
+"Create" is one action with or without the flag and never replaces a file
+that appears before it runs. Protected paths: JARVIS's config, data and log
+folders.
 
 **Task lifecycle:** `pending → running ⇄ waitingForApproval`, `running ⇄
 paused`, then `completed | unverified | failed | cancelled`. The journal (`TaskStep`:

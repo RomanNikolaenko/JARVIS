@@ -563,6 +563,9 @@ impl Tool for WriteFile {
         } else {
             (RiskLevel::Medium, "Create")
         };
+        // A "Create" never replaces a file that appears before it runs, and
+        // the flag, meaningless for a new file, does not make a new action.
+        args.overwrite = exists;
         let summary = format!("{verb} {} ({} bytes)", shown(&path), args.content.len());
         args.path = shown(&path);
         Ok(PreparedCall {

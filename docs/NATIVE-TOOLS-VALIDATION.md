@@ -122,5 +122,46 @@ PASS: 2 native turns; fixture read, correlated result, final marker and audit ve
 The runs used temperature 0, so they say little about variance. One small
 model and one task are not a quality claim about native tools in general.
 Not covered: Ollama (not installed on the dev machine; the 2026-10-29 check
-found no server on ports 11434, 1234 or 8080) and the embedded runtime through
-the Agents screen.
+found no server on ports 11434, 1234 or 8080).
+
+### 2026-11-03: embedded runtime through the Agents screen
+
+The app (a debug build of `jarvis-desktop` with the bundled UI) ran with a
+temporary profile (`JARVIS_PROFILE_DIR`) seeded with the runtime and model
+records above; the window was driven over the WebView DevTools protocol.
+Default settings apart from one workspace folder and `write_file` enabled:
+4096-token context, 7 enabled tools, agent temperature 0.2.
+
+- **Setting:** Runtime → Inference settings → Chat models with native tools →
+  Qwen2.5 3B, Save, Start. The server panel showed "Native tools enabled"; the
+  server ran on 127.0.0.1 with `--jinja`.
+- **Read-only task** ("Прочитай файл probe.txt і напиши, який маркер у ньому
+  записано"): completed, `read_file` allowed as read-only, the answer quoted
+  the random marker exactly and passed verification. The first native turn
+  read a 1619-token prompt at about 11 tokens/s on the laptop CPU (142 s);
+  later turns reused the cache.
+- **Denial:** a task to create `note.txt` asked for approval; "Deny" left the
+  file uncreated and journaled "denied by you". The model then asked for the
+  same file twice more, once adding `overwrite: true`, so the user had to deny
+  it three times; the run stopped at the limit of three failed or denied
+  actions in a row. Fixed: a denied action is refused without asking again
+  in the same run ("already denied by you"), and `write_file` no longer treats
+  `overwrite` on a new file as a different action. After the fix four runs of
+  the same task showed one approval dialog each.
+- **Cancellation** in the middle of a model request: the task was cancelled
+  0.2 s after the button; llama.cpp logged `cancel task` and freed its slot.
+
+An experiment removed the tool list from the native system prompt (the
+functions carry the same descriptions): the first request shrank from 1619 to
+1244 tokens (142 s → 97 s), but the model's first `write_file` targeted an
+existing file from a folder listing instead of the goal's `note.txt` in 3 runs
+of 4, against none of 5 with the list. The list stays.
+
+| Native system prompt | First write to the goal's file | Dialogs per denial run |
+|---|---|---|
+| With the tool list | 5 of 5 | 3 before the fix, 1 after (4 runs) |
+| Without the tool list | 1 of 4 | — |
+
+In one read-only run the goal's verb ("напиши", *write*) led the model to also
+create `marker.txt`; that request was approved in the dialog, which the
+driver script never does.

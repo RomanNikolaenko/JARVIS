@@ -240,6 +240,34 @@ async fn a_successful_file_write_is_fully_visible_to_synchronous_readers() {
 }
 
 #[tokio::test]
+async fn an_approved_create_never_replaces_a_file_that_appeared_later() {
+    let w = workspace();
+    // The model may ask to create a new file with `overwrite: true`; the
+    // user approves "Create", so the write must not clobber a file that
+    // appears between approval and the write.
+    let tool = w.tools.get("write_file").expect("tool");
+    let create = w
+        .prepare(
+            "write_file",
+            json!({"path": "new.txt", "content": "model", "overwrite": true}),
+        )
+        .unwrap();
+    assert_eq!(create.action.risk, RiskLevel::Medium);
+    assert!(create.action.summary.starts_with("Create "));
+    // The flag means nothing for a new file, so it is not part of the action.
+    let plain = w
+        .prepare("write_file", json!({"path": "new.txt", "content": "model"}))
+        .unwrap();
+    assert_eq!(create.args, plain.args);
+    std::fs::write(w.root.join("new.txt"), "user").unwrap();
+    assert!(tool.run(&create, &w.ctx).await.is_err());
+    assert_eq!(
+        std::fs::read_to_string(w.root.join("new.txt")).unwrap(),
+        "user"
+    );
+}
+
+#[tokio::test]
 async fn a_missing_path_is_named_relative_to_the_workspace() {
     let w = workspace();
     std::fs::create_dir_all(w.root.join("notes")).unwrap();
