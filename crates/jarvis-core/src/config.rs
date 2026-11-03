@@ -88,6 +88,9 @@ pub struct MemorySettings {
     pub recall_conversations: bool,
     /// Summarize the older part of long conversations with the chat model.
     pub auto_summarize: bool,
+    /// Suggest facts from saved conversations for review (one model request
+    /// after a pause in the conversation). Nothing is saved until accepted.
+    pub suggest_facts: bool,
     /// Model for semantic search; unset picks a local model that supports
     /// embeddings. Without one, search is text-only.
     pub embedding_model: Option<ModelRef>,
@@ -105,6 +108,7 @@ impl Default for MemorySettings {
             use_facts: true,
             recall_conversations: true,
             auto_summarize: true,
+            suggest_facts: false,
             embedding_model: None,
             context_limit_tokens: None,
             episode_retention_days: 90,
@@ -719,6 +723,19 @@ mod tests {
         Settings::default()
             .validate()
             .expect("defaults must validate");
+    }
+
+    #[test]
+    fn suggest_facts_defaults_off_and_round_trips() {
+        assert!(!Settings::default().memory.suggest_facts);
+        let without = parse_settings("schemaVersion = 1\n[memory]\nenabled = true\n")
+            .expect("older settings");
+        assert!(!without.memory.suggest_facts);
+        let mut settings = Settings::default();
+        settings.memory.suggest_facts = true;
+        let text = toml::to_string(&settings).expect("serialize");
+        assert!(text.contains("suggestFacts = true"), "{text}");
+        assert!(parse_settings(&text).expect("parse").memory.suggest_facts);
     }
 
     #[test]

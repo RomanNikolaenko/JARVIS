@@ -42,6 +42,7 @@ export const SETTINGS = {
     useFacts: true,
     recallConversations: true,
     autoSummarize: true,
+    suggestFacts: false,
     embeddingModel: null,
     contextLimitTokens: null,
     episodeRetentionDays: 90,

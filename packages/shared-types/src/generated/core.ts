@@ -194,6 +194,11 @@ recallConversations: boolean,
  */
 autoSummarize: boolean, 
 /**
+ * Suggest facts from saved conversations for review (one model request
+ * after a pause in the conversation). Nothing is saved until accepted.
+ */
+suggestFacts: boolean, 
+/**
  * Model for semantic search; unset picks a local model that supports
  * embeddings. Without one, search is text-only.
  */
