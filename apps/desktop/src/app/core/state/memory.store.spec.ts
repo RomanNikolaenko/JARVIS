@@ -1,9 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import type {
+  AcceptFactSuggestion,
   Episode,
   EpisodeCursor,
   Fact,
   FactInput,
+  FactSuggestion,
   MemoryStatus,
   Project,
   ProjectInput,
@@ -48,6 +50,17 @@ function fact(id: string, pinned = false): Fact {
     sourceConversationId: null,
     createdAtMs: 1,
     updatedAtMs: 1,
+  };
+}
+
+function suggestion(id: string): FactSuggestion {
+  return {
+    id,
+    content: `suggested ${id}`,
+    projectId: null,
+    sourceConversationId: 'c1',
+    sourceConversationTitle: 'Chat',
+    createdAtMs: 1,
   };
 }
 
@@ -122,6 +135,20 @@ class FakeApi {
   exportMemory = vi.fn(async (): Promise<TransferReport | null> => null);
   importMemory = vi.fn(async (): Promise<TransferReport | null> => null);
   clearEpisodes = vi.fn(async () => 100);
+  suggestions: FactSuggestion[] = [suggestion('s1')];
+  suggestionHandler: ((count: number) => void) | null = null;
+  listFactSuggestions = vi.fn(async () => this.suggestions);
+  acceptFactSuggestion = vi.fn(async (input: AcceptFactSuggestion): Promise<Fact> => {
+    this.suggestions = this.suggestions.filter((s) => s.id !== input.id);
+    return { ...fact(`from-${input.id}`, input.pinned), content: input.content, source: 'conversation' };
+  });
+  rejectFactSuggestion = vi.fn(async (id: string) => {
+    this.suggestions = this.suggestions.filter((s) => s.id !== id);
+  });
+  onFactSuggestions = vi.fn(async (handler: (count: number) => void) => {
+    this.suggestionHandler = handler;
+    return () => (this.suggestionHandler = null);
+  });
 }
 
 describe('MemoryStore', () => {
@@ -138,6 +165,41 @@ describe('MemoryStore', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
     vi.useRealTimers();
+  });
+
+  it('loads fact suggestions and follows the count event', async () => {
+    await store.start();
+    expect(store.suggestions().map((s) => s.id)).toEqual(['s1']);
+    expect(store.pendingSuggestions()).toBe(1);
+    api.suggestions = [suggestion('s2'), suggestion('s1')];
+    api.suggestionHandler?.(2);
+    expect(store.pendingSuggestions()).toBe(2);
+    await vi.waitFor(() => expect(store.suggestions().map((s) => s.id)).toEqual(['s2', 's1']));
+  });
+
+  it('accepts an edited suggestion as a fact', async () => {
+    await store.start();
+    await store.acceptSuggestion({ id: 's1', content: 'edited', pinned: true, projectId: null });
+    expect(api.acceptFactSuggestion).toHaveBeenCalledWith({ id: 's1', content: 'edited', pinned: true, projectId: null });
+    expect(store.suggestions()).toEqual([]);
+    expect(store.pendingSuggestions()).toBe(0);
+    expect(store.facts()[0]).toMatchObject({ id: 'from-s1', content: 'edited', pinned: true });
+  });
+
+  it('rejects a suggestion', async () => {
+    await store.start();
+    await store.rejectSuggestion('s1');
+    expect(api.rejectFactSuggestion).toHaveBeenCalledWith('s1');
+    expect(store.suggestions()).toEqual([]);
+    expect(store.pendingSuggestions()).toBe(0);
+  });
+
+  it('keeps a suggestion when accepting it fails', async () => {
+    await store.start();
+    api.acceptFactSuggestion.mockRejectedValueOnce(new IpcError('notFound', 'the fact suggestion does not exist'));
+    await store.acceptSuggestion({ id: 's1', content: 'x', pinned: false, projectId: null });
+    expect(store.suggestions().map((s) => s.id)).toEqual(['s1']);
+    expect(store.error()?.message).toBe('the fact suggestion does not exist');
   });
 
   it.each(['facts', 'projects'] as const)('keeps newer %s when an older read finishes last', async (kind) => {

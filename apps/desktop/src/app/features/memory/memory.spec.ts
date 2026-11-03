@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import type { MemoryStatus } from '@jarvis/shared-types';
+import type { AcceptFactSuggestion, FactSuggestion, MemoryStatus, Settings } from '@jarvis/shared-types';
 
 import { JarvisApi } from '../../core/ipc/jarvis-api';
 import { MemoryStore } from '../../core/state/memory.store';
@@ -41,7 +41,24 @@ describe('MemoryPage', () => {
     getModelRoutes: vi.fn(async () => []),
     clearMemory: vi.fn(async () => undefined),
     searchMemory: vi.fn(async () => []),
+    listFactSuggestions: vi.fn(async (): Promise<FactSuggestion[]> => []),
+    acceptFactSuggestion: vi.fn(async (input: AcceptFactSuggestion) => ({
+      id: 'f2',
+      content: input.content,
+      projectId: input.projectId,
+      pinned: input.pinned,
+      source: 'conversation',
+      sourceConversationId: 'c1',
+      createdAtMs: 2,
+      updatedAtMs: 2,
+    })),
+    rejectFactSuggestion: vi.fn(async () => undefined),
+    updateSettings: vi.fn(async (settings: Settings) => settings),
   };
+
+  function suggestion(id: string, content: string): FactSuggestion {
+    return { id, content, projectId: null, sourceConversationId: 'c1', sourceConversationTitle: 'Morning chat', createdAtMs: 1 };
+  }
 
   async function render() {
     TestBed.configureTestingModule({
@@ -68,6 +85,59 @@ describe('MemoryPage', () => {
     expect(element.querySelector('.subtitle')?.textContent).toContain('2 conversations');
     expect(element.textContent).toContain('The user prefers short answers.');
     expect(element.querySelector('.chip.accent')?.textContent).toContain('pinned');
+  });
+
+  it('shows suggested facts for review and accepts or rejects them', async () => {
+    api.listFactSuggestions.mockResolvedValue([
+      suggestion('s1', 'Користувач працює вчителем.'),
+      suggestion('s2', 'Користувач має кота.'),
+    ]);
+    const { fixture, element } = await render();
+    const section = element.querySelector('.suggestions');
+    expect(section?.textContent).toContain('Suggested (2)');
+    expect(section?.textContent).toContain('Morning chat');
+    const text = section!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Suggested fact"]')!;
+    text.value = 'Користувач — учитель історії.';
+    text.dispatchEvent(new Event('input'));
+    button(section as HTMLElement, 'Accept').click();
+    await fixture.whenStable();
+    expect(api.acceptFactSuggestion).toHaveBeenCalledWith({
+      id: 's1',
+      content: 'Користувач — учитель історії.',
+      pinned: false,
+      projectId: null,
+    });
+    fixture.detectChanges();
+    button(element.querySelector('.suggestions') as HTMLElement, 'Reject').click();
+    await fixture.whenStable();
+    expect(api.rejectFactSuggestion).toHaveBeenCalledWith('s2');
+    api.listFactSuggestions.mockResolvedValue([]);
+  });
+
+  it('has no suggestions section when nothing waits for review', async () => {
+    const { element } = await render();
+    expect(element.querySelector('.suggestions')).toBeNull();
+  });
+
+  it('saves the setting that suggests facts from conversations', async () => {
+    const { fixture, element } = await render();
+    button(element, 'Data & settings').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const label = [...element.querySelectorAll('label.check')].find((l) =>
+      l.textContent?.includes('Suggest facts from conversations')
+    );
+    const checkbox = label!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    const save = [...element.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save')!;
+    save.click();
+    await fixture.whenStable();
+    expect(api.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ memory: expect.objectContaining({ suggestFacts: true }) })
+    );
   });
 
   it('deletes everything only after the confirmation word is typed', async () => {

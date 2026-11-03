@@ -122,6 +122,14 @@
         <input type="checkbox" [checked]="memory.autoSummarize" (change)="update({ autoSummarize: checkedOf($event) })" />
         <span>Summarize the older part of long conversations</span>
       </label>
+      <label class="check">
+        <input type="checkbox" [checked]="memory.suggestFacts" (change)="update({ suggestFacts: checkedOf($event) })" />
+        <span>Suggest facts from conversations</span>
+      </label>
+      <p class="hint">
+        Two minutes after a conversation pauses, its model looks for lasting facts you mentioned about yourself: one request,
+        which takes tens of seconds on a CPU. Nothing is remembered until you accept it under Facts.
+      </p>
       <div class="grid">
         <label class="field">
           <span class="field-label">Embedding model (semantic search)</span>

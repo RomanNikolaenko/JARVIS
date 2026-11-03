@@ -17,8 +17,10 @@ import type {
   CuratedModel,
   Episode,
   EpisodeCursor,
+  AcceptFactSuggestion,
   Fact,
   FactInput,
+  FactSuggestion,
   MemoryStatus,
   Project,
   ProjectInput,
@@ -67,6 +69,8 @@ export const MODELS_CHANGED_EVENT = 'jarvis://models-changed';
 export const AGENT_TASK_EVENT = 'jarvis://agent-task';
 /** Pushed with every pending approval whenever the list changes. */
 export const APPROVALS_EVENT = 'jarvis://approvals';
+/** Pushed with the number of fact suggestions waiting for review. */
+export const FACT_SUGGESTIONS_EVENT = 'jarvis://fact-suggestions';
 /** Pushed with the update status on every change. */
 export const UPDATE_STATUS_EVENT = 'jarvis://update-status';
 /** Pushed with every plugin after any change of one. */
@@ -253,6 +257,23 @@ export class JarvisApi {
 
   deleteFact(id: string): Promise<void> {
     return this.bridge.invoke('delete_fact', { id });
+  }
+
+  /** Facts JARVIS found in conversations, waiting for review; newest first. */
+  listFactSuggestions(): Promise<FactSuggestion[]> {
+    return this.bridge.invoke('list_fact_suggestions');
+  }
+
+  acceptFactSuggestion(input: AcceptFactSuggestion): Promise<Fact> {
+    return this.bridge.invoke('accept_fact_suggestion', { input });
+  }
+
+  rejectFactSuggestion(id: string): Promise<void> {
+    return this.bridge.invoke('reject_fact_suggestion', { id });
+  }
+
+  onFactSuggestions(handler: (count: number) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<number>(FACT_SUGGESTIONS_EVENT, handler);
   }
 
   listProjects(): Promise<Project[]> {

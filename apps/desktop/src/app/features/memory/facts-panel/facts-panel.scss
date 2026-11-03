@@ -6,3 +6,15 @@
 .toolbar .field select {
   min-width: 220px;
 }
+
+.suggestion {
+  .row-main {
+    display: grid;
+    gap: 8px;
+  }
+
+  textarea {
+    width: 100%;
+    resize: vertical;
+  }
+}

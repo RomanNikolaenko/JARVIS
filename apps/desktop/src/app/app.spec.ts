@@ -9,6 +9,7 @@ import { SystemStore } from './core/state/system.store';
 import { EventLogStore } from './core/state/event-log.store';
 import { ChatStore } from './core/state/chat.store';
 import { ModelsStore } from './core/state/models.store';
+import { MemoryStore } from './core/state/memory.store';
 
 describe('App shell', () => {
   beforeEach(async () => {
@@ -25,6 +26,20 @@ describe('App shell', () => {
       a.textContent?.trim()
     );
     expect(links).toEqual(['Dashboard', 'Chat', 'Models', 'Runtime', 'Agents', 'Memory', 'Plugins', 'Event log', 'Settings']);
+  });
+
+  it('counts fact suggestions next to Memory in the navigation', async () => {
+    const fixture = TestBed.createComponent(App);
+    await fixture.whenStable();
+    const memory = () =>
+      Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('.nav-link')).find((a) =>
+        a.textContent?.includes('Memory')
+      )!;
+    expect(memory().querySelector('.nav-badge')).toBeNull();
+    TestBed.inject(MemoryStore).pendingSuggestions.set(2);
+    fixture.detectChanges();
+    expect(memory().querySelector('.nav-badge')?.textContent?.trim()).toBe('2');
+    expect(memory().querySelector('.nav-badge')?.getAttribute('aria-label')).toBe('2 suggested facts');
   });
 
   it('pauses decorative animations while another window has the focus', async () => {

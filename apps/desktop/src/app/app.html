@@ -13,6 +13,9 @@
         <a class="nav-link" [routerLink]="item.path" routerLinkActive="active" ariaCurrentWhenActive="page">
           <jv-icon [name]="item.icon" />
           <span>{{ item.label }}</span>
+          @if (item.badge?.(); as count) {
+            <span class="nav-badge" [attr.aria-label]="count + ' ' + item.badgeLabel">{{ count }}</span>
+          }
         </a>
       }
     </nav>

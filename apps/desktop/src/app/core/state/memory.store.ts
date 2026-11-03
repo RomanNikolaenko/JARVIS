@@ -1,8 +1,10 @@
 import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import type {
+  AcceptFactSuggestion,
   Episode,
   Fact,
   FactInput,
+  FactSuggestion,
   MemoryKind,
   MemoryStatus,
   Project,
@@ -21,6 +23,7 @@ export const EPISODE_PAGE = 100;
 export const MAX_FACT_LENGTH = 2000;
 export const MEMORY_SEARCH_TIMEOUT_MS = 30_000;
 export const MEMORY_HISTORY_TIMEOUT_MS = 30_000;
+export const SUGGESTION_SUBSCRIPTION_TIMEOUT_MS = 30_000;
 
 /** Splits a search snippet into plain and highlighted parts (U+0002 … U+0003). */
 export function snippetParts(snippet: string): { text: string; match: boolean }[] {
@@ -57,6 +60,8 @@ export class MemoryStore {
   private searchEpoch = 0;
   private searchRequest: { key: string; promise: Promise<void> } | null = null;
   private dataRequest: { kind: 'export' | 'import' | 'clear'; promise: Promise<void> } | null = null;
+  private suggestionEpoch = 0;
+  private suggestionsFollowed = false;
 
   readonly status = signal<MemoryStatus | null>(null);
   readonly facts = signal<readonly Fact[]>([]);
@@ -73,11 +78,89 @@ export class MemoryStore {
   readonly lastTransfer = signal<{ kind: 'export' | 'import'; report: TransferReport } | null>(null);
   readonly dataOperation = signal<'export' | 'import' | 'clear' | null>(null);
   readonly dataError = signal<IpcError | null>(null);
+  /** Facts JARVIS found in conversations, waiting for review. */
+  readonly suggestions = signal<readonly FactSuggestion[]>([]);
+  /** Their number, pushed by the core on every change (navigation counter). */
+  readonly pendingSuggestions = signal(0);
 
   readonly projectNames = computed(() => new Map(this.projects().map((p) => [p.id, p.name] as const)));
 
   async loadAll(): Promise<void> {
-    await Promise.all([this.refreshStatus(), this.loadFacts(), this.loadProjects(), this.loadEpisodes()]);
+    await Promise.all([this.refreshStatus(), this.loadFacts(), this.loadProjects(), this.loadEpisodes(), this.loadSuggestions()]);
+  }
+
+  /** Follows the number of fact suggestions on every screen. */
+  async start(): Promise<void> {
+    if (this.suggestionsFollowed || this.destroyRef.destroyed) return;
+    this.suggestionsFollowed = true;
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    this.destroyRef.onDestroy(() => {
+      active = false;
+      unlisten?.();
+    });
+    try {
+      await withRequestDeadline(
+        () =>
+          this.api
+            .onFactSuggestions((count) => {
+              if (!active) return;
+              this.pendingSuggestions.set(count);
+              void this.loadSuggestions();
+            })
+            .then((cleanup) => {
+              if (active) unlisten = cleanup;
+              else cleanup();
+            }),
+        SUGGESTION_SUBSCRIPTION_TIMEOUT_MS,
+        'Fact suggestion subscription',
+        this.destroyRef
+      );
+    } catch (error) {
+      active = false;
+      this.suggestionsFollowed = false;
+      this.error.set(IpcError.from(error));
+      return;
+    }
+    await this.loadSuggestions();
+  }
+
+  loadSuggestions(): Promise<void> {
+    const epoch = ++this.suggestionEpoch;
+    const current = () => epoch === this.suggestionEpoch && !this.destroyRef.destroyed;
+    return this.run(async () => {
+      const list = await this.api.listFactSuggestions();
+      if (!current()) return;
+      this.suggestions.set(list);
+      this.pendingSuggestions.set(list.length);
+    }, current);
+  }
+
+  /** Saves a suggestion as a fact, with the user's changes. */
+  acceptSuggestion(input: AcceptFactSuggestion): Promise<void> {
+    return this.run(async () => {
+      const fact = await this.api.acceptFactSuggestion(input);
+      if (this.destroyRef.destroyed) return;
+      this.dropSuggestion(input.id);
+      this.listEpochs.facts++;
+      this.facts.update((list) => [fact, ...list.filter((entry) => entry.id !== fact.id)]);
+      this.clearSearch();
+    });
+  }
+
+  rejectSuggestion(id: string): Promise<void> {
+    return this.run(async () => {
+      await this.api.rejectFactSuggestion(id);
+      if (this.destroyRef.destroyed) return;
+      this.dropSuggestion(id);
+    });
+  }
+
+  private dropSuggestion(id: string): void {
+    // A list read that started before this change is out of date.
+    this.suggestionEpoch++;
+    this.suggestions.update((list) => list.filter((entry) => entry.id !== id));
+    this.pendingSuggestions.set(this.suggestions().length);
   }
 
   refreshStatus(): Promise<void> {

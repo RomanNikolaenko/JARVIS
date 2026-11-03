@@ -1,3 +1,58 @@
+@if (store.suggestions().length) {
+  <jv-hud-panel class="suggestions" [heading]="'Suggested (' + store.suggestions().length + ')'">
+    <p class="hint">
+      <jv-icon name="spark" [size]="14" />
+      JARVIS found these in your conversations. Nothing is remembered until you accept it, and you can correct the text first.
+    </p>
+    <ul class="list">
+      @for (suggestion of store.suggestions(); track suggestion.id) {
+        @let draft = draftOf(suggestion);
+        <li class="row suggestion">
+          <div class="row-main">
+            <textarea
+              rows="2"
+              aria-label="Suggested fact"
+              [attr.maxlength]="maxLength"
+              [value]="draft.content"
+              (input)="patchDraft(suggestion, { content: valueOf($event) })"></textarea>
+            <div class="row-meta">
+              <a routerLink="/chat" [queryParams]="{ c: suggestion.sourceConversationId }"
+                >from “{{ suggestion.sourceConversationTitle }}”</a
+              >
+              <span>· {{ formatDate(suggestion.createdAtMs) }}</span>
+            </div>
+            <div class="toolbar">
+              <select aria-label="Applies to" (change)="patchDraft(suggestion, { projectId: valueOf($event) || null })">
+                <option value="" [selected]="draft.projectId === null">All conversations</option>
+                @for (project of store.projects(); track project.id) {
+                  <option [value]="project.id" [selected]="project.id === draft.projectId">Project: {{ project.name }}</option>
+                }
+              </select>
+              <label class="check">
+                <input
+                  type="checkbox"
+                  [checked]="draft.pinned"
+                  (change)="patchDraft(suggestion, { pinned: checkedOf($event) })" />
+                <span>Always include (pinned)</span>
+              </label>
+              <span class="grow"></span>
+              <button type="button" class="ghost small" [disabled]="store.busy()" (click)="reject(suggestion)">Reject</button>
+              <button
+                type="button"
+                class="primary small"
+                [disabled]="store.busy() || !draft.content.trim()"
+                (click)="accept(suggestion)">
+                <jv-icon name="check" [size]="13" />
+                Accept
+              </button>
+            </div>
+          </div>
+        </li>
+      }
+    </ul>
+  </jv-hud-panel>
+}
+
 <jv-hud-panel [heading]="editingId() ? 'Edit fact' : 'New fact'">
   <div class="form">
     <label class="field">

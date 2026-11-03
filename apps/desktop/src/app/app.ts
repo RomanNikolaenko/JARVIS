@@ -4,6 +4,7 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AgentsStore } from './core/state/agents.store';
 import { ChatStore } from './core/state/chat.store';
 import { EventLogStore } from './core/state/event-log.store';
+import { MemoryStore } from './core/state/memory.store';
 import { ModelsStore } from './core/state/models.store';
 import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
@@ -19,6 +20,9 @@ interface NavItem {
   readonly path: string;
   readonly label: string;
   readonly icon: IconName;
+  /** A number shown next to the label while it is above zero. */
+  readonly badge?: () => number;
+  readonly badgeLabel?: string;
 }
 
 const HEALTH_POLL_MS = 15_000;
@@ -44,6 +48,7 @@ export class App {
   protected readonly voice = inject(VoiceStore);
   protected readonly updates = inject(UpdatesStore);
   protected readonly models = inject(ModelsStore);
+  private readonly memory = inject(MemoryStore);
 
   protected readonly nav: readonly NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -51,7 +56,13 @@ export class App {
     { path: '/models', label: 'Models', icon: 'spark' },
     { path: '/runtime', label: 'Runtime', icon: 'cpu' },
     { path: '/agents', label: 'Agents', icon: 'agent' },
-    { path: '/memory', label: 'Memory', icon: 'brain' },
+    {
+      path: '/memory',
+      label: 'Memory',
+      icon: 'brain',
+      badge: () => this.memory.pendingSuggestions(),
+      badgeLabel: 'suggested facts',
+    },
     { path: '/plugins', label: 'Plugins', icon: 'plug' },
     { path: '/events', label: 'Event log', icon: 'events' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
@@ -99,6 +110,8 @@ export class App {
     void this.voice.start();
     // A found update is announced on every screen.
     void this.updates.start();
+    // Suggested facts are counted next to Memory on every screen.
+    void this.memory.start();
     void this.settings.load().then(() => chat.loadModels());
     pollWhileVisible(
       async () => {

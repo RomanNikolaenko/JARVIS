@@ -81,6 +81,17 @@
   }
 }
 
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--jv-accent);
+  color: var(--jv-bg);
+  font: 600 11px/18px var(--jv-mono);
+  text-align: center;
+}
+
 .sidebar-footer {
   margin-top: auto;
   display: flex;
