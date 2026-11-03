@@ -840,6 +840,14 @@ impl MemoryEngine {
             .await
     }
 
+    /// Saved conversations updated since `since_ms` with user messages not
+    /// yet looked at for facts, least recently updated first.
+    pub async fn recently_unchecked_conversations(&self, since_ms: i64) -> Result<Vec<Uuid>> {
+        self.db()?
+            .call(move |conn| store::recently_unchecked(conn, since_ms))
+            .await
+    }
+
     /// Records that the messages up to `until_seq` were looked at. The
     /// cursor never moves back; a missing conversation is ignored.
     pub async fn mark_facts_checked(&self, conversation_id: Uuid, until_seq: i64) -> Result<()> {

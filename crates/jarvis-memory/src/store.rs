@@ -962,6 +962,22 @@ pub fn set_facts_checked_until(conn: &Connection, conversation_id: Uuid, seq: i6
     Ok(())
 }
 
+/// Saved conversations updated since `since_ms` with user messages after
+/// their cursor, least recently updated first.
+pub fn recently_unchecked(conn: &Connection, since_ms: i64) -> Result<Vec<Uuid>> {
+    let mut statement = conn.prepare(
+        "SELECT c.id FROM conversations c
+         WHERE c.updated_at >= ?1 AND EXISTS (
+             SELECT 1 FROM messages m
+             WHERE m.conversation_id = c.id AND m.id > c.facts_checked_until AND m.role = 'user')
+         ORDER BY c.updated_at",
+    )?;
+    let rows = statement
+        .query_map([since_ms], |row| uuid_at(row, 0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// Messages after `seq`, oldest first.
 pub fn messages_after(
     conn: &Connection,

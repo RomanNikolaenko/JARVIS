@@ -38,38 +38,56 @@ pub(crate) struct ExtractionRequest {
     pub checked_until: i64,
 }
 
+/// The longest excerpt of one JARVIS reply; replies are context only.
+const REPLY_TOKENS: u32 = 250;
+
 /// The request for the messages not yet looked at, or `None` when there is
-/// no user message among them. The newest messages that fit into
-/// [`INPUT_TOKENS`] are sent; a newest message larger than that is cut.
+/// no user message among them. The user's messages come first, newest
+/// first, within [`INPUT_TOKENS`]: the newest is cut when it alone is
+/// larger, older ones that do not fit are left out. JARVIS's replies fill
+/// what is left, each as a short excerpt, so they never crowd out a source.
 pub(crate) fn extraction_request(messages: &[StoredMessage]) -> Option<ExtractionRequest> {
     let newest = messages.last()?;
-    let mut lines = Vec::new();
+    let mut chosen: Vec<Option<String>> = vec![None; messages.len()];
     let mut budget = INPUT_TOKENS;
-    for message in messages.iter().rev() {
+    for (index, message) in messages.iter().enumerate().rev() {
         let content = message.content.trim();
-        if content.is_empty() {
+        if message.role != MessageRole::User || content.is_empty() {
             continue;
         }
-        let label = match message.role {
-            MessageRole::User => "User",
-            MessageRole::Assistant => "JARVIS (context only)",
-        };
-        let line = format!("{label}: {content}");
+        let line = format!("User: {content}");
         let tokens = text::estimate_tokens(&line);
         if tokens <= budget {
             budget -= tokens;
-            lines.push(line);
+            chosen[index] = Some(line);
             continue;
         }
-        if lines.is_empty() {
-            lines.push(text::truncate_to_tokens(&line, budget));
+        if chosen.iter().all(Option::is_none) {
+            // Room for one reply excerpt stays.
+            let cut = text::truncate_to_tokens(&line, INPUT_TOKENS - REPLY_TOKENS);
+            budget = budget.saturating_sub(text::estimate_tokens(&cut));
+            chosen[index] = Some(cut);
         }
         break;
     }
-    if !lines.iter().any(|line| line.starts_with("User: ")) {
+    if chosen.iter().all(Option::is_none) {
         return None;
     }
-    lines.reverse();
+    for (index, message) in messages.iter().enumerate().rev() {
+        let content = message.content.trim();
+        if message.role != MessageRole::Assistant || content.is_empty() {
+            continue;
+        }
+        let line =
+            text::truncate_to_tokens(&format!("JARVIS (context only): {content}"), REPLY_TOKENS);
+        let tokens = text::estimate_tokens(&line);
+        if tokens > budget {
+            break;
+        }
+        budget -= tokens;
+        chosen[index] = Some(line);
+    }
+    let lines: Vec<String> = chosen.into_iter().flatten().collect();
     Some(ExtractionRequest {
         messages: vec![
             ChatMessage::new(ChatRole::System, SYSTEM_PROMPT),
@@ -171,6 +189,50 @@ mod tests {
         assert!(user.contains("User: Я маю кота."));
         assert_eq!(user.matches("User: bbb").count(), 1, "only what fits");
         assert_eq!(request.checked_until, 3);
+    }
+
+    // Review finding: a check runs after a reply is saved, so the newest
+    // message is JARVIS's; it must not crowd out what the user said.
+    #[test]
+    fn a_long_user_message_before_a_reply_is_cut_not_skipped() {
+        let long = "a".repeat(20_000);
+        let request = extraction_request(&[
+            message(5, MessageRole::User, &long),
+            message(6, MessageRole::Assistant, "Чудово!"),
+        ])
+        .expect("the user message is a source");
+        let user = &request.messages[1].content;
+        assert!(user.contains("User: aaa"), "{}", &user[..200]);
+        assert!(user.contains("JARVIS (context only): Чудово!"));
+        assert!(text::estimate_tokens(user) <= INPUT_TOKENS + 100);
+        assert_eq!(request.checked_until, 6);
+    }
+
+    #[test]
+    fn a_long_reply_does_not_crowd_out_the_user() {
+        let reply = "б".repeat(12_000);
+        let request = extraction_request(&[
+            message(1, MessageRole::User, "Я давно вчитель історії."),
+            message(2, MessageRole::Assistant, "Перша відповідь."),
+            message(3, MessageRole::User, "Напиши план уроку."),
+            message(4, MessageRole::Assistant, &reply),
+        ])
+        .expect("request");
+        let user = &request.messages[1].content;
+        assert!(
+            user.contains("User: Я давно вчитель історії."),
+            "older user turns stay"
+        );
+        assert!(user.contains("User: Напиши план уроку."));
+        assert!(
+            user.contains("JARVIS (context only): ббб"),
+            "an excerpt of the reply"
+        );
+        assert!(
+            user.chars().count() < 2_000,
+            "replies are excerpts: {}",
+            user.chars().count()
+        );
     }
 
     #[test]

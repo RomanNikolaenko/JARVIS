@@ -3,6 +3,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -133,22 +134,32 @@ struct TestCore {
 }
 
 async fn start(provider: Arc<Scripted>, suggest: bool) -> TestCore {
+    start_with(provider, suggest, PAUSE).await
+}
+
+/// A longer pause for tests that change settings while a check is due:
+/// saving settings must not race the pause on a busy machine.
+async fn start_with(provider: Arc<Scripted>, suggest: bool, pause: Duration) -> TestCore {
     let dir = tempfile::tempdir().unwrap();
+    let core = open(dir.path(), provider, pause).await;
+    set_suggest(&core, suggest).await;
+    TestCore { core, _dir: dir }
+}
+
+async fn open(dir: &Path, provider: Arc<Scripted>, pause: Duration) -> Arc<JarvisCore> {
     let paths = AppPaths {
-        config_dir: dir.path().join("config"),
-        data_dir: dir.path().join("data"),
-        log_dir: dir.path().join("logs"),
+        config_dir: dir.join("config"),
+        data_dir: dir.join("data"),
+        log_dir: dir.join("logs"),
     };
-    let core = JarvisCore::initialize(
+    JarvisCore::initialize(
         CoreOptions::new(paths, "9.9.9")
             .with_static_providers(vec![provider])
             .with_provider_factory(None)
-            .with_fact_suggestion_pause(PAUSE),
+            .with_fact_suggestion_pause(pause),
     )
     .await
-    .unwrap();
-    set_suggest(&core, suggest).await;
-    TestCore { core, _dir: dir }
+    .unwrap()
 }
 
 async fn set_suggest(core: &JarvisCore, on: bool) {
@@ -426,4 +437,68 @@ async fn deleting_the_conversation_or_clearing_memory_drops_suggestions() {
     test.core.clear_memory().await.unwrap();
     assert_eq!(*count.borrow(), 0);
     test.core.shutdown().await;
+}
+
+// Review finding: on a one-slot local server a running check made the next
+// chat turn wait; activity now cancels it and the conversation is due again.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_activity_cancels_a_running_check_and_it_runs_again_later() {
+    let provider = Scripted::new(DataLocality::OnDevice);
+    provider.reply_with("{\"facts\": [\"Користувач має кота і собаку.\"]}");
+    let test = start(Arc::clone(&provider), true).await;
+    let mut count = test.core.subscribe_fact_suggestions();
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    let gate = Arc::new(Gate::default());
+    *provider.facts_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    send(&test.core, conversation.id, "Я маю кота.").await;
+    tokio::time::timeout(Duration::from_secs(3), gate.entered.notified())
+        .await
+        .expect("the check is in flight");
+    // The held check is never released: only the cancellation ends it.
+    send(&test.core, conversation.id, "І собаку.").await;
+    wait_for("the check to run again", || {
+        provider.extractions().len() == 2
+    })
+    .await;
+    let again = &provider.extractions()[1];
+    assert!(
+        again.contains("Я маю кота.") && again.contains("І собаку."),
+        "the cancelled messages are looked at again: {again}"
+    );
+    tokio::time::timeout(Duration::from_secs(3), count.wait_for(|n| *n == 1))
+        .await
+        .expect("the second check keeps its suggestion")
+        .unwrap();
+    test.core.shutdown().await;
+}
+
+// Review finding: due conversations lived only in memory, so what was said
+// right before closing JARVIS was never looked at.
+#[tokio::test(flavor = "multi_thread")]
+async fn recent_unchecked_conversations_are_looked_at_after_a_restart() {
+    let provider = Scripted::new(DataLocality::OnDevice);
+    let dir = tempfile::tempdir().unwrap();
+    // JARVIS closes before the pause is over.
+    let core = open(dir.path(), Arc::clone(&provider), Duration::from_secs(60)).await;
+    set_suggest(&core, true).await;
+    let conversation = core.create_conversation(None, false).await.unwrap();
+    send(&core, conversation.id, "Я живу в Одесі.").await;
+    core.shutdown().await;
+    drop(core);
+    assert!(provider.extractions().is_empty());
+
+    let core = open(dir.path(), Arc::clone(&provider), PAUSE).await;
+    wait_for("the check after the restart", || {
+        provider.extractions().len() == 1
+    })
+    .await;
+    assert!(provider.extractions()[0].contains("User: Я живу в Одесі."));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    core.shutdown().await;
+    drop(core);
+
+    let core = open(dir.path(), Arc::clone(&provider), PAUSE).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(provider.extractions().len(), 1, "looked at once");
+    core.shutdown().await;
 }

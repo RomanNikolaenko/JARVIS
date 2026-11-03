@@ -57,6 +57,9 @@ const SHUTDOWN_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 const OLLAMA_DEFAULT_CONTEXT: u32 = 4096;
 const SUMMARY_MAX_TOKENS: u32 = 400;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+/// Conversations this recent with unchecked messages are looked at for
+/// facts after a start.
+const RECENT_UNCHECKED_MS: i64 = DAY_MS;
 
 /// A user message in a conversation, as sent by the UI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -98,6 +101,8 @@ pub(crate) struct MemoryState {
     activity: Notify,
     /// Pending fact suggestions, pushed to the UI.
     suggestion_count: watch::Sender<u32>,
+    /// Cancels the running fact check: chat activity gets the model first.
+    check: Mutex<Option<CancellationToken>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -167,10 +172,22 @@ impl MemoryState {
         guard(&self.turns).remove(&conversation_id);
     }
 
-    /// Chat activity: postpones fact checks.
+    /// Chat activity: postpones fact checks and stops a running one (a
+    /// local server with one slot would make the chat wait for it).
     fn touch(&self) {
         *guard(&self.last_activity) = Some(tokio::time::Instant::now());
+        if let Some(check) = guard(&self.check).take() {
+            check.cancel();
+        }
         self.activity.notify_one();
+    }
+
+    /// A check that did not finish: the conversation is looked at later.
+    fn requeue(&self, conversation_id: Uuid) {
+        let mut due = guard(&self.suggestions_due);
+        if !due.contains(&conversation_id) {
+            due.insert(0, conversation_id);
+        }
     }
 
     /// A saved reply: the conversation is looked at for facts after a pause.
@@ -761,6 +778,7 @@ impl JarvisCore {
         tokio::spawn(async move {
             if let Some(core) = weak.upgrade() {
                 core.publish_suggestion_count().await;
+                core.queue_recent_unchecked().await;
             }
             loop {
                 let due = !guard(&scheduler_state.suggestions_due).is_empty();
@@ -863,10 +881,23 @@ impl JarvisCore {
             },
         };
         let timeout = Duration::from_secs(u64::from(settings.ai.request_timeout_secs));
+        let cancel = CancellationToken::new();
+        *guard(&self.memory_state.check) = Some(cancel.clone());
+        // Activity right before the token was in place counts too.
+        let quiet = guard(&self.memory_state.last_activity)
+            .is_none_or(|at| at + self.fact_suggestion_pause <= tokio::time::Instant::now());
+        if !quiet {
+            cancel.cancel();
+        }
         let reply = tokio::select! {
             () = self.memory_state.shutdown.cancelled() => return,
+            () = cancel.cancelled() => {
+                self.memory_state.requeue(conversation_id);
+                return;
+            }
             reply = tokio::time::timeout(timeout, provider.chat(chat)) => reply,
         };
+        guard(&self.memory_state.check).take();
         let reply = match reply {
             Ok(Ok(response)) => response.content,
             Ok(Err(err)) => {
@@ -912,6 +943,29 @@ impl JarvisCore {
             );
         }
         self.publish_suggestion_count().await;
+    }
+
+    /// What was said shortly before JARVIS closed (or in a check that
+    /// failed then) is looked at after the pause; older history is not.
+    async fn queue_recent_unchecked(&self) {
+        let settings = self.config.current();
+        if !settings.memory.enabled || !settings.memory.suggest_facts {
+            return;
+        }
+        let now = i64::try_from(crate::unix_millis()).unwrap_or(i64::MAX);
+        match self
+            .memory
+            .recently_unchecked_conversations(now - RECENT_UNCHECKED_MS)
+            .await
+        {
+            Ok(ids) => {
+                for id in ids {
+                    self.memory_state.mark_due(id);
+                }
+            }
+            Err(MemoryError::Unavailable(_)) => {}
+            Err(err) => tracing::warn!("cannot find conversations to look at for facts: {err}"),
+        }
     }
 
     /// Sends the number of pending suggestions to subscribers.
