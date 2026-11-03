@@ -25,14 +25,14 @@ use jarvis_ai::{
 };
 use jarvis_events::{EventCategory, EventLevel, RecvError, SystemEvent};
 use jarvis_memory::{
-    ContextRequest, ContextWindow, Conversation, ConversationPatch, Embedder, EmbeddingState,
-    EmbeddingStatus, Episode, Fact, FactInput, FactSource, MemoryEngine, MemoryError, MemoryExport,
-    MemoryStatus, MessageRole, MessageStatus, NewMessage, Project, ProjectInput, Retrieval,
-    SearchHit, SearchQuery, TransferReport, text,
+    AcceptFactSuggestion, ContextRequest, ContextWindow, Conversation, ConversationPatch, Embedder,
+    EmbeddingState, EmbeddingStatus, Episode, Fact, FactInput, FactSource, FactSuggestion,
+    MemoryEngine, MemoryError, MemoryExport, MemoryStatus, MessageRole, MessageStatus, NewMessage,
+    Project, ProjectInput, Retrieval, SearchHit, SearchQuery, TransferReport, text,
 };
 use jarvis_runtime::{RUNTIME_PROVIDER_ID, ServerPhase, ServerRole};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Notify, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -40,7 +40,7 @@ use uuid::Uuid;
 use crate::chat::{ChatEventSink, ChatStreamEvent, PreparedChat, ResolvedModel, SinkClosed};
 use crate::config::{ConfigStore, Settings};
 use crate::error::CoreError;
-use crate::{JarvisCore, routing};
+use crate::{JarvisCore, fact_suggestions, routing};
 
 pub const MAX_TURN_CHARS: usize = 32_000;
 /// Largest memory export JARVIS reads.
@@ -90,6 +90,14 @@ pub(crate) struct MemoryState {
     index_notify: Notify,
     shutdown: CancellationToken,
     recorder: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Saved conversations with a reply not yet looked at for facts, the
+    /// most recent last.
+    suggestions_due: Mutex<Vec<Uuid>>,
+    /// The last chat activity; fact checks wait for a pause after it.
+    last_activity: Mutex<Option<tokio::time::Instant>>,
+    activity: Notify,
+    /// Pending fact suggestions, pushed to the UI.
+    suggestion_count: watch::Sender<u32>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -157,6 +165,22 @@ impl MemoryState {
 
     fn forget(&self, conversation_id: Uuid) {
         guard(&self.turns).remove(&conversation_id);
+    }
+
+    /// Chat activity: postpones fact checks.
+    fn touch(&self) {
+        *guard(&self.last_activity) = Some(tokio::time::Instant::now());
+        self.activity.notify_one();
+    }
+
+    /// A saved reply: the conversation is looked at for facts after a pause.
+    fn mark_due(&self, conversation_id: Uuid) {
+        {
+            let mut due = guard(&self.suggestions_due);
+            due.retain(|id| *id != conversation_id);
+            due.push(conversation_id);
+        }
+        self.touch();
     }
 }
 
@@ -352,6 +376,7 @@ impl JarvisCore {
             Err(_) => return Err(still_answering()),
         };
         slot.finishing.store(false, Ordering::Release);
+        self.memory_state.touch();
 
         let attachments = self.attachments(&request.attachments)?;
         let model = if attachments.images.is_empty() {
@@ -490,6 +515,7 @@ impl JarvisCore {
         let auto_summarize = settings.memory.auto_summarize;
         let timeout = Duration::from_secs(u64::from(settings.ai.request_timeout_secs));
         tokio::spawn(async move {
+            let mut reply_saved = false;
             if let Ok(outcome) = outcome.await
                 && let Some(status) = outcome.status()
             {
@@ -506,9 +532,22 @@ impl JarvisCore {
                         },
                     )
                     .await;
-                if let Err(err) = saved {
-                    tracing::warn!("cannot save the reply: {err}");
+                match saved {
+                    Ok(_) => reply_saved = true,
+                    Err(err) => tracing::warn!("cannot save the reply: {err}"),
                 }
+            }
+            // Recorded before the turn is released: whoever waits for this
+            // reply to settle sees the activity it caused.
+            let current = config.current();
+            if reply_saved
+                && current.memory.enabled
+                && current.memory.suggest_facts
+                && !memory.is_temporary(conversation_id)
+            {
+                state.mark_due(conversation_id);
+            } else {
+                state.touch();
             }
             drop(turn);
             state.index_notify.notify_one();
@@ -713,6 +752,179 @@ impl JarvisCore {
                 }
             }
         });
+
+        // Fact suggestions: due conversations are looked at one at a time,
+        // most recent first, once chat activity has paused.
+        let weak = Arc::downgrade(core);
+        let pause = core.fact_suggestion_pause;
+        let scheduler_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Some(core) = weak.upgrade() {
+                core.publish_suggestion_count().await;
+            }
+            loop {
+                let due = !guard(&scheduler_state.suggestions_due).is_empty();
+                let quiet_at = guard(&scheduler_state.last_activity)
+                    .map_or_else(tokio::time::Instant::now, |at| at + pause);
+                if !due || quiet_at > tokio::time::Instant::now() {
+                    tokio::select! {
+                        () = scheduler_state.shutdown.cancelled() => break,
+                        () = scheduler_state.activity.notified() => {}
+                        () = tokio::time::sleep_until(quiet_at), if due => {}
+                    }
+                    continue;
+                }
+                let Some(core) = weak.upgrade() else { break };
+                if scheduler_state.any_busy().await {
+                    drop(core);
+                    // The running reply touches the activity when it is saved.
+                    tokio::select! {
+                        () = scheduler_state.shutdown.cancelled() => break,
+                        () = scheduler_state.activity.notified() => {}
+                    }
+                    continue;
+                }
+                // Waiting for a reply to settle may have taken until its save.
+                let quiet_at = guard(&scheduler_state.last_activity)
+                    .map_or_else(tokio::time::Instant::now, |at| at + pause);
+                if quiet_at > tokio::time::Instant::now() {
+                    continue;
+                }
+                let next = guard(&scheduler_state.suggestions_due).pop();
+                if let Some(conversation_id) = next {
+                    core.suggest_facts(conversation_id).await;
+                }
+            }
+        });
+    }
+
+    /// Asks the conversation's model for lasting facts in the messages not
+    /// yet looked at and keeps them as suggestions. The cursor moves when
+    /// the model answered; errors, refusals and cancellation keep it.
+    async fn suggest_facts(&self, conversation_id: Uuid) {
+        let enabled =
+            |settings: &Settings| settings.memory.enabled && settings.memory.suggest_facts;
+        let settings = self.config.current();
+        if !enabled(&settings) {
+            guard(&self.memory_state.suggestions_due).clear();
+            return;
+        }
+        let messages = match self.memory.unchecked_messages(conversation_id).await {
+            Ok(messages) => messages,
+            Err(err) => {
+                tracing::warn!("cannot read a conversation for fact suggestions: {err}");
+                return;
+            }
+        };
+        let Some(request) = fact_suggestions::extraction_request(&messages) else {
+            // Nothing the user said: nothing to look at again.
+            if let Some(last) = messages.last()
+                && let Err(err) = self
+                    .memory
+                    .mark_facts_checked(conversation_id, last.seq)
+                    .await
+            {
+                tracing::warn!("cannot record checked messages: {err}");
+            }
+            return;
+        };
+        // The model that wrote the latest reply, as for summaries.
+        let Some((provider_id, model)) = messages
+            .iter()
+            .rev()
+            .find_map(|m| Some((m.provider_id.clone()?, m.model.clone()?)))
+        else {
+            return;
+        };
+        let provider = match self.providers.get(&ProviderId::new(provider_id)) {
+            Ok(provider) => provider,
+            Err(err) => {
+                tracing::warn!("no model for fact suggestions: {err}");
+                return;
+            }
+        };
+        // The request contains only this conversation, so it needs the same
+        // permission as chatting with that model.
+        if let Err(err) =
+            routing::check_data_privacy(provider.descriptor(), &settings.privacy, false, false)
+        {
+            self.events.warning(
+                EventCategory::Security,
+                format!("Blocked fact suggestions: {err}"),
+            );
+            return;
+        }
+        let chat = ChatRequest {
+            model: model.clone(),
+            messages: request.messages,
+            options: GenerationOptions {
+                temperature: Some(0.2),
+                max_output_tokens: Some(fact_suggestions::MAX_OUTPUT_TOKENS),
+            },
+        };
+        let timeout = Duration::from_secs(u64::from(settings.ai.request_timeout_secs));
+        let reply = tokio::select! {
+            () = self.memory_state.shutdown.cancelled() => return,
+            reply = tokio::time::timeout(timeout, provider.chat(chat)) => reply,
+        };
+        let reply = match reply {
+            Ok(Ok(response)) => response.content,
+            Ok(Err(err)) => {
+                tracing::warn!("fact suggestion request failed: {err}");
+                return;
+            }
+            Err(_) => {
+                tracing::warn!("fact suggestion request timed out");
+                return;
+            }
+        };
+        // The user may have turned the feature off while the model answered.
+        if !enabled(&self.config.current()) {
+            return;
+        }
+        let found = fact_suggestions::parse_suggestions(&reply).unwrap_or_default();
+        let added = match self
+            .memory
+            .add_fact_suggestions(conversation_id, found)
+            .await
+        {
+            Ok(added) => added,
+            Err(err) => {
+                tracing::warn!("cannot keep fact suggestions: {err}");
+                return;
+            }
+        };
+        if let Err(err) = self
+            .memory
+            .mark_facts_checked(conversation_id, request.checked_until)
+            .await
+        {
+            tracing::warn!("cannot record checked messages: {err}");
+        }
+        if !added.is_empty() {
+            let noun = if added.len() == 1 { "fact" } else { "facts" };
+            self.events.info(
+                EventCategory::Memory,
+                format!(
+                    "JARVIS suggested {} {noun} from a conversation ({model})",
+                    added.len()
+                ),
+            );
+        }
+        self.publish_suggestion_count().await;
+    }
+
+    /// Sends the number of pending suggestions to subscribers.
+    async fn publish_suggestion_count(&self) {
+        let count = match self.memory.pending_suggestion_count().await {
+            Ok(count) => count,
+            Err(MemoryError::Unavailable(_)) => 0,
+            Err(err) => {
+                tracing::warn!("cannot count fact suggestions: {err}");
+                return;
+            }
+        };
+        self.memory_state.suggestion_count.send_replace(count);
     }
 
     async fn prune_episodes(&self) {
@@ -776,6 +988,8 @@ impl JarvisCore {
         if !temporary {
             self.events
                 .info(EventCategory::Memory, "A conversation was deleted");
+            // Its suggestions went with it.
+            self.publish_suggestion_count().await;
         }
         Ok(())
     }
@@ -801,6 +1015,40 @@ impl JarvisCore {
         );
         self.memory_state.index_notify.notify_one();
         Ok(fact)
+    }
+
+    // ---- Fact suggestions -------------------------------------------------
+
+    /// Pending fact suggestions, newest first.
+    pub async fn list_fact_suggestions(&self) -> Result<Vec<FactSuggestion>, CoreError> {
+        Ok(self.memory.list_fact_suggestions().await?)
+    }
+
+    /// Saves a suggestion as a fact, with the user's changes.
+    pub async fn accept_fact_suggestion(
+        &self,
+        input: AcceptFactSuggestion,
+    ) -> Result<Fact, CoreError> {
+        self.require_saving()?;
+        let accepted = self.memory.accept_fact_suggestion(input).await;
+        // Also when it is gone, so the list in the UI catches up.
+        self.publish_suggestion_count().await;
+        let fact = accepted?;
+        self.events.info(EventCategory::Memory, "A fact was saved");
+        self.memory_state.index_notify.notify_one();
+        Ok(fact)
+    }
+
+    /// Rejects a suggestion; the same text is not suggested again.
+    pub async fn reject_fact_suggestion(&self, id: Uuid) -> Result<(), CoreError> {
+        let rejected = self.memory.reject_fact_suggestion(id).await;
+        self.publish_suggestion_count().await;
+        Ok(rejected?)
+    }
+
+    /// The number of pending suggestions, now and after every change.
+    pub fn subscribe_fact_suggestions(&self) -> watch::Receiver<u32> {
+        self.memory_state.suggestion_count.subscribe()
     }
 
     pub async fn delete_fact(&self, id: Uuid) -> Result<(), CoreError> {
@@ -998,6 +1246,7 @@ impl JarvisCore {
         }
         self.memory.clear().await?;
         *guard(&self.memory_state.embedding) = EmbeddingRuntime::default();
+        self.publish_suggestion_count().await;
         self.events
             .warning(EventCategory::Memory, "All saved memory was deleted");
         Ok(())
@@ -1038,6 +1287,7 @@ async fn compact(
                     format!("Blocked a conversation summary: {err}"),
                 );
             })?;
+        state.touch();
         let request = ChatRequest {
             model: model.clone(),
             messages: plan.messages,

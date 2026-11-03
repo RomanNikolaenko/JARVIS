@@ -22,7 +22,7 @@ mod voice;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jarvis_ai::{
     AiError, AiProvider, DataLocality, EchoProvider, HttpClient, HttpProviderFactory, ModelInfo,
@@ -126,6 +126,9 @@ pub struct CoreOptions {
     pub voice_backend: Option<Arc<dyn VoiceBackend>>,
     /// Replaces screen capture (tests).
     pub screen_capture: Option<Arc<dyn ScreenCapture>>,
+    /// Quiet time after the last chat activity before conversations are
+    /// looked at for facts to suggest.
+    pub fact_suggestion_pause: Duration,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -150,7 +153,14 @@ impl CoreOptions {
             secrets: None,
             voice_backend: None,
             screen_capture: None,
+            fact_suggestion_pause: Duration::from_secs(120),
         }
+    }
+
+    /// Shortens the pause before fact suggestions (tests).
+    pub fn with_fact_suggestion_pause(mut self, pause: Duration) -> Self {
+        self.fact_suggestion_pause = pause;
+        self
     }
 
     /// Replaces screen capture (tests).
@@ -211,6 +221,7 @@ pub struct JarvisCore {
     chat: ChatService,
     memory: Arc<MemoryEngine>,
     memory_state: Arc<memory::MemoryState>,
+    fact_suggestion_pause: Duration,
     agents: agents::AgentSystem,
     secrets: Arc<dyn SecretStore>,
     voice: VoiceEngine,
@@ -234,6 +245,7 @@ impl JarvisCore {
             secrets,
             voice_backend,
             screen_capture,
+            fact_suggestion_pause,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -381,6 +393,7 @@ impl JarvisCore {
             chat,
             memory: Arc::clone(&memory),
             memory_state: Arc::default(),
+            fact_suggestion_pause,
             agents,
             secrets: Arc::clone(&secrets),
             voice,
