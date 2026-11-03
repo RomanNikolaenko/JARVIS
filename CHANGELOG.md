@@ -12,15 +12,20 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   things you said about yourself; the suggestions wait under Memory →
   Facts, with their number next to Memory in the navigation, and nothing is
   remembered until you accept one (you can edit the text, pin it or move it
-  to a project first). Rejected suggestions are not made again; cloud models
-  are asked only when the conversation may use them. In a live check with
-  Qwen2.5 3B on a laptop CPU, three messages with five facts gave five
-  suggestions about two minutes after the pause began: two correct (work and
-  city in one, the cat), a one-off "hungry", two taken from JARVIS's own
-  replies, and "does not eat meat" was missed. Two later chats in which the
-  user only asked questions added two more suggestions taken from JARVIS's
-  replies. An accepted fact reached the next answer once pinned (without an
-  embedding model, unpinned facts need shared words with the question).
+  to a project first). A rejected text is not suggested again (a rephrased
+  one can be); cloud models are asked only when the conversation may use
+  them. Writing to JARVIS while a check runs stops it, so the chat never
+  waits for it, and what was said shortly before JARVIS closed is looked at
+  after the next start.
+  Live check with Qwen2.5 3B on a laptop CPU (three messages stating a name,
+  a job, a city, a cat and "no meat", plus a one-off "I'm hungry", then
+  "I play the guitar"): five suggestions, three correct and together
+  covering all six facts, one one-off ("hungry") and one sentence taken from
+  JARVIS's reply. The small model copied the user's sentences instead of
+  rephrasing them. A message sent while a check ran was answered without
+  waiting: llama.cpp cancelled the check within 5 s and repeated it later.
+  An accepted fact reached the next answer once pinned (without an
+  embedding model, unpinned facts need words shared with the question).
   Review matters with small models.
 
 ### Changed

@@ -169,3 +169,17 @@ accept with a clear message and disappears from the list.
 
 ARCHITECTURE (memory section, IPC table, the "Facts are saved explicitly"
 limitation), ADR 0009 addendum, CHANGELOG, ROADMAP Phase 4.
+
+## Changes after the final review (2026-11-03)
+
+- §3 input: the user's messages are budgeted first (the newest is cut, not
+  skipped, when it alone is too large); JARVIS's replies follow as excerpts
+  of at most 250 tokens. Before, a long reply could crowd every user message
+  out and the cursor passed them for good.
+- §2/§7: chat activity cancels a running check and the conversation is due
+  again. The embedded llama.cpp server has one slot, so a check made the
+  next chat turn wait (verified live: cancelled within 5 s).
+- §2: at start, saved conversations updated in the last 24 hours with
+  unchecked user messages become due (what was said right before closing).
+- §3 parsing: a copied "User:" label is removed and items labelled as
+  JARVIS's are dropped (Qwen2.5 3B copied source lines in the live check).

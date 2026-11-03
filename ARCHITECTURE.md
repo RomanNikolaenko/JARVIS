@@ -372,13 +372,19 @@ Fact suggestions (`memory.suggestFacts`, off by default): after a reply of a
 saved conversation, the conversation is due; 120 s after the last chat activity
 (a turn, a streamed reply or a summary request postpones it, and the pause is
 re-checked after waiting for a running reply) the model of its latest reply is
-asked once for lasting facts in the messages after `facts_checked_until`
-(user messages are the sources, JARVIS's replies context only; at most 3 000
-estimated tokens, the newest kept). Up to 5 items of 3–300 characters go to
-`fact_suggestions`, minus texts equal (normalized) to a fact or to a pending
-or rejected suggestion. The cursor moves when the model answered; errors,
-privacy refusals and cancellation keep it. The pending count is pushed as
-`jarvis://fact-suggestions`.
+asked once for lasting facts in the messages after `facts_checked_until`.
+The request holds at most 3 000 estimated tokens: the user's messages first,
+newest first (the newest is cut when it alone is larger, older ones that do
+not fit are left out), then excerpts of JARVIS's replies (at most 250 tokens
+each) as context in what is left. Up to 5 items of 3–300 characters go to
+`fact_suggestions` (a copied "User:" label is removed, items labelled as
+JARVIS's are dropped), minus texts equal (normalized) to a fact or to a
+pending or rejected suggestion. Any chat activity cancels a running check
+(llama.cpp's single slot would otherwise make the chat wait) and the
+conversation is due again. At start, saved conversations updated in the
+last 24 hours with unchecked user messages are due. The cursor moves when
+the model answered; errors, privacy refusals and cancellation keep it. The
+pending count is pushed as `jarvis://fact-suggestions`.
 
 Background tasks: the indexer embeds new facts and messages (batches of 32,
 on change and every 60 s), the recorder writes actions to the history every
@@ -967,8 +973,10 @@ must be granted by a capability; anything not granted is denied. See
   items).
 - The memory database is not encrypted at rest.
 - Facts are saved explicitly or accepted from suggestions; nothing the model
-  finds is used before the user accepts it. A small model misses facts and
-  phrases them loosely (see CHANGELOG for the live check).
+  finds is used before the user accepts it. A small model suggests one-off
+  states and sentences from JARVIS's replies, and copies the user's words
+  instead of rephrasing them (see CHANGELOG for the live check). Duplicates
+  are recognized only as the same text after normalization.
 - Tools are not sandboxed: programs the user allowed and approved run with
   the user's rights. The policy limits what tools are asked to do.
 - Agents use native tool calling when both model capabilities and the provider

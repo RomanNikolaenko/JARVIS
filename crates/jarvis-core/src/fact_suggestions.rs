@@ -115,7 +115,7 @@ pub(crate) fn parse_suggestions(reply: &str) -> Option<Vec<String>> {
             items
                 .iter()
                 .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
+                .filter_map(without_label)
                 .filter(|item| (MIN_CHARS..=MAX_CHARS).contains(&item.chars().count()))
                 .take(MAX_SUGGESTIONS)
                 .map(str::to_owned)
@@ -123,6 +123,23 @@ pub(crate) fn parse_suggestions(reply: &str) -> Option<Vec<String>> {
         );
     }
     None
+}
+
+/// A small model may copy a source line with its label: "User:" is
+/// dropped, and a line labelled as JARVIS's is no fact about the user.
+fn without_label(item: &str) -> Option<&str> {
+    let item = item.trim();
+    let starts = |label: &str| {
+        item.get(..label.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(label))
+    };
+    if starts("JARVIS") {
+        return None;
+    }
+    if starts("User:") {
+        return Some(item["User:".len()..].trim_start());
+    }
+    Some(item)
 }
 
 #[cfg(test)]
@@ -252,6 +269,19 @@ mod tests {
         assert_eq!(
             parse_suggestions("Here you go: {\"facts\": [\" Likes tea. \"]} Done."),
             Some(vec!["Likes tea.".to_owned()])
+        );
+    }
+
+    // Live check: Qwen2.5 3B copied source lines with their label.
+    #[test]
+    fn line_labels_are_not_part_of_a_fact() {
+        let reply = r#"{"facts": ["User: А ще я граю на гітарі.", "JARVIS (context only): Чудово!", "user:  Має кота."]}"#;
+        assert_eq!(
+            parse_suggestions(reply),
+            Some(vec![
+                "А ще я граю на гітарі.".to_owned(),
+                "Має кота.".to_owned()
+            ])
         );
     }
 

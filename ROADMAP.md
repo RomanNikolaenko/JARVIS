@@ -84,10 +84,12 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ⬜ Encryption at rest (key in the OS keychain)
 - ✅ Facts suggested from conversations (opt-in, 2026-11-03): after a pause
   the conversation's model proposes facts the user stated; they are used
-  only after the user accepts them on the Memory screen. Live check with
-  Qwen2.5 3B: 2 of 7 suggestions correct, 4 taken from JARVIS's own replies
-  despite the instructions, 1 of 5 stated facts missed (see CHANGELOG);
-  larger models not measured
+  only after the user accepts them on the Memory screen; a check gives way
+  to chat activity and resumes after a restart. Live check with Qwen2.5 3B
+  after the review fixes: 3 of 5 suggestions correct, covering all 6 stated
+  facts; 1 one-off and 1 taken from JARVIS's reply (see CHANGELOG). Before
+  the fixes: 2 of 7 correct, 4 from JARVIS's replies, 1 fact missed. Larger
+  models not measured
 - ⬜ Suggestions from the user's messages only (JARVIS's replies left out of
   the request), measured against the same live check
 
