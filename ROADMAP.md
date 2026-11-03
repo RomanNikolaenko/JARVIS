@@ -82,7 +82,14 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
 - ✅ Text matches judged by shared terms: fewer than the best hit's are
   dropped, one shared word of a question yields to the semantic side
 - ⬜ Encryption at rest (key in the OS keychain)
-- ⬜ Automatic fact extraction (opt-in)
+- ✅ Facts suggested from conversations (opt-in, 2026-11-03): after a pause
+  the conversation's model proposes facts the user stated; they are used
+  only after the user accepts them on the Memory screen. Live check with
+  Qwen2.5 3B: 2 of 7 suggestions correct, 4 taken from JARVIS's own replies
+  despite the instructions, 1 of 5 stated facts missed (see CHANGELOG);
+  larger models not measured
+- ⬜ Suggestions from the user's messages only (JARVIS's replies left out of
+  the request), measured against the same live check
 
 ## Phase 5 — Tools and agents 🟡
 

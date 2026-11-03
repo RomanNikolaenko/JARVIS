@@ -368,6 +368,18 @@ marked with an ellipsis, so a small window can still cover at least two
 consecutive old messages. Batches avoid leaving a single old message stranded;
 the six most recent messages and the stored original text are unchanged.
 
+Fact suggestions (`memory.suggestFacts`, off by default): after a reply of a
+saved conversation, the conversation is due; 120 s after the last chat activity
+(a turn, a streamed reply or a summary request postpones it, and the pause is
+re-checked after waiting for a running reply) the model of its latest reply is
+asked once for lasting facts in the messages after `facts_checked_until`
+(user messages are the sources, JARVIS's replies context only; at most 3 000
+estimated tokens, the newest kept). Up to 5 items of 3–300 characters go to
+`fact_suggestions`, minus texts equal (normalized) to a fact or to a pending
+or rejected suggestion. The cursor moves when the model answered; errors,
+privacy refusals and cancellation keep it. The pending count is pushed as
+`jarvis://fact-suggestions`.
+
 Background tasks: the indexer embeds new facts and messages (batches of 32,
 on change and every 60 s), the recorder writes actions to the history every
 5 s and on shutdown, the pruner removes actions older than the retention.
@@ -581,6 +593,7 @@ notification instead of blocking publishers.
 | `list_conversations` / `get_conversation` | `query?`, `limit?` / `id` | `Conversation[]` / `ConversationDetail` |
 | `create_conversation` / `update_conversation` / `delete_conversation` | `projectId?`, `temporary` / `id`, `patch` / `id` | `Conversation` / `Conversation` / – |
 | `list_facts` / `save_fact` / `delete_fact` | – / `input: FactInput` / `id` | `Fact[]` / `Fact` / – |
+| `list_fact_suggestions` / `accept_fact_suggestion` / `reject_fact_suggestion` | – / `input: AcceptFactSuggestion` / `id` | `FactSuggestion[]` / `Fact` / – |
 | `list_projects` / `save_project` / `delete_project` | – / `input: ProjectInput` / `id` | `Project[]` / `Project` / – |
 | `list_episodes` / `clear_episodes` | `limit?`, `before?: EpisodeCursor` / – | `Episode[]` / count |
 | `search_memory` | `query: SearchQuery` | `SearchHit[]` |
@@ -617,7 +630,8 @@ check, since the journal may change afterward. Late native responses after a
 timeout cannot replace the result of a retry.
 
 Events: `jarvis://system-event` → `SystemEvent`; `jarvis://agent-task` →
-`AgentTask`; `jarvis://approvals` → `PendingApproval[]`.
+`AgentTask`; `jarvis://approvals` → `PendingApproval[]`;
+`jarvis://fact-suggestions` → pending suggestion count (`number`).
 
 Types are defined once in Rust and generated into
 `packages/shared-types/src/generated/*.ts` by `ts-rs` during `cargo test`; CI
@@ -857,7 +871,9 @@ must be granted by a capability; anything not granted is denied. See
   worker exits, protecting the shared partial file. The catalog UI disables
   known active transfers (including verification); native reservation remains
   authoritative when the UI snapshot is stale or labels differ.
-- **Memory screen**: facts (pin, scope, edit), projects (instructions),
+- **Memory screen**: suggested facts (edit, pin, project, accept or reject;
+  their number is shown next to Memory in the navigation on every screen),
+  facts (pin, scope, edit), projects (instructions),
   action history, search with highlights, database status, memory settings,
   export/import and deleting everything after typing a confirmation word.
   Export, import and clear share a store-level operation guard through the native
@@ -950,7 +966,9 @@ must be granted by a capability; anything not granted is denied. See
 - Vector search is brute force in memory (fine for tens of thousands of
   items).
 - The memory database is not encrypted at rest.
-- Facts are saved explicitly; JARVIS does not extract them automatically.
+- Facts are saved explicitly or accepted from suggestions; nothing the model
+  finds is used before the user accepts it. A small model misses facts and
+  phrases them loosely (see CHANGELOG for the live check).
 - Tools are not sandboxed: programs the user allowed and approved run with
   the user's rights. The policy limits what tools are asked to do.
 - Agents use native tool calling when both model capabilities and the provider

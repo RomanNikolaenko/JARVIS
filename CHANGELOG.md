@@ -4,6 +4,25 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ## [Unreleased]
 
+### Added
+
+- JARVIS can suggest facts from your conversations (Memory → Data &
+  settings → "Suggest facts from conversations", off by default). Two
+  minutes after a conversation pauses, its model looks once for lasting
+  things you said about yourself; the suggestions wait under Memory →
+  Facts, with their number next to Memory in the navigation, and nothing is
+  remembered until you accept one (you can edit the text, pin it or move it
+  to a project first). Rejected suggestions are not made again; cloud models
+  are asked only when the conversation may use them. In a live check with
+  Qwen2.5 3B on a laptop CPU, three messages with five facts gave five
+  suggestions about two minutes after the pause began: two correct (work and
+  city in one, the cat), a one-off "hungry", two taken from JARVIS's own
+  replies, and "does not eat meat" was missed. Two later chats in which the
+  user only asked questions added two more suggestions taken from JARVIS's
+  replies. An accepted fact reached the next answer once pinned (without an
+  embedding model, unpinned facts need shared words with the question).
+  Review matters with small models.
+
 ### Changed
 
 - An agent no longer asks you again for an action you denied in the same

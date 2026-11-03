@@ -251,8 +251,9 @@ What remains:
 - SQLCipher (encryption at rest): key management (OS keychain) belongs to the
   security phase; until then the database relies on the user account's
   protection, which is stated in the UI and in SECURITY.md.
-- Automatic fact extraction by the model: error-prone with small models and
-  a privacy concern; facts are saved explicitly ("Remember") for now.
+- Saving facts the model extracts without review: error-prone with small models and
+  a privacy concern; facts are saved explicitly ("Remember") or accepted from
+  suggestions (see the addendum).
 
 ## Consequences
 
@@ -272,3 +273,25 @@ What remains:
   the answer elsewhere; without an embedding model it still does.
 - Token counts are estimates, so the budget keeps a safety margin.
 - Later domains (tasks, audit log) add migrations to the same database.
+
+## Addendum (2026-11-03): facts suggested from conversations
+
+The rejected alternative above was saving facts the model extracts. What
+was added instead keeps the user in the loop:
+
+- After a pause of two minutes in chat activity, the model of a saved
+  conversation is asked once for lasting facts the user stated about
+  themselves in the messages not yet looked at (`memory.suggestFacts`, off
+  by default). JARVIS's own replies are context only.
+- The answers are **suggestions** in a table of their own
+  (`fact_suggestions`, migration 0005), not a status of `facts`: context
+  assembly, search, the embedding indexer and export read `facts` only, so a
+  pending suggestion cannot reach a reply even if a filter is missed.
+  Accepting creates an ordinary fact (`source = conversation`); rejecting
+  keeps the normalized text so it is not suggested again. Suggestions go with
+  their conversation and with "Delete everything".
+- A cursor per conversation (`facts_checked_until`) moves when the model
+  answered and stays on errors, refusals and cancellation.
+- Privacy: the request contains only this conversation, so it needs the
+  same permission as chatting with that model (as summaries do). Existing
+  facts are compared locally and never sent.
