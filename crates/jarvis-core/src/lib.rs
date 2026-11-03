@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod chat;
 pub mod config;
 pub mod error;
+mod fact_suggestions;
 pub mod health;
 mod memory;
 mod plugins;
