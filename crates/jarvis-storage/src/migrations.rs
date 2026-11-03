@@ -45,10 +45,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "agent_verification",
         sql: include_str!("../migrations/0004_agent_verification.sql"),
     },
+    Migration {
+        version: 5,
+        name: "fact_suggestions",
+        sql: include_str!("../migrations/0005_fact_suggestions.sql"),
+    },
 ];
 
 /// Schema version this build creates.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// What happened while opening a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,7 +234,7 @@ mod tests {
             migrate(&mut conn, None, MIGRATIONS)
                 .expect("upgrade")
                 .applied,
-            vec![4]
+            vec![4, 5]
         );
         let after: (String, String) = conn
             .query_row("SELECT steps, result FROM agent_tasks", [], |row| {
@@ -268,7 +273,7 @@ mod tests {
             ["00000000-0000-0000-0000-000000000001"],
         ).expect("old history");
         let report = migrate(&mut conn, Some(&path), MIGRATIONS).expect("upgrade");
-        assert_eq!(report.applied, vec![3, 4]);
+        assert_eq!(report.applied, vec![3, 4, 5]);
         assert!(report.backup.is_some());
         let summary: String = conn
             .query_row("SELECT summary FROM episodes", [], |row| row.get(0))
@@ -284,6 +289,46 @@ mod tests {
                 .applied
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn fact_suggestions_upgrade_preserves_conversations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("memory.db");
+        let mut conn = Connection::open(&path).expect("database");
+        migrate(&mut conn, Some(&path), &MIGRATIONS[..4]).expect("version 4");
+        conn.execute(
+            "INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('c1', 'Kept', 1000, 1000)",
+            [],
+        )
+        .expect("old conversation");
+        let report = migrate(&mut conn, Some(&path), MIGRATIONS).expect("upgrade");
+        assert_eq!(report.applied, vec![5]);
+        let (title, checked): (String, i64) = conn
+            .query_row(
+                "SELECT title, facts_checked_until FROM conversations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("conversation");
+        assert_eq!((title.as_str(), checked), ("Kept", 0));
+        let insert = |status: &str| {
+            conn.execute(
+                "INSERT INTO fact_suggestions (id, content, normalized, source_conversation_id, status, created_at)
+                 VALUES (?1, 'Likes tea.', 'likes tea', 'c1', ?2, 2000)",
+                [format!("s-{status}"), status.to_owned()],
+            )
+        };
+        assert!(insert("accepted").is_err(), "only pending or rejected");
+        insert("pending").expect("pending suggestion");
+        conn.pragma_update(None, "foreign_keys", true)
+            .expect("foreign keys");
+        conn.execute("DELETE FROM conversations WHERE id = 'c1'", [])
+            .expect("delete");
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM fact_suggestions", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(left, 0, "suggestions go with their conversation");
     }
 
     #[test]
