@@ -28,11 +28,12 @@ use crate::error::{MemoryError, Result};
 use crate::store::{self, ConversationFilter, FactScope, MessageHit};
 use crate::text::{self, TermMatch, TextQuery, format_date, truncate_chars};
 use crate::types::{
-    Conversation, ConversationDetail, ConversationPatch, ConversationSummary, Episode,
-    EpisodeCursor, Fact, FactInput, FactSource, MAX_FACT_CHARS, MAX_FACTS, MAX_MESSAGE_CHARS,
-    MAX_NOTE_CHARS, MAX_PROJECT_DESCRIPTION_CHARS, MAX_PROJECT_INSTRUCTIONS_CHARS,
-    MAX_PROJECT_NAME_CHARS, MAX_PROJECTS, MAX_TITLE_CHARS, MemoryCounts, MemoryKind, MessageRole,
-    MessageStatus, NewMessage, Project, ProjectInput, SearchHit, SearchQuery, StoredMessage,
+    AcceptFactSuggestion, Conversation, ConversationDetail, ConversationPatch, ConversationSummary,
+    Episode, EpisodeCursor, Fact, FactInput, FactSource, FactSuggestion, MAX_FACT_CHARS, MAX_FACTS,
+    MAX_MESSAGE_CHARS, MAX_NOTE_CHARS, MAX_PROJECT_DESCRIPTION_CHARS,
+    MAX_PROJECT_INSTRUCTIONS_CHARS, MAX_PROJECT_NAME_CHARS, MAX_PROJECTS, MAX_TITLE_CHARS,
+    MemoryCounts, MemoryKind, MessageRole, MessageStatus, NewMessage, Project, ProjectInput,
+    SearchHit, SearchQuery, StoredMessage,
 };
 use crate::vector::{self, Embedder, SimilarityCuts, VectorIndex, VectorKind};
 
@@ -818,6 +819,140 @@ impl MemoryEngine {
             return Err(not_found("fact"));
         }
         self.invalidate_vectors().await;
+        Ok(())
+    }
+
+    // ---- Fact suggestions -------------------------------------------------
+
+    /// Messages of a saved conversation not yet looked at for facts, oldest
+    /// first. Temporary conversations are never looked at.
+    pub async fn unchecked_messages(&self, conversation_id: Uuid) -> Result<Vec<StoredMessage>> {
+        if self.is_temporary(conversation_id) {
+            return Ok(Vec::new());
+        }
+        self.db()?
+            .call(move |conn| {
+                let Some(seq) = store::facts_checked_until(conn, conversation_id)? else {
+                    return Ok(Vec::new());
+                };
+                store::messages_after(conn, conversation_id, seq)
+            })
+            .await
+    }
+
+    /// Records that the messages up to `until_seq` were looked at. The
+    /// cursor never moves back; a missing conversation is ignored.
+    pub async fn mark_facts_checked(&self, conversation_id: Uuid, until_seq: i64) -> Result<()> {
+        if self.is_temporary(conversation_id) {
+            return Ok(());
+        }
+        self.db()?
+            .call(move |conn| store::set_facts_checked_until(conn, conversation_id, until_seq))
+            .await
+    }
+
+    /// Keeps new suggestions from a conversation for review. Texts that
+    /// repeat a fact, a pending or a rejected suggestion, or each other, are
+    /// skipped; a conversation deleted meanwhile gets none.
+    pub async fn add_fact_suggestions(
+        &self,
+        conversation_id: Uuid,
+        contents: Vec<String>,
+    ) -> Result<Vec<FactSuggestion>> {
+        if self.is_temporary(conversation_id) {
+            return Ok(Vec::new());
+        }
+        self.db()?
+            .call(move |conn| {
+                let tx = conn.transaction()?;
+                let Some(conversation) = store::get_conversation(&tx, conversation_id)? else {
+                    return Ok(Vec::new());
+                };
+                let mut known = store::known_normalized(&tx)?;
+                let now = now_ms();
+                let mut added = Vec::new();
+                for content in contents {
+                    let content = content.trim().to_owned();
+                    let normalized = text::normalize_fact(&content);
+                    if normalized.is_empty() || !known.insert(normalized.clone()) {
+                        continue;
+                    }
+                    let suggestion = FactSuggestion {
+                        id: Uuid::new_v4(),
+                        content,
+                        project_id: conversation.project_id,
+                        source_conversation_id: conversation_id,
+                        source_conversation_title: conversation.title.clone(),
+                        created_at_ms: now,
+                    };
+                    store::insert_suggestion(&tx, &suggestion, &normalized)?;
+                    added.push(suggestion);
+                }
+                tx.commit()?;
+                Ok(added)
+            })
+            .await
+    }
+
+    /// Pending suggestions, newest first.
+    pub async fn list_fact_suggestions(&self) -> Result<Vec<FactSuggestion>> {
+        self.db()?
+            .call(|conn| store::list_pending_suggestions(conn))
+            .await
+    }
+
+    pub async fn pending_suggestion_count(&self) -> Result<u32> {
+        self.db()?
+            .call(|conn| store::pending_suggestion_count(conn))
+            .await
+    }
+
+    /// Turns a pending suggestion into a fact, with the user's changes.
+    pub async fn accept_fact_suggestion(&self, input: AcceptFactSuggestion) -> Result<Fact> {
+        let content = input.content.trim().to_owned();
+        check_length("fact", &content, 1, MAX_FACT_CHARS)?;
+        if let Some(project) = input.project_id {
+            self.project(project).await?;
+        }
+        self.db()?
+            .call(move |conn| {
+                let tx = conn.transaction()?;
+                let Some(suggestion) = store::get_pending_suggestion(&tx, input.id)? else {
+                    return Err(not_found("fact suggestion"));
+                };
+                if store::counts(&tx)?.facts >= MAX_FACTS {
+                    return Err(MemoryError::Invalid(format!(
+                        "memory holds at most {MAX_FACTS} facts"
+                    )));
+                }
+                let now = now_ms();
+                let fact = Fact {
+                    id: Uuid::new_v4(),
+                    content,
+                    project_id: input.project_id,
+                    pinned: input.pinned,
+                    source: FactSource::Conversation,
+                    source_conversation_id: Some(suggestion.source_conversation_id),
+                    created_at_ms: now,
+                    updated_at_ms: now,
+                };
+                store::insert_fact(&tx, &fact)?;
+                store::delete_suggestion(&tx, suggestion.id)?;
+                tx.commit()?;
+                Ok(fact)
+            })
+            .await
+    }
+
+    /// Keeps the suggestion as rejected so it is not made again.
+    pub async fn reject_fact_suggestion(&self, id: Uuid) -> Result<()> {
+        let rejected = self
+            .db()?
+            .call(move |conn| store::reject_suggestion(conn, id))
+            .await?;
+        if !rejected {
+            return Err(not_found("fact suggestion"));
+        }
         Ok(())
     }
 

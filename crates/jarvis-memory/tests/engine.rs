@@ -7,9 +7,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use jarvis_ai::ChatRole;
 use jarvis_memory::{
-    ContextRequest, ContextWindow, ConversationPatch, DEFAULT_TITLE, Embedder, FactInput,
-    FactSource, HIGHLIGHT_START, MemoryEngine, MemoryError, MemoryKind, MessageRole, MessageStatus,
-    NewMessage, ProjectInput, Retrieval, SearchQuery,
+    AcceptFactSuggestion, ContextRequest, ContextWindow, ConversationPatch, DEFAULT_TITLE,
+    Embedder, FactInput, FactSource, HIGHLIGHT_START, MemoryEngine, MemoryError, MemoryKind,
+    MessageRole, MessageStatus, NewMessage, ProjectInput, Retrieval, SearchQuery,
 };
 use uuid::Uuid;
 
@@ -865,4 +865,199 @@ async fn temporary_chats_work_without_a_database() {
         .await
         .unwrap();
     assert_eq!(context.messages.len(), 3);
+}
+
+// ---- Fact suggestions ---------------------------------------------------------
+
+fn suggestions(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn suggestions_wait_for_review_and_never_reach_context_or_search() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let source = memory.create_conversation(None, false).await.unwrap();
+    let added = memory
+        .add_fact_suggestions(source.id, suggestions(&["Користувач працює вчителем."]))
+        .await
+        .unwrap();
+    assert_eq!(added.len(), 1);
+    let listed = memory.list_fact_suggestions().await.unwrap();
+    assert_eq!(listed, added);
+    assert_eq!(listed[0].source_conversation_id, source.id);
+    assert_eq!(listed[0].source_conversation_title, source.title);
+    assert_eq!(memory.pending_suggestion_count().await.unwrap(), 1);
+
+    let current = memory.create_conversation(None, false).await.unwrap();
+    let context = memory
+        .prepare_context(request(
+            current.id,
+            "Ким я працюю? Вчителем?",
+            text_retrieval(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(context.report.facts_included, 0);
+    assert!(!context.messages[0].content.contains("Користувач працює"));
+    let hits = memory
+        .search(
+            SearchQuery {
+                text: "вчителем".into(),
+                kinds: vec![MemoryKind::Fact],
+                limit: 10,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(hits.is_empty(), "{hits:?}");
+    assert!(memory.list_facts().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn accepting_creates_a_fact_and_rejecting_blocks_repeats() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let conversation = memory.create_conversation(None, false).await.unwrap();
+    let added = memory
+        .add_fact_suggestions(
+            conversation.id,
+            suggestions(&["Користувач працює вчителем.", "Користувач має кота."]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(added.len(), 2);
+
+    let fact = memory
+        .accept_fact_suggestion(AcceptFactSuggestion {
+            id: added[0].id,
+            content: "Користувач — учитель історії.".into(),
+            pinned: true,
+            project_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(fact.content, "Користувач — учитель історії.");
+    assert!(fact.pinned);
+    assert_eq!(fact.source, FactSource::Conversation);
+    assert_eq!(fact.source_conversation_id, Some(conversation.id));
+    assert_eq!(memory.list_facts().await.unwrap(), vec![fact]);
+    let left = memory.list_fact_suggestions().await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].id, added[1].id);
+
+    memory.reject_fact_suggestion(added[1].id).await.unwrap();
+    assert_eq!(memory.pending_suggestion_count().await.unwrap(), 0);
+    // A rejected text, an accepted fact and a duplicate within the batch.
+    let again = memory
+        .add_fact_suggestions(
+            conversation.id,
+            suggestions(&[
+                "  користувач має кота!  ",
+                "Користувач — учитель історії",
+                "Користувач має кота.",
+            ]),
+        )
+        .await
+        .unwrap();
+    assert!(again.is_empty(), "{again:?}");
+    assert_eq!(memory.pending_suggestion_count().await.unwrap(), 0);
+    assert!(matches!(
+        memory.reject_fact_suggestion(Uuid::new_v4()).await,
+        Err(MemoryError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn the_cursor_only_moves_forward_and_temporary_chats_have_no_unchecked_messages() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let conversation = memory.create_conversation(None, false).await.unwrap();
+    memory
+        .append_message(conversation.id, user("Я працюю вчителем."))
+        .await
+        .unwrap();
+    let last = memory
+        .append_message(conversation.id, assistant("Цікаво!"))
+        .await
+        .unwrap();
+    let unchecked = memory.unchecked_messages(conversation.id).await.unwrap();
+    assert_eq!(unchecked.len(), 2);
+    assert_eq!(unchecked[0].role, MessageRole::User);
+    memory
+        .mark_facts_checked(conversation.id, last.seq)
+        .await
+        .unwrap();
+    assert!(
+        memory
+            .unchecked_messages(conversation.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    memory
+        .append_message(conversation.id, user("І маю кота."))
+        .await
+        .unwrap();
+    memory.mark_facts_checked(conversation.id, 0).await.unwrap();
+    let unchecked = memory.unchecked_messages(conversation.id).await.unwrap();
+    assert_eq!(unchecked.len(), 1);
+    assert_eq!(unchecked[0].content, "І маю кота.");
+
+    let temporary = memory.create_conversation(None, true).await.unwrap();
+    memory
+        .append_message(temporary.id, user("Я працюю лікарем."))
+        .await
+        .unwrap();
+    assert!(
+        memory
+            .unchecked_messages(temporary.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    memory
+        .mark_facts_checked(Uuid::new_v4(), 5)
+        .await
+        .expect("a missing conversation is not an error");
+}
+
+#[tokio::test]
+async fn deleted_conversations_and_clear_remove_suggestions() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let gone = memory.create_conversation(None, false).await.unwrap();
+    memory.delete_conversation(gone.id).await.unwrap();
+    assert!(
+        memory
+            .add_fact_suggestions(gone.id, suggestions(&["Користувач має собаку."]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let first = memory.create_conversation(None, false).await.unwrap();
+    let pending = memory
+        .add_fact_suggestions(first.id, suggestions(&["Користувач живе у Львові."]))
+        .await
+        .unwrap();
+    memory.delete_conversation(first.id).await.unwrap();
+    assert_eq!(memory.pending_suggestion_count().await.unwrap(), 0);
+    assert!(matches!(
+        memory
+            .accept_fact_suggestion(AcceptFactSuggestion {
+                id: pending[0].id,
+                content: "Користувач живе у Львові.".into(),
+                pinned: false,
+                project_id: None,
+            })
+            .await,
+        Err(MemoryError::NotFound(_))
+    ));
+
+    let second = memory.create_conversation(None, false).await.unwrap();
+    memory
+        .add_fact_suggestions(second.id, suggestions(&["Користувач грає на гітарі."]))
+        .await
+        .unwrap();
+    memory.clear().await.unwrap();
+    assert_eq!(memory.pending_suggestion_count().await.unwrap(), 0);
+    assert!(memory.list_fact_suggestions().await.unwrap().is_empty());
 }

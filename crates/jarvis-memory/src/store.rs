@@ -1,14 +1,16 @@
 //! SQL for the memory tables. Every function takes a connection and runs on
 //! the database's blocking thread (see [`jarvis_storage::Database::call`]).
 
+use std::collections::HashSet;
+
 use jarvis_storage::rusqlite::{self, Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::text::estimate_tokens;
+use crate::text::{estimate_tokens, normalize_fact};
 use crate::types::{
-    Conversation, ConversationSummary, Episode, EpisodeCursor, Fact, FactSource, MemoryCounts,
-    MessageRole, MessageStatus, NewMessage, Project, StoredMessage,
+    Conversation, ConversationSummary, Episode, EpisodeCursor, Fact, FactSource, FactSuggestion,
+    MemoryCounts, MessageRole, MessageStatus, NewMessage, Project, StoredMessage,
 };
 use crate::vector::VectorKind;
 
@@ -835,6 +837,146 @@ pub fn delete_other_embeddings(conn: &Connection, model_key: &str) -> Result<usi
 // Whole database
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fact suggestions and the per-conversation cursor
+// ---------------------------------------------------------------------------
+
+const SUGGESTION_COLUMNS: &str = "s.id, s.content, s.project_id, s.source_conversation_id,
+     c.title, s.created_at";
+
+fn suggestion_row(row: &Row<'_>) -> rusqlite::Result<FactSuggestion> {
+    Ok(FactSuggestion {
+        id: uuid_at(row, 0)?,
+        content: row.get(1)?,
+        project_id: opt_uuid_at(row, 2)?,
+        source_conversation_id: uuid_at(row, 3)?,
+        source_conversation_title: row.get(4)?,
+        created_at_ms: row.get(5)?,
+    })
+}
+
+pub fn insert_suggestion(
+    conn: &Connection,
+    suggestion: &FactSuggestion,
+    normalized: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO fact_suggestions (id, content, normalized, project_id, source_conversation_id, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6)",
+        params![
+            suggestion.id.to_string(),
+            suggestion.content,
+            normalized,
+            opt_str(suggestion.project_id),
+            suggestion.source_conversation_id.to_string(),
+            suggestion.created_at_ms
+        ],
+    )?;
+    Ok(())
+}
+
+/// Pending suggestions, newest first.
+pub fn list_pending_suggestions(conn: &Connection) -> Result<Vec<FactSuggestion>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {SUGGESTION_COLUMNS} FROM fact_suggestions s
+         JOIN conversations c ON c.id = s.source_conversation_id
+         WHERE s.status = 'pending' ORDER BY s.created_at DESC, s.rowid DESC"
+    ))?;
+    let rows = statement
+        .query_map([], suggestion_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn get_pending_suggestion(conn: &Connection, id: Uuid) -> Result<Option<FactSuggestion>> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {SUGGESTION_COLUMNS} FROM fact_suggestions s
+                 JOIN conversations c ON c.id = s.source_conversation_id
+                 WHERE s.id = ?1 AND s.status = 'pending'"
+            ),
+            [id.to_string()],
+            suggestion_row,
+        )
+        .optional()?)
+}
+
+pub fn delete_suggestion(conn: &Connection, id: Uuid) -> Result<bool> {
+    Ok(conn.execute(
+        "DELETE FROM fact_suggestions WHERE id = ?1",
+        [id.to_string()],
+    )? > 0)
+}
+
+/// Marks a pending suggestion rejected; `false` when there is none.
+pub fn reject_suggestion(conn: &Connection, id: Uuid) -> Result<bool> {
+    Ok(conn.execute(
+        "UPDATE fact_suggestions SET status = 'rejected' WHERE id = ?1 AND status = 'pending'",
+        [id.to_string()],
+    )? > 0)
+}
+
+pub fn pending_suggestion_count(conn: &Connection) -> Result<u32> {
+    Ok(conn.query_row(
+        "SELECT count(*) FROM fact_suggestions WHERE status = 'pending'",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+/// Normalized texts a new suggestion must not repeat: every fact and every
+/// suggestion, pending or rejected.
+pub fn known_normalized(conn: &Connection) -> Result<HashSet<String>> {
+    let mut known: HashSet<String> = {
+        let mut statement = conn.prepare("SELECT normalized FROM fact_suggestions")?;
+        statement
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let mut statement = conn.prepare("SELECT content FROM facts")?;
+    for content in statement.query_map([], |row| row.get::<_, String>(0))? {
+        known.insert(normalize_fact(&content?));
+    }
+    Ok(known)
+}
+
+/// `messages.id` of the last message already looked at for facts; `None`
+/// when the conversation does not exist.
+pub fn facts_checked_until(conn: &Connection, conversation_id: Uuid) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT facts_checked_until FROM conversations WHERE id = ?1",
+            [conversation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Moves the cursor forward only.
+pub fn set_facts_checked_until(conn: &Connection, conversation_id: Uuid, seq: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE conversations SET facts_checked_until = max(facts_checked_until, ?2) WHERE id = ?1",
+        params![conversation_id.to_string(), seq],
+    )?;
+    Ok(())
+}
+
+/// Messages after `seq`, oldest first.
+pub fn messages_after(
+    conn: &Connection,
+    conversation_id: Uuid,
+    seq: i64,
+) -> Result<Vec<StoredMessage>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT {MESSAGE_COLUMNS} FROM messages WHERE conversation_id = ?1 AND id > ?2 ORDER BY id"
+    ))?;
+    let rows = statement
+        .query_map(params![conversation_id.to_string(), seq], message_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 pub fn counts(conn: &Connection) -> Result<MemoryCounts> {
     Ok(conn.query_row(
         "SELECT (SELECT count(*) FROM conversations), (SELECT count(*) FROM messages),
@@ -858,6 +1000,7 @@ pub fn clear_all(conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
         "DELETE FROM embeddings;
+         DELETE FROM fact_suggestions;
          DELETE FROM summaries;
          DELETE FROM messages;
          DELETE FROM conversations;

@@ -238,6 +238,31 @@ pub struct FactInput {
     pub source_conversation_id: Option<Uuid>,
 }
 
+/// A fact JARVIS found in a conversation; it waits for the user's review
+/// and is not used anywhere until it is accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "memory.ts")]
+pub struct FactSuggestion {
+    pub id: Uuid,
+    pub content: String,
+    pub project_id: Option<Uuid>,
+    pub source_conversation_id: Uuid,
+    pub source_conversation_title: String,
+    pub created_at_ms: i64,
+}
+
+/// Accepting a suggestion, possibly with the user's changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "memory.ts")]
+pub struct AcceptFactSuggestion {
+    pub id: Uuid,
+    pub content: String,
+    pub pinned: bool,
+    pub project_id: Option<Uuid>,
+}
+
 /// Something JARVIS did (episodic memory).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

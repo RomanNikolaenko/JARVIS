@@ -326,7 +326,9 @@ mod tests {
         conn.execute("DELETE FROM conversations WHERE id = 'c1'", [])
             .expect("delete");
         let left: i64 = conn
-            .query_row("SELECT COUNT(*) FROM fact_suggestions", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM fact_suggestions", [], |row| {
+                row.get(0)
+            })
             .expect("count");
         assert_eq!(left, 0, "suggestions go with their conversation");
     }

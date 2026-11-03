@@ -558,6 +558,19 @@ impl TextQuery {
     }
 }
 
+/// The form in which facts and suggestions are compared for duplicates:
+/// lowercase, single spaces, no final punctuation.
+pub fn normalize_fact(text: &str) -> String {
+    let collapsed = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    collapsed
+        .trim_end_matches(|c: char| matches!(c, '.' | '!' | '?' | '…') || c.is_whitespace())
+        .to_owned()
+}
+
 /// Removes `<think>…</think>` blocks (the reasoning of thinking models) so
 /// it is not sent back to a model. An unclosed block is cut to the end.
 pub fn strip_reasoning(text: &str) -> std::borrow::Cow<'_, str> {
@@ -600,6 +613,16 @@ pub fn format_date(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn facts_are_compared_without_case_spacing_or_final_punctuation() {
+        assert_eq!(
+            normalize_fact("  Користувач  працює\tвчителем!! "),
+            "користувач працює вчителем"
+        );
+        assert_eq!(normalize_fact("Likes tea…"), normalize_fact("likes tea"));
+        assert_eq!(normalize_fact("Is it 3.5?"), "is it 3.5");
+    }
 
     #[test]
     fn reasoning_blocks_are_removed() {
