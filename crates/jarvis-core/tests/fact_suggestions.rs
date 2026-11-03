@@ -19,6 +19,9 @@ use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 const PAUSE: Duration = Duration::from_millis(300);
+/// For tests that save settings while a check is due (a file write that a
+/// busy CI machine may stretch past a short pause).
+const SLOW_PAUSE: Duration = Duration::from_millis(1500);
 const EXTRACTION_MARK: &str = "the user stated about themselves";
 
 #[derive(Debug, Default)]
@@ -327,18 +330,18 @@ async fn nothing_is_checked_when_off_temporary_or_unchanged() {
 async fn turning_the_setting_off_discards_a_due_check() {
     let provider = Scripted::new(DataLocality::OnDevice);
     provider.reply_with("{\"facts\": [\"Користувач має кота.\"]}");
-    let test = start(Arc::clone(&provider), true).await;
+    let test = start_with(Arc::clone(&provider), true, SLOW_PAUSE).await;
     let conversation = test.core.create_conversation(None, false).await.unwrap();
     send(&test.core, conversation.id, "Я маю кота.").await;
     set_suggest(&test.core, false).await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(SLOW_PAUSE + Duration::from_millis(700)).await;
     assert!(provider.extractions().is_empty());
 
     set_suggest(&test.core, true).await;
     let gate = Arc::new(Gate::default());
     *provider.facts_gate.lock().unwrap() = Some(Arc::clone(&gate));
     send(&test.core, conversation.id, "Кота звати Мурчик.").await;
-    tokio::time::timeout(Duration::from_secs(3), gate.entered.notified())
+    tokio::time::timeout(SLOW_PAUSE + Duration::from_secs(3), gate.entered.notified())
         .await
         .expect("the fact request is in flight");
     set_suggest(&test.core, false).await;
@@ -351,7 +354,7 @@ async fn turning_the_setting_off_discards_a_due_check() {
 #[tokio::test(flavor = "multi_thread")]
 async fn cloud_models_need_chat_permission() {
     let provider = Scripted::new(DataLocality::ThirdPartyCloud);
-    let test = start(Arc::clone(&provider), true).await;
+    let test = start_with(Arc::clone(&provider), true, SLOW_PAUSE).await;
     let mut settings = test.core.settings();
     settings.privacy.allow_cloud_providers = true;
     test.core.update_settings(settings).await.unwrap();
@@ -361,7 +364,7 @@ async fn cloud_models_need_chat_permission() {
     let mut settings = test.core.settings();
     settings.privacy.allow_cloud_providers = false;
     test.core.update_settings(settings).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(SLOW_PAUSE + Duration::from_secs(3), async {
         loop {
             let event = events.recv().await.expect("event");
             if event.message.starts_with("Blocked fact suggestions:") {
