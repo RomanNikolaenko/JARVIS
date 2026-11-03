@@ -5,8 +5,9 @@
 //! side; the WebView never passes file paths.
 
 use jarvis_core::jarvis_memory::{
-    Conversation, ConversationDetail, ConversationPatch, Episode, EpisodeCursor, Fact, FactInput,
-    MemoryStatus, Project, ProjectInput, SearchHit, SearchQuery, TransferReport, text,
+    AcceptFactSuggestion, Conversation, ConversationDetail, ConversationPatch, Episode,
+    EpisodeCursor, Fact, FactInput, FactSuggestion, MemoryStatus, Project, ProjectInput, SearchHit,
+    SearchQuery, TransferReport, text,
 };
 use jarvis_core::{ChatStreamEvent, ChatTurnRequest, CoreError, ErrorPayload, SinkClosed};
 use tauri::ipc::Channel;
@@ -103,6 +104,26 @@ pub async fn save_fact(state: State<'_, AppState>, input: FactInput) -> CommandR
 #[tauri::command]
 pub async fn delete_fact(state: State<'_, AppState>, id: Uuid) -> CommandResult<()> {
     Ok(state.core().delete_fact(id).await?)
+}
+
+#[tauri::command]
+pub async fn list_fact_suggestions(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<FactSuggestion>> {
+    Ok(state.core().list_fact_suggestions().await?)
+}
+
+#[tauri::command]
+pub async fn accept_fact_suggestion(
+    state: State<'_, AppState>,
+    input: AcceptFactSuggestion,
+) -> CommandResult<Fact> {
+    Ok(state.core().accept_fact_suggestion(input).await?)
+}
+
+#[tauri::command]
+pub async fn reject_fact_suggestion(state: State<'_, AppState>, id: Uuid) -> CommandResult<()> {
+    Ok(state.core().reject_fact_suggestion(id).await?)
 }
 
 #[tauri::command]

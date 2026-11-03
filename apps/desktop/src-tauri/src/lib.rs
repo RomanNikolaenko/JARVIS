@@ -45,6 +45,8 @@ pub const MAIN_WINDOW: &str = "main";
 pub const SYSTEM_EVENT: &str = "jarvis://system-event";
 /// Available providers or model routing changed; the core catalog is ready.
 pub const MODELS_CHANGED_EVENT: &str = "jarvis://models-changed";
+/// Number of fact suggestions waiting for review, after every change.
+pub const FACT_SUGGESTIONS_EVENT: &str = "jarvis://fact-suggestions";
 /// Event with an [`AgentTask`] whenever a task changes.
 pub const AGENT_TASK_EVENT: &str = "jarvis://agent-task";
 /// Event with the list of actions waiting for approval.
@@ -99,6 +101,9 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         memory_commands::list_facts,
         memory_commands::save_fact,
         memory_commands::delete_fact,
+        memory_commands::list_fact_suggestions,
+        memory_commands::accept_fact_suggestion,
+        memory_commands::reject_fact_suggestion,
         memory_commands::list_projects,
         memory_commands::save_project,
         memory_commands::delete_project,
@@ -205,6 +210,7 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
 
     spawn_event_forwarder(app.handle().clone(), core.events().subscribe());
     spawn_models_forwarder(app.handle().clone(), core.subscribe_models_changed());
+    spawn_fact_suggestions_forwarder(app.handle().clone(), core.subscribe_fact_suggestions());
     spawn_agent_forwarders(
         app.handle().clone(),
         core.subscribe_agent_tasks(),
@@ -297,6 +303,21 @@ fn spawn_models_forwarder<R: Runtime>(app: AppHandle<R>, mut changes: watch::Rec
         while changes.changed().await.is_ok() {
             if let Err(err) = app.emit_to(MAIN_WINDOW, MODELS_CHANGED_EVENT, ()) {
                 tracing::debug!("cannot forward model changes: {err}");
+            }
+        }
+    });
+}
+
+/// Forwards the number of fact suggestions waiting for review.
+fn spawn_fact_suggestions_forwarder<R: Runtime>(
+    app: AppHandle<R>,
+    mut count: watch::Receiver<u32>,
+) {
+    tauri::async_runtime::spawn(async move {
+        while count.changed().await.is_ok() {
+            let pending = *count.borrow_and_update();
+            if let Err(err) = app.emit_to(MAIN_WINDOW, FACT_SUGGESTIONS_EVENT, pending) {
+                tracing::debug!("cannot forward fact suggestions: {err}");
             }
         }
     });

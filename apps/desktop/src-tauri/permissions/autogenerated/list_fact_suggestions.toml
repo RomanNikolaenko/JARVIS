@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-fact-suggestions"
+description = "Enables the list_fact_suggestions command without any pre-configured scope."
+commands.allow = ["list_fact_suggestions"]
+
+[[permission]]
+identifier = "deny-list-fact-suggestions"
+description = "Denies the list_fact_suggestions command without any pre-configured scope."
+commands.deny = ["list_fact_suggestions"]

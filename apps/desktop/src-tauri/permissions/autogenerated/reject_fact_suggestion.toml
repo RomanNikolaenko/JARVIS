@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reject-fact-suggestion"
+description = "Enables the reject_fact_suggestion command without any pre-configured scope."
+commands.allow = ["reject_fact_suggestion"]
+
+[[permission]]
+identifier = "deny-reject-fact-suggestion"
+description = "Denies the reject_fact_suggestion command without any pre-configured scope."
+commands.deny = ["reject_fact_suggestion"]

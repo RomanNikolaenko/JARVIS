@@ -85,6 +85,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "list_curated_models",
     "list_conversations",
     "list_facts",
+    "list_fact_suggestions",
     "list_projects",
     "list_episodes",
     "get_memory_status",
@@ -133,6 +134,8 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "delete_conversation",
         "save_fact",
         "delete_fact",
+        "accept_fact_suggestion",
+        "reject_fact_suggestion",
         "save_project",
         "delete_project",
         "clear_episodes",
@@ -325,6 +328,32 @@ fn invalid_chat_requests_return_validation_errors() {
         turn(&json!("00000000-0000-4000-8000-000000000000"), "hi"),
     )
     .expect_err("unknown conversation");
+    assert_eq!(error["code"], "notFound");
+}
+
+#[test]
+fn fact_suggestions_round_trip_over_ipc() {
+    let h = harness();
+    let pending = invoke(&h.main, "list_fact_suggestions", json!({})).expect("suggestions");
+    assert_eq!(pending, json!([]));
+    let error = invoke(
+        &h.main,
+        "reject_fact_suggestion",
+        json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+    )
+    .expect_err("no such suggestion");
+    assert_eq!(error["code"], "notFound");
+    let error = invoke(
+        &h.main,
+        "accept_fact_suggestion",
+        json!({ "input": {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "content": "Likes tea.",
+            "pinned": false,
+            "projectId": null
+        }}),
+    )
+    .expect_err("no such suggestion");
     assert_eq!(error["code"], "notFound");
 }
 
