@@ -125,15 +125,21 @@ export class MemoryStore {
     await this.loadSuggestions();
   }
 
-  loadSuggestions(): Promise<void> {
+  /**
+   * Reads the suggestions in the background (after every count event): it
+   * neither clears the screen's error nor disables its controls.
+   */
+  async loadSuggestions(): Promise<void> {
     const epoch = ++this.suggestionEpoch;
     const current = () => epoch === this.suggestionEpoch && !this.destroyRef.destroyed;
-    return this.run(async () => {
+    try {
       const list = await this.api.listFactSuggestions();
       if (!current()) return;
       this.suggestions.set(list);
       this.pendingSuggestions.set(list.length);
-    }, current);
+    } catch (error) {
+      if (current()) this.error.set(IpcError.from(error));
+    }
   }
 
   /** Saves a suggestion as a fact, with the user's changes. */

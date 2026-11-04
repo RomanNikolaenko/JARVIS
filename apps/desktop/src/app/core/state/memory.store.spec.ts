@@ -202,6 +202,21 @@ describe('MemoryStore', () => {
     expect(store.error()?.message).toBe('the fact suggestion does not exist');
   });
 
+  // Review finding #6: the reload after each count event went through the
+  // screen's busy/error handling.
+  it('reloads suggestions in the background without hiding an error or blocking controls', async () => {
+    await store.start();
+    api.acceptFactSuggestion.mockRejectedValueOnce(new IpcError('notFound', 'the fact suggestion does not exist'));
+    await store.acceptSuggestion({ id: 's1', content: 'x', pinned: false, projectId: null });
+    const reading = deferred<FactSuggestion[]>();
+    api.listFactSuggestions.mockReturnValueOnce(reading.promise);
+    api.suggestionHandler?.(0);
+    expect(store.busy()).toBe(false);
+    reading.resolve([]);
+    await vi.waitFor(() => expect(store.suggestions()).toEqual([]));
+    expect(store.error()?.message).toBe('the fact suggestion does not exist');
+  });
+
   it.each(['facts', 'projects'] as const)('keeps newer %s when an older read finishes last', async (kind) => {
     const oldFacts = deferred<Fact[]>();
     const oldProjects = deferred<Project[]>();
