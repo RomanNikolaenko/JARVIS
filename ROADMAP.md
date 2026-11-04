@@ -95,8 +95,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   suggestions correct, 19 of 30 facts covered; without them 7 of 8 and
   18 of 30; no suggestion came from a reply in either. Reply excerpts stay
   (they also let the model rephrase instead of copying)
-- ⬜ Recall of small models: in 7 of 10 runs Qwen2.5 3B returned only the
-  first message and missed the other facts
+- ✅ Recall (2026-11-04): Qwen2.5 3B often returned only the first message;
+  a rule to go through the user's messages one by one found 48 of 48 stated
+  facts in 8 runs instead of 30 (5 confirming runs of the final code: 30 of
+  30), at the cost of one one-off "hungry" suggestion per run and copies of
+  the user's own sentences. A JSON answer per message found fewer (22 of 48)
 
 ## Phase 5 — Tools and agents 🟡
 

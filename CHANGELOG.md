@@ -26,7 +26,10 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   waiting: llama.cpp cancelled the check within 5 s and repeated it later.
   An accepted fact reached the next answer once pinned (without an
   embedding model, unpinned facts need words shared with the question).
-  Review matters with small models.
+  Asking the model to go through your messages one by one raised the share
+  of stated facts it found from 62% to 100% over 8 runs of the same
+  conversation, with one one-off suggestion per run to reject. Review
+  matters with small models.
 
 ### Changed
 

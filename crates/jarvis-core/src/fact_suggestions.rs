@@ -24,6 +24,8 @@ requests and anything JARVIS said.
 - Never include passwords, keys, tokens, card or document numbers, or other secrets.
 - Write each fact as one short sentence about the user in the third person, in the \
 language the user wrote in (for example \"Користувач працює вчителем.\").
+- Go through the user's messages one by one: a message may state several \
+facts, and later messages often add new ones. Keep every lasting fact from every message.
 - At most 5 facts.
 
 Reply with exactly one JSON object and nothing else: {\"facts\": [\"...\"]}. \
@@ -177,6 +179,12 @@ mod tests {
             "{system}"
         );
         assert!(system.contains("{\"facts\": []}"), "{system}");
+        // Live A/B (8 runs each, Qwen2.5 3B): without this rule the model
+        // often kept only the first message (30 of 48 facts found, 48 with).
+        assert!(
+            system.contains("Go through the user's messages one by one"),
+            "{system}"
+        );
         let user = &request.messages[1].content;
         assert!(user.contains("User: Я працюю вчителем."), "{user}");
         assert!(user.contains("JARVIS (context only): Чудово!"), "{user}");

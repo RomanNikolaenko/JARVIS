@@ -183,3 +183,7 @@ limitation), ADR 0009 addendum, CHANGELOG, ROADMAP Phase 4.
   unchecked user messages become due (what was said right before closing).
 - §3 parsing: a copied "User:" label is removed and items labelled as
   JARVIS's are dropped (Qwen2.5 3B copied source lines in the live check).
+- §3 instructions (2026-11-04): a rule to go through the user's messages one
+  by one, because Qwen2.5 3B often kept only the first message (measured
+  with `tests/fact_suggestions_live.rs`: 30 → 48 of 48 facts in 8 runs).
+  Leaving JARVIS's replies out did not help and was not adopted.
