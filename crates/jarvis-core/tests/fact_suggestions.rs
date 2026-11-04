@@ -37,6 +37,8 @@ struct Scripted {
     requests: Mutex<Vec<ChatRequest>>,
     facts_reply: Mutex<String>,
     facts_fail: Mutex<bool>,
+    /// Fact replies end at the output limit.
+    facts_cut: Mutex<bool>,
     facts_gate: Mutex<Option<Arc<Gate>>>,
     /// Holds the model lookup of a chat turn.
     capability_gate: Mutex<Option<Arc<Gate>>>,
@@ -58,6 +60,7 @@ impl Scripted {
             requests: Mutex::default(),
             facts_reply: Mutex::new("{\"facts\": []}".to_owned()),
             facts_fail: Mutex::new(false),
+            facts_cut: Mutex::new(false),
             facts_gate: Mutex::default(),
             capability_gate: Mutex::default(),
         })
@@ -123,17 +126,30 @@ impl AiProvider for Scripted {
         let extraction = request.messages[0].content.contains(EXTRACTION_MARK);
         self.requests.lock().unwrap().push(request);
         if !extraction {
-            return Ok(chunks("Recorded reply".to_owned(), None));
+            return Ok(chunks(
+                "Recorded reply".to_owned(),
+                None,
+                FinishReason::Stop,
+            ));
         }
         if *self.facts_fail.lock().unwrap() {
             return Err(AiError::Timeout);
         }
         let gate = self.facts_gate.lock().unwrap().take();
-        Ok(chunks(self.facts_reply.lock().unwrap().clone(), gate))
+        let finish = if *self.facts_cut.lock().unwrap() {
+            FinishReason::Length
+        } else {
+            FinishReason::Stop
+        };
+        Ok(chunks(
+            self.facts_reply.lock().unwrap().clone(),
+            gate,
+            finish,
+        ))
     }
 }
 
-fn chunks(text: String, gate: Option<Arc<Gate>>) -> ChatStream {
+fn chunks(text: String, gate: Option<Arc<Gate>>, finish_reason: FinishReason) -> ChatStream {
     stream::once(async move {
         if let Some(gate) = gate {
             gate.entered.notify_one();
@@ -141,9 +157,9 @@ fn chunks(text: String, gate: Option<Arc<Gate>>) -> ChatStream {
         }
         Ok(ChatChunk::Delta(text))
     })
-    .chain(stream::once(async {
+    .chain(stream::once(async move {
         Ok(ChatChunk::Done {
-            finish_reason: FinishReason::Stop,
+            finish_reason,
             usage: None,
         })
     }))
@@ -567,5 +583,30 @@ async fn a_failed_turn_lets_due_checks_run() {
         provider.extractions().len() == 1
     })
     .await;
+    test.core.shutdown().await;
+}
+
+// Review finding #5: a reply cut at the output limit (a reasoning model may
+// spend all of it inside <think>) moved the cursor past messages that were
+// never looked at.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_cut_at_the_limit_keeps_the_cursor() {
+    let provider = Scripted::new(DataLocality::OnDevice);
+    provider.reply_with("<think>Let me look at every message of the user");
+    *provider.facts_cut.lock().unwrap() = true;
+    let test = start(Arc::clone(&provider), true).await;
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    send(&test.core, conversation.id, "Я маю кота.").await;
+    wait_for("the cut check", || provider.extractions().len() == 1).await;
+
+    *provider.facts_cut.lock().unwrap() = false;
+    provider.reply_with("{\"facts\": [\"Користувач має кота і собаку.\"]}");
+    send(&test.core, conversation.id, "І собаку.").await;
+    wait_for("the next check", || provider.extractions().len() == 2).await;
+    let next = &provider.extractions()[1];
+    assert!(
+        next.contains("Я маю кота."),
+        "the cut check kept the cursor: {next}"
+    );
     test.core.shutdown().await;
 }

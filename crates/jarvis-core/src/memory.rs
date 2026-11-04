@@ -911,7 +911,7 @@ impl JarvisCore {
         };
         guard(&self.memory_state.check).take();
         let reply = match reply {
-            Ok(Ok(response)) => response.content,
+            Ok(Ok(response)) => response,
             Ok(Err(err)) => {
                 tracing::warn!("fact suggestion request failed: {err}");
                 return;
@@ -925,7 +925,18 @@ impl JarvisCore {
         if !enabled(&self.config.current()) {
             return;
         }
-        let found = fact_suggestions::parse_suggestions(&reply).unwrap_or_default();
+        let found = match fact_suggestions::parse_suggestions(&reply.content) {
+            Some(found) => found,
+            // Cut before its answer (a reasoning model may spend the whole
+            // limit thinking): nothing was looked at, so the cursor stays.
+            None if reply.finish_reason == FinishReason::Length => {
+                tracing::warn!(
+                    "a fact suggestion reply ended at the output limit without an answer"
+                );
+                return;
+            }
+            None => Vec::new(),
+        };
         let added = match self
             .memory
             .add_fact_suggestions(conversation_id, found)
