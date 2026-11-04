@@ -192,6 +192,13 @@ shows the path, size and contents.
   refuse to open if one changed.
 - Tests use in-memory or temporary databases (`cargo test -p jarvis-memory`,
   `cargo test -p jarvis-core --test memory_turns`).
+- **Fact suggestions with a real model:** start an OpenAI-compatible server
+  on the LM Studio port, e.g. `llama-server -m <gguf> --alias <id> --host
+  127.0.0.1 --port 1234 --jinja -c 4096`, then run
+  `JARVIS_LIVE_MODEL=<id> JARVIS_LIVE_RUNS=5 cargo test -p jarvis-core --test
+  fact_suggestions_live -- --ignored --nocapture`. It feeds the same
+  conversation (six facts, one one-off state) through the whole core and
+  prints the suggestions of every run; judge them yourself.
 
 ### Agents and tools
 

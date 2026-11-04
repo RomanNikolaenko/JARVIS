@@ -90,8 +90,13 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   facts; 1 one-off and 1 taken from JARVIS's reply (see CHANGELOG). Before
   the fixes: 2 of 7 correct, 4 from JARVIS's replies, 1 fact missed. Larger
   models not measured
-- ⬜ Suggestions from the user's messages only (JARVIS's replies left out of
-  the request), measured against the same live check
+- ✅ Measured (2026-11-04, `fact_suggestions_live`, Qwen2.5 3B, 5 runs each):
+  leaving JARVIS's replies out did not help — with reply excerpts 9 of 11
+  suggestions correct, 19 of 30 facts covered; without them 7 of 8 and
+  18 of 30; no suggestion came from a reply in either. Reply excerpts stay
+  (they also let the model rephrase instead of copying)
+- ⬜ Recall of small models: in 7 of 10 runs Qwen2.5 3B returned only the
+  first message and missed the other facts
 
 ## Phase 5 — Tools and agents 🟡
 
