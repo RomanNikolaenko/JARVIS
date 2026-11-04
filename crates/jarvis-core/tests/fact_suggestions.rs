@@ -38,6 +38,8 @@ struct Scripted {
     facts_reply: Mutex<String>,
     facts_fail: Mutex<bool>,
     facts_gate: Mutex<Option<Arc<Gate>>>,
+    /// Holds the model lookup of a chat turn.
+    capability_gate: Mutex<Option<Arc<Gate>>>,
 }
 
 impl Scripted {
@@ -57,6 +59,7 @@ impl Scripted {
             facts_reply: Mutex::new("{\"facts\": []}".to_owned()),
             facts_fail: Mutex::new(false),
             facts_gate: Mutex::default(),
+            capability_gate: Mutex::default(),
         })
     }
 
@@ -98,6 +101,22 @@ impl AiProvider for Scripted {
                 ..ModelCapabilities::default()
             },
         }])
+    }
+
+    async fn capabilities(&self, model: &str) -> Result<ModelCapabilities, AiError> {
+        let gate = self.capability_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        self.list_models()
+            .await?
+            .into_iter()
+            .find(|info| info.id == model)
+            .map(|info| info.capabilities)
+            .ok_or_else(|| AiError::ModelNotFound {
+                model: model.to_owned(),
+            })
     }
 
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, AiError> {
@@ -504,4 +523,49 @@ async fn recent_unchecked_conversations_are_looked_at_after_a_restart() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(provider.extractions().len(), 1, "looked at once");
     core.shutdown().await;
+}
+
+// Review finding #11: a turn that held its conversation past the pause and
+// then failed released it without any activity, so due checks waited for
+// the next message.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_turn_lets_due_checks_run() {
+    let provider = Scripted::new(DataLocality::OnDevice);
+    let test = start(Arc::clone(&provider), true).await;
+    let due = test.core.create_conversation(None, false).await.unwrap();
+    send(&test.core, due.id, "Я маю кота.").await;
+
+    let other = test.core.create_conversation(None, false).await.unwrap();
+    let gate = Arc::new(Gate::default());
+    *provider.capability_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let core = Arc::clone(&test.core);
+    let failing = tokio::spawn(async move {
+        core.send_message(
+            ChatTurnRequest {
+                conversation_id: other.id,
+                content: "Привіт".to_owned(),
+                provider_id: Some(ProviderId::new("scripted")),
+                model: Some("missing-model".to_owned()),
+                temperature: None,
+                max_output_tokens: None,
+                speak: false,
+                attachments: Vec::new(),
+            },
+            |_| Ok(()),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), gate.entered.notified())
+        .await
+        .expect("the turn holds its conversation");
+    // The pause ends while the turn is still running.
+    tokio::time::sleep(PAUSE * 2).await;
+    assert!(provider.extractions().is_empty());
+    gate.release.notify_one();
+    assert!(failing.await.unwrap().is_err(), "the model does not exist");
+    wait_for("the due check after the failed turn", || {
+        provider.extractions().len() == 1
+    })
+    .await;
+    test.core.shutdown().await;
 }

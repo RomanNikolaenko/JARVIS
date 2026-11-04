@@ -139,6 +139,15 @@ impl TurnSlot {
     }
 }
 
+/// Records chat activity when dropped.
+struct ActivityOnExit<'a>(&'a MemoryState);
+
+impl Drop for ActivityOnExit<'_> {
+    fn drop(&mut self) {
+        self.0.touch();
+    }
+}
+
 fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -382,6 +391,9 @@ impl JarvisCore {
             CoreError::LimitExceeded("JARVIS is still answering in this conversation".to_owned())
         };
         let slot = self.memory_state.turn_slot(conversation_id);
+        // Declared before the turn, so it is dropped after it: a turn that
+        // fails still wakes fact checks that waited for it to settle.
+        let _settled = ActivityOnExit(&self.memory_state);
         let turn = match Arc::clone(&slot.lock).try_lock_owned() {
             Ok(turn) => turn,
             // The previous reply has ended and is being saved.
