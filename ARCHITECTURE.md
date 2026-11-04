@@ -376,14 +376,18 @@ asked once for lasting facts in the messages after `facts_checked_until`.
 The request holds at most 3 000 estimated tokens: the user's messages first,
 newest first (the newest is cut when it alone is larger, older ones that do
 not fit are left out), then excerpts of JARVIS's replies (at most 250 tokens
-each) as context in what is left. Up to 5 items of 3–300 characters go to
+each) as context in what is left; only the first line of a message carries
+its label, the others are indented. Up to 5 items of 3–300 characters go to
 `fact_suggestions` (a copied "User:" label is removed, items labelled as
 JARVIS's are dropped), minus texts equal (normalized) to a fact or to a
 pending or rejected suggestion. Any chat activity cancels a running check
 (llama.cpp's single slot would otherwise make the chat wait) and the
 conversation is due again. At start, saved conversations updated in the
-last 24 hours with unchecked user messages are due. The cursor moves when
-the model answered; errors, privacy refusals and cancellation keep it. The
+last 24 hours with unchecked user messages are due, and a chat turn that
+ends with an error also counts as activity. The cursor moves when the model
+answered; errors, privacy refusals, cancellation and a reply cut at the
+output limit without an answer keep it. The privacy permission is read
+right before the request. The
 pending count is pushed as `jarvis://fact-suggestions`.
 
 Background tasks: the indexer embeds new facts and messages (batches of 32,
