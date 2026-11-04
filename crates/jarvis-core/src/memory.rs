@@ -874,10 +874,14 @@ impl JarvisCore {
             }
         };
         // The request contains only this conversation, so it needs the same
-        // permission as chatting with that model.
-        if let Err(err) =
-            routing::check_data_privacy(provider.descriptor(), &settings.privacy, false, false)
-        {
+        // permission as chatting with that model. Read the permission now:
+        // it may have been revoked while the messages were read.
+        if let Err(err) = routing::check_data_privacy(
+            provider.descriptor(),
+            &self.config.current().privacy,
+            false,
+            false,
+        ) {
             self.events.warning(
                 EventCategory::Security,
                 format!("Blocked fact suggestions: {err}"),
