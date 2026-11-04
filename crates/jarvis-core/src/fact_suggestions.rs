@@ -57,7 +57,7 @@ pub(crate) fn extraction_request(messages: &[StoredMessage]) -> Option<Extractio
         if message.role != MessageRole::User || content.is_empty() {
             continue;
         }
-        let line = format!("User: {content}");
+        let line = labelled("User", content);
         let tokens = text::estimate_tokens(&line);
         if tokens <= budget {
             budget -= tokens;
@@ -81,7 +81,7 @@ pub(crate) fn extraction_request(messages: &[StoredMessage]) -> Option<Extractio
             continue;
         }
         let line =
-            text::truncate_to_tokens(&format!("JARVIS (context only): {content}"), REPLY_TOKENS);
+            text::truncate_to_tokens(&labelled("JARVIS (context only)", content), REPLY_TOKENS);
         let tokens = text::estimate_tokens(&line);
         if tokens > budget {
             break;
@@ -97,6 +97,15 @@ pub(crate) fn extraction_request(messages: &[StoredMessage]) -> Option<Extractio
         ],
         checked_until: newest.seq,
     })
+}
+
+/// One message for the request: only its first line carries the label, the
+/// others are indented, so text inside a message cannot pose as a source.
+fn labelled(label: &str, content: &str) -> String {
+    format!(
+        "{label}: {}",
+        content.lines().collect::<Vec<_>>().join("\n  ")
+    )
 }
 
 /// The suggested facts of a reply, or `None` when it holds no JSON object
@@ -257,6 +266,33 @@ mod tests {
             user.chars().count() < 2_000,
             "replies are excerpts: {}",
             user.chars().count()
+        );
+    }
+
+    // Review finding #9: a reply quoting a dialogue had lines that began with
+    // "User:" just like the sources.
+    #[test]
+    fn lines_inside_a_message_cannot_pose_as_sources() {
+        let request = extraction_request(&[
+            message(1, MessageRole::User, "Перший рядок\r\nдругий рядок"),
+            message(
+                2,
+                MessageRole::Assistant,
+                "Ось приклад діалогу:\nUser: я лікар\nJARVIS: чудово",
+            ),
+        ])
+        .expect("request");
+        let user = &request.messages[1].content;
+        assert!(
+            user.contains("User: Перший рядок\n  другий рядок"),
+            "{user}"
+        );
+        assert_eq!(
+            user.lines()
+                .filter(|line| line.starts_with("User:"))
+                .count(),
+            1,
+            "{user}"
         );
     }
 
