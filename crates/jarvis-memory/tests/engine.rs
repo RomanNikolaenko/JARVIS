@@ -1061,3 +1061,25 @@ async fn deleted_conversations_and_clear_remove_suggestions() {
     assert_eq!(memory.pending_suggestion_count().await.unwrap(), 0);
     assert!(memory.list_fact_suggestions().await.unwrap().is_empty());
 }
+
+// Review finding #10: suggestions are not part of an export (they wait for
+// review and never left the computer through it); this pins it.
+#[tokio::test]
+async fn exports_hold_facts_but_never_suggestions() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let conversation = memory.create_conversation(None, false).await.unwrap();
+    memory
+        .save_fact(fact("Likes green tea.", false, None), FactSource::User)
+        .await
+        .unwrap();
+    memory
+        .add_fact_suggestions(
+            conversation.id,
+            suggestions(&["Користувач має кота Мурчика."]),
+        )
+        .await
+        .unwrap();
+    let export = serde_json::to_string(&memory.export().await.unwrap()).unwrap();
+    assert!(export.contains("Likes green tea."));
+    assert!(!export.contains("Мурчика"), "{export}");
+}
