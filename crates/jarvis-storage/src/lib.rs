@@ -5,13 +5,15 @@
 //! version line; domain crates (`jarvis-memory`, later tasks and audit) own
 //! their queries and run them through [`Database::call`].
 //!
-//! The file is not encrypted: it relies on the protection of the user's
-//! profile directory. On Unix the database is created with mode 0600 inside
-//! a 0700 directory.
+//! The file is plain SQLite unless it is opened with a key, which makes it a
+//! SQLCipher database (AES-256, the key stretched with PBKDF2-SHA512).
+//! [`file_state`] tells the two apart by the header. On Unix the database is
+//! created with mode 0600 inside a 0700 directory.
 
 mod error;
 mod migrations;
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -23,6 +25,43 @@ pub use migrations::{MIGRATIONS, Migration, MigrationReport, SCHEMA_VERSION};
 pub use rusqlite;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// The first bytes of every plain SQLite file. SQLCipher files start with a
+/// random salt instead.
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+/// What a database file holds, judged by its first bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileState {
+    /// No file, or an empty one: opening creates a new database.
+    Missing,
+    /// A plain SQLite database.
+    Plain,
+    /// No SQLite header: an encrypted database (or a damaged file, which
+    /// cannot be told apart from one).
+    Encrypted,
+}
+
+/// Reads the header of the database file at `path`.
+pub fn file_state(path: &Path) -> std::io::Result<FileState> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(FileState::Missing),
+        Err(err) => return Err(err),
+    };
+    let mut header = [0u8; SQLITE_HEADER.len()];
+    let mut filled = 0;
+    while filled < header.len() {
+        match file.read(&mut header[filled..])? {
+            0 => break,
+            read => filled += read,
+        }
+    }
+    Ok(match filled {
+        0 => FileState::Missing,
+        _ if header == *SQLITE_HEADER => FileState::Plain,
+        _ => FileState::Encrypted,
+    })
+}
 
 /// Handle to the database. Cheap to clone; all clones share the connection.
 #[derive(Debug, Clone)]
@@ -33,16 +72,25 @@ pub struct Database {
 }
 
 impl Database {
-    /// Opens (or creates) the database at `path` and applies pending
+    /// Opens (or creates) the plain database at `path` and applies pending
     /// migrations.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_with_key(path, None).await
+    }
+
+    /// Opens (or creates) the database at `path` with an encryption key and
+    /// applies pending migrations. A new file is created encrypted; a plain
+    /// file is opened plain and the key is ignored. An encrypted file without
+    /// its key is [`StorageError::Locked`].
+    pub async fn open_with_key(path: impl Into<PathBuf>, key: Option<String>) -> Result<Self> {
         let path = path.into();
         let opened = path.clone();
-        let (connection, report) = tokio::task::spawn_blocking(move || open_file(&opened))
-            .await
-            .map_err(|err| {
-                StorageError::Internal(format!("opening the database failed: {err}"))
-            })??;
+        let (connection, report) =
+            tokio::task::spawn_blocking(move || open_file(&opened, key.as_deref()))
+                .await
+                .map_err(|err| {
+                    StorageError::Internal(format!("opening the database failed: {err}"))
+                })??;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             path: Some(path),
@@ -117,22 +165,32 @@ impl Database {
     }
 }
 
-fn open_file(path: &Path) -> Result<(Connection, MigrationReport)> {
+fn open_file(path: &Path, key: Option<&str>) -> Result<(Connection, MigrationReport)> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|err| StorageError::io(format!("creating {}", dir.display()), err))?;
         restrict_permissions(dir, 0o700);
     }
+    let state = file_state(path)
+        .map_err(|err| StorageError::io(format!("reading {}", path.display()), err))?;
     let corrupt = |err: rusqlite::Error| {
-        if StorageError::is_corruption(&err) {
+        if !StorageError::is_corruption(&err) {
+            StorageError::Sqlite(err)
+        } else if state == FileState::Encrypted {
+            StorageError::Locked
+        } else {
             StorageError::Corrupt {
                 path: path.display().to_string(),
             }
-        } else {
-            StorageError::Sqlite(err)
         }
     };
     let mut connection = Connection::open(path).map_err(corrupt)?;
+    // The key must be the first statement; a plain file stays plain.
+    if let Some(key) = key.filter(|_| state != FileState::Plain) {
+        connection
+            .pragma_update(None, "key", key)
+            .map_err(corrupt)?;
+    }
     configure(&connection).map_err(|err| match err {
         StorageError::Sqlite(err) => corrupt(err),
         other => other,
@@ -268,13 +326,130 @@ mod tests {
         assert_eq!(counts.1, (0, 0, 0));
     }
 
+    const KEY: &str = "123456-234567-345678-456789-567890-678901-789012-890123";
+
+    async fn count_atlas(db: &Database) -> i64 {
+        db.call(|conn| {
+            Ok::<_, StorageError>(conn.query_row(
+                "SELECT count(*) FROM conversations WHERE title = 'Atlas deadline'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .expect("query")
+    }
+
     #[tokio::test]
-    async fn a_file_that_is_not_a_database_is_reported_as_corrupt() {
+    async fn an_encrypted_database_hides_its_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        let db = Database::open_with_key(&path, Some(KEY.to_owned()))
+            .await
+            .expect("create encrypted");
+        db.call(|conn| {
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at)
+                 VALUES ('c1', 'Atlas deadline', 0, 0)",
+                [],
+            )?;
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            Ok::<_, StorageError>(())
+        })
+        .await
+        .expect("insert");
+        drop(db);
+
+        assert_eq!(file_state(&path).expect("state"), FileState::Encrypted);
+        let bytes = std::fs::read(&path).expect("read");
+        assert!(!bytes.starts_with(SQLITE_HEADER));
+        assert!(
+            !bytes.windows(14).any(|w| w == b"Atlas deadline"),
+            "the text is not stored in the clear"
+        );
+
+        let reopened = Database::open_with_key(&path, Some(KEY.to_owned()))
+            .await
+            .expect("reopen with the key");
+        assert_eq!(count_atlas(&reopened).await, 1);
+        let fts5: bool = reopened
+            .call(|conn| {
+                Ok::<_, StorageError>(conn.query_row(
+                    "SELECT sqlite_compileoption_used('ENABLE_FTS5')",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .expect("compile options");
+        assert!(fts5);
+    }
+
+    #[tokio::test]
+    async fn a_missing_or_wrong_key_reports_locked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        drop(
+            Database::open_with_key(&path, Some(KEY.to_owned()))
+                .await
+                .expect("create encrypted"),
+        );
+        let without = Database::open(&path).await.expect_err("no key");
+        assert!(matches!(without, StorageError::Locked), "{without:?}");
+        let wrong = Database::open_with_key(&path, Some(KEY.replace('1', "9")))
+            .await
+            .expect_err("wrong key");
+        assert!(matches!(wrong, StorageError::Locked), "{wrong:?}");
+        assert_eq!(file_state(&path).expect("state"), FileState::Encrypted);
+    }
+
+    #[tokio::test]
+    async fn a_plain_database_ignores_a_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        drop(Database::open(&path).await.expect("create plain"));
+        assert_eq!(file_state(&path).expect("state"), FileState::Plain);
+        let db = Database::open_with_key(&path, Some(KEY.to_owned()))
+            .await
+            .expect("opens plain");
+        assert_eq!(count_atlas(&db).await, 0);
+        drop(db);
+        assert_eq!(file_state(&path).expect("state"), FileState::Plain);
+    }
+
+    #[test]
+    fn file_state_reads_the_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        assert_eq!(file_state(&path).expect("state"), FileState::Missing);
+        std::fs::write(&path, b"").expect("write");
+        assert_eq!(file_state(&path).expect("state"), FileState::Missing);
+        std::fs::write(&path, b"SQLite").expect("write");
+        assert_eq!(file_state(&path).expect("state"), FileState::Encrypted);
+    }
+
+    #[tokio::test]
+    async fn a_damaged_plain_database_is_reported_as_corrupt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        let mut bytes = SQLITE_HEADER.to_vec();
+        bytes.resize(4096, 0x42);
+        std::fs::write(&path, bytes).expect("write");
+        let err = Database::open(&path).await.expect_err("not a database");
+        assert!(matches!(err, StorageError::Corrupt { .. }), "{err:?}");
+        assert!(path.exists(), "the file is left for the user to inspect");
+    }
+
+    #[tokio::test]
+    async fn a_file_without_a_header_is_locked() {
+        // An encrypted database and a damaged header look the same.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("jarvis.db");
         std::fs::write(&path, vec![0x42; 4096]).expect("write");
-        let err = Database::open(&path).await.expect_err("not a database");
-        assert!(matches!(err, StorageError::Corrupt { .. }), "{err:?}");
+        let err = Database::open(&path)
+            .await
+            .expect_err("not a plain database");
+        assert!(matches!(err, StorageError::Locked), "{err:?}");
         assert!(path.exists(), "the file is left for the user to inspect");
     }
 

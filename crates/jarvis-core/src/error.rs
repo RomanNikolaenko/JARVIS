@@ -168,6 +168,7 @@ impl CoreError {
                 MemoryError::Storage(StorageError::Io { .. }) => ErrorCode::Io,
                 MemoryError::Storage(
                     StorageError::Corrupt { .. }
+                    | StorageError::Locked
                     | StorageError::NewerSchema { .. }
                     | StorageError::MigrationChanged { .. }
                     | StorageError::MissingFts5,

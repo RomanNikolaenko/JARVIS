@@ -15,6 +15,11 @@ pub enum StorageError {
     #[error("the database {path} is damaged or is not a JARVIS database")]
     Corrupt { path: String },
 
+    /// The file has no SQLite header and does not open: it is encrypted and
+    /// the key is missing or wrong. A damaged header looks the same.
+    #[error("the memory database is encrypted and its key is missing or wrong")]
+    Locked,
+
     #[error(
         "the database was created by a newer JARVIS (schema version {found}, this build supports {supported})"
     )]
