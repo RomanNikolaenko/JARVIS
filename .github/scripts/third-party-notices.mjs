@@ -27,6 +27,15 @@ const TARGETS = ['x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc', 'x86_64-un
 const RULE = '='.repeat(80);
 const THIN_RULE = '-'.repeat(80);
 
+// C libraries compiled into the app under their own licence, which lives
+// below the crate's root: SQLCipher in libsqlite3-sys, OpenSSL in openssl-src.
+// openssl-src is a build dependency, but the library it builds is linked in,
+// so it is listed like a shipped crate.
+const BUNDLED_LICENSES = {
+  'libsqlite3-sys': ['sqlcipher/LICENSE'],
+  'openssl-src': ['openssl/LICENSE.txt'],
+};
+
 /** License files in a package folder. */
 function licenseFiles(dir, extra) {
   const names = fs
@@ -125,7 +134,10 @@ function normalize(text) {
     .trim();
 }
 
-/** Shipped crates: normal dependencies of the workspace, without proc macros. */
+/**
+ * Shipped crates: normal dependencies of the workspace without proc macros,
+ * plus the build dependencies whose C library is linked in.
+ */
 function rustPackages() {
   const metadata = JSON.parse(
     execFileSync('cargo', ['metadata', '--format-version', '1', '--locked', ...TARGETS.flatMap((t) => ['--filter-platform', t])], {
@@ -152,6 +164,9 @@ function rustPackages() {
     for (const dep of nodes.get(id)?.deps ?? []) {
       if (dep.dep_kinds.some((k) => k.kind === null)) {
         stack.push(dep.pkg);
+      } else if (dep.dep_kinds.some((k) => k.kind === 'build') && packages.get(dep.pkg)?.name in BUNDLED_LICENSES) {
+        // Its own dependencies (the C compiler driver) only run at build time.
+        shipped.add(dep.pkg);
       }
     }
   }
@@ -169,6 +184,7 @@ function rustPackages() {
         authors: pkg.authors,
         dir,
         files: licenseFiles(dir, extra),
+        bundled: (BUNDLED_LICENSES[pkg.name] ?? []).filter((file) => fs.existsSync(path.join(dir, file))),
       };
     });
 }
@@ -233,7 +249,7 @@ function render(packages) {
   const shared = new Map([['Apache-2.0', normalize(fs.readFileSync(path.join(root, 'LICENSE-APACHE'), 'utf8'))]]);
   const unfiled = [];
   for (const pkg of packages) {
-    const files = chosenFiles(pkg.license, pkg.files);
+    const files = [...chosenFiles(pkg.license, pkg.files), ...(pkg.bundled ?? [])];
     if (!files.length) {
       unfiled.push(pkg);
       continue;

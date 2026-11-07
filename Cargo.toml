@@ -80,8 +80,9 @@ x11rb = { version = "0.14", features = ["randr"] }
 ashpd = { version = "0.13", default-features = false, features = ["screenshot", "tokio"] }
 base64 = "0.22"
 
-# Local database (bundled SQLite with FTS5)
-rusqlite = { version = "0.40", features = ["bundled"] }
+# Local database: bundled SQLCipher (SQLite with FTS5 and encryption) and the
+# OpenSSL it uses, both built from source
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 # Observability
 tracing = "0.1.41"

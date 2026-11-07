@@ -8,6 +8,7 @@
 | Node.js | 24 LTS (22.22+ supported) | pnpm 12.16.1 |
 | Tauri CLI | 2.12 (`@tauri-apps/cli`, no global install needed) | |
 | Angular | 22.2, TypeScript 6.0 | Angular CLI via `pnpm exec ng` |
+| Perl | any Perl 5 that OpenSSL accepts | builds the bundled OpenSSL for SQLCipher |
 
 ### Windows 10/11
 
@@ -15,6 +16,14 @@
    C++* (MSVC + Windows SDK).
 2. Microsoft Edge WebView2 Runtime (preinstalled on Windows 11).
 3. Rust via `rustup` (target `x86_64-pc-windows-msvc`), Node.js 24.
+4. A native Windows Perl such as [Strawberry Perl](https://strawberryperl.com)
+   (the portable zip is enough). The memory database is SQLCipher, and its
+   OpenSSL is compiled from source, which slows down the first build. The
+   Perl that ships with Git for Windows does not work: OpenSSL needs Windows
+   paths. If it comes first in `PATH`, point the build at the right one:
+   `OPENSSL_SRC_PERL=D:/tools/strawberry-perl/perl/bin/perl.exe` (an
+   environment variable read by `openssl-src`). The workflows set it to the
+   first native Perl on the runner's `PATH`.
 
 ### Linux (Ubuntu/Debian 24.04+)
 
@@ -25,8 +34,11 @@ sudo apt-get install -y build-essential curl wget file libwebkit2gtk-4.1-dev \
 ```
 
 Fedora: `sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file
-libappindicator-gtk3-devel librsvg2-devel libxdo-devel alsa-lib-devel` and the
+libappindicator-gtk3-devel librsvg2-devel libxdo-devel alsa-lib-devel perl` and the
 "C Development Tools and Libraries" group.
+
+The memory database is SQLCipher with a bundled OpenSSL built from source,
+which needs `perl` and `make` (both come with `build-essential` on Ubuntu).
 
 Both X11 and Wayland sessions work for the current features. Wayland-specific
 limits (screen capture, global shortcuts) matter from Phase 6 on.

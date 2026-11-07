@@ -184,6 +184,20 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn sqlcipher_is_compiled_in() {
+        let db = Database::open_in_memory().expect("open");
+        let version: String = db
+            .call(|conn| {
+                Ok::<_, StorageError>(
+                    conn.query_row("PRAGMA cipher_version", [], |row| row.get(0))?,
+                )
+            })
+            .await
+            .expect("SQLCipher answers cipher_version");
+        assert!(version.starts_with("4.14.0"), "{version}");
+    }
+
+    #[tokio::test]
     async fn creates_the_schema_and_reopens_without_migrating() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("memory").join("jarvis.db");

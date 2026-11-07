@@ -91,6 +91,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev libasound2-dev
+      # SQLCipher's OpenSSL is built from source and needs a native Windows
+      # Perl; Git Bash would find its MSYS perl first, which OpenSSL rejects.
+      - name: Native Perl for the OpenSSL build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = Get-Command perl -CommandType Application -All -ErrorAction SilentlyContinue |
+            ForEach-Object Source |
+            Where-Object { (& $_ -e 'print $^O') -eq 'MSWin32' } |
+            Select-Object -First 1
+          if (-not $perl) { throw 'No native Windows Perl on PATH' }
+          & $perl -v | Select-Object -Skip 1 -First 1
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_SRC_PERL=$perl"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -137,6 +150,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev libasound2-dev xvfb
+      # SQLCipher's OpenSSL is built from source and needs a native Windows
+      # Perl; Git Bash would find its MSYS perl first, which OpenSSL rejects.
+      - name: Native Perl for the OpenSSL build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = Get-Command perl -CommandType Application -All -ErrorAction SilentlyContinue |
+            ForEach-Object Source |
+            Where-Object { (& $_ -e 'print $^O') -eq 'MSWin32' } |
+            Select-Object -First 1
+          if (-not $perl) { throw 'No native Windows Perl on PATH' }
+          & $perl -v | Select-Object -Skip 1 -First 1
+          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_SRC_PERL=$perl"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Set up pnpm and Node.js
