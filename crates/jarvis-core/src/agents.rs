@@ -117,7 +117,7 @@ impl AgentSystem {
         events: &EventBus,
     ) -> Result<Self, CoreError> {
         let (db, persistent) = match memory.database() {
-            Some(db) => (db.clone(), true),
+            Some(db) => (db, true),
             None => {
                 events.error(
                     EventCategory::Agents,

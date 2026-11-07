@@ -472,18 +472,17 @@ mod tests {
         let path = dir.path().join("jarvis.db");
         let old = sibling(&path, ".plain-old");
         // The encrypted database first: a plain-old file without one would be restored.
-        drop(
-            Database::open_with_key(&path, Some(KEY.to_owned()))
-                .await
-                .expect("encrypted database"),
-        );
+        let db = plain_database(&path).await;
+        db.export_encrypted(KEY).await.expect("export");
+        db.switch_to_encrypted(KEY).await.expect("switch");
+        drop(db);
         drop(plain_database(&old).await);
         assert_eq!(file_state(&old).expect("state"), FileState::Plain);
 
         let reopened = Database::open_with_key(&path, Some(KEY.to_owned()))
             .await
             .expect("open with the key");
-        assert_eq!(conversations(&reopened).await, 0);
+        assert_eq!(conversations(&reopened).await, 1);
         assert!(leftovers(&path).is_empty(), "{:?}", leftovers(&path));
     }
 

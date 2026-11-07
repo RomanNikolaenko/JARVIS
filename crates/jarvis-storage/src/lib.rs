@@ -80,9 +80,10 @@ impl Database {
     }
 
     /// Opens (or creates) the database at `path` with an encryption key and
-    /// applies pending migrations. A new file is created encrypted; a plain
-    /// file is opened plain and the key is ignored. An encrypted file without
-    /// its key is [`StorageError::Locked`].
+    /// applies pending migrations. The key is used only for an encrypted file:
+    /// a new file is created plain and a plain file stays plain (encrypting is
+    /// [`Database::export_encrypted`] and [`Database::switch_to_encrypted`]).
+    /// An encrypted file without its key is [`StorageError::Locked`].
     pub async fn open_with_key(path: impl Into<PathBuf>, key: Option<String>) -> Result<Self> {
         let path = path.into();
         let opened = path.clone();
@@ -187,8 +188,9 @@ fn open_file(path: &Path, key: Option<&str>) -> Result<(Connection, MigrationRep
         }
     };
     let mut connection = Connection::open(path).map_err(corrupt)?;
-    // The key must be the first statement; a plain file stays plain.
-    if let Some(key) = key.filter(|_| state != FileState::Plain) {
+    // The key must be the first statement. Leftovers are tidied by now, so
+    // the header says whether the file is encrypted.
+    if let Some(key) = key.filter(|_| state == FileState::Encrypted) {
         connection
             .pragma_update(None, "key", key)
             .map_err(corrupt)?;
@@ -330,6 +332,14 @@ mod tests {
 
     const KEY: &str = "123456-234567-345678-456789-567890-678901-789012-890123";
 
+    /// A database encrypted the way the app does it.
+    async fn encrypted_database(path: &Path) -> Database {
+        let db = Database::open(path).await.expect("plain");
+        db.export_encrypted(KEY).await.expect("export");
+        db.switch_to_encrypted(KEY).await.expect("switch");
+        db
+    }
+
     async fn count_atlas(db: &Database) -> i64 {
         db.call(|conn| {
             Ok::<_, StorageError>(conn.query_row(
@@ -346,9 +356,7 @@ mod tests {
     async fn an_encrypted_database_hides_its_content() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("jarvis.db");
-        let db = Database::open_with_key(&path, Some(KEY.to_owned()))
-            .await
-            .expect("create encrypted");
+        let db = encrypted_database(&path).await;
         db.call(|conn| {
             conn.execute(
                 "INSERT INTO conversations (id, title, created_at, updated_at)
@@ -391,11 +399,7 @@ mod tests {
     async fn a_missing_or_wrong_key_reports_locked() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("jarvis.db");
-        drop(
-            Database::open_with_key(&path, Some(KEY.to_owned()))
-                .await
-                .expect("create encrypted"),
-        );
+        drop(encrypted_database(&path).await);
         let without = Database::open(&path).await.expect_err("no key");
         assert!(matches!(without, StorageError::Locked), "{without:?}");
         let wrong = Database::open_with_key(&path, Some(KEY.replace('1', "9")))
@@ -416,6 +420,18 @@ mod tests {
             .expect("opens plain");
         assert_eq!(count_atlas(&db).await, 0);
         drop(db);
+        assert_eq!(file_state(&path).expect("state"), FileState::Plain);
+    }
+
+    #[tokio::test]
+    async fn a_new_database_is_plain_even_with_a_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        drop(
+            Database::open_with_key(&path, Some(KEY.to_owned()))
+                .await
+                .expect("create"),
+        );
         assert_eq!(file_state(&path).expect("state"), FileState::Plain);
     }
 

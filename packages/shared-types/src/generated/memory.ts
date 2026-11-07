@@ -124,6 +124,11 @@ export type FactSuggestion = { id: string, content: string, projectId: string | 
 
 export type MemoryCounts = { conversations: number, messages: number, facts: number, projects: number, episodes: number, };
 
+/**
+ * Whether the memory database is encrypted at rest.
+ */
+export type MemoryEncryption = "off" | "on" | "locked" | "unsupported";
+
 export type MemoryKind = "message" | "fact" | "episode";
 
 export type MemoryStatus = { 
@@ -134,7 +139,7 @@ available: boolean, error: string | null,
 /**
  * Saving is on (settings).
  */
-savingEnabled: boolean, databasePath: string | null, sizeBytes: number, schemaVersion: number, counts: MemoryCounts, embedding: EmbeddingStatus, };
+savingEnabled: boolean, databasePath: string | null, sizeBytes: number, schemaVersion: number, counts: MemoryCounts, embedding: EmbeddingStatus, encryption: MemoryEncryption, };
 
 export type MessageRole = "user" | "assistant";
 

@@ -193,7 +193,7 @@ async fn save_paused_task(core: &JarvisCore) -> AgentTask {
 }
 
 async fn save_task(core: &JarvisCore, task: &AgentTask) {
-    TaskStore::new(core.memory().database().unwrap().clone())
+    TaskStore::new(core.memory().database().unwrap())
         .save(task)
         .await
         .unwrap();

@@ -390,6 +390,22 @@ pub struct MemoryCounts {
     pub episodes: u32,
 }
 
+/// Whether the memory database is encrypted at rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "memory.ts")]
+pub enum MemoryEncryption {
+    /// A plain SQLite file.
+    Off,
+    /// Encrypted and open.
+    On,
+    /// Encrypted, and the key is missing or wrong: memory is unavailable
+    /// until the recovery code unlocks it.
+    Locked,
+    /// Encryption needs the system keychain, which is not available.
+    Unsupported,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "memory.ts")]
@@ -404,6 +420,7 @@ pub struct MemoryStatus {
     pub schema_version: u32,
     pub counts: MemoryCounts,
     pub embedding: EmbeddingStatus,
+    pub encryption: MemoryEncryption,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]

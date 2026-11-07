@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use jarvis_ai::ChatRole;
 use jarvis_memory::{
     AcceptFactSuggestion, ContextRequest, ContextWindow, ConversationPatch, DEFAULT_TITLE,
-    Embedder, FactInput, FactSource, HIGHLIGHT_START, MemoryEngine, MemoryError, MemoryKind,
-    MessageRole, MessageStatus, NewMessage, ProjectInput, Retrieval, SearchQuery,
+    Embedder, FactInput, FactSource, HIGHLIGHT_START, MemoryEncryption, MemoryEngine, MemoryError,
+    MemoryKind, MessageRole, MessageStatus, NewMessage, ProjectInput, Retrieval, SearchQuery,
 };
 use uuid::Uuid;
 
@@ -1082,4 +1082,80 @@ async fn exports_hold_facts_but_never_suggestions() {
     let export = serde_json::to_string(&memory.export().await.unwrap()).unwrap();
     assert!(export.contains("Likes green tea."));
     assert!(!export.contains("Мурчика"), "{export}");
+}
+
+// ---- Encryption -----------------------------------------------------------------
+
+const KEY: &str = "111111-222222-333333-444444-555555-666666-777777-888888";
+
+/// An encrypted memory database with one conversation.
+async fn encrypted_memory(path: &std::path::Path) {
+    let db = jarvis_storage::Database::open(path).await.unwrap();
+    db.export_encrypted(KEY).await.unwrap();
+    db.switch_to_encrypted(KEY).await.unwrap();
+    drop(db);
+    let memory = MemoryEngine::open_with_key(path, Some(KEY.to_owned())).await;
+    assert!(memory.unavailable_reason().is_none());
+    assert_eq!(memory.encryption(), MemoryEncryption::On);
+    memory.create_conversation(None, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_locked_engine_unlocks_with_its_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jarvis.db");
+    encrypted_memory(&path).await;
+
+    let memory = MemoryEngine::open(&path).await;
+    assert!(memory.unavailable_reason().is_some());
+    assert!(memory.database().is_none());
+    assert_eq!(memory.encryption(), MemoryEncryption::Locked);
+    assert!(matches!(
+        memory.create_conversation(None, false).await,
+        Err(MemoryError::Unavailable(_))
+    ));
+
+    let wrong = memory.unlock(KEY.replace('1', "9")).await;
+    assert!(matches!(wrong, Err(MemoryError::Invalid(_))), "{wrong:?}");
+    assert_eq!(memory.encryption(), MemoryEncryption::Locked);
+
+    memory.unlock(KEY.to_owned()).await.unwrap();
+    assert_eq!(memory.encryption(), MemoryEncryption::On);
+    assert!(memory.unavailable_reason().is_none());
+    assert!(memory.database().is_some());
+    assert_eq!(memory.counts().await.unwrap().conversations, 1);
+    let again = memory.unlock(KEY.to_owned()).await;
+    assert!(matches!(again, Err(MemoryError::Invalid(_))), "{again:?}");
+}
+
+#[tokio::test]
+async fn unlock_refuses_a_plain_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jarvis.db");
+    let memory = MemoryEngine::open(&path).await;
+    assert_eq!(memory.encryption(), MemoryEncryption::Off);
+    let err = memory.unlock(KEY.to_owned()).await;
+    assert!(matches!(err, Err(MemoryError::Invalid(_))), "{err:?}");
+    assert!(memory.unavailable_reason().is_none());
+}
+
+#[tokio::test]
+async fn a_new_database_is_plain_even_with_a_key() {
+    // A key in the keychain without an encrypted file: an interrupted
+    // encryption, or a deleted database. Memory starts plain.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jarvis.db");
+    let memory = MemoryEngine::open_with_key(&path, Some(KEY.to_owned())).await;
+    assert!(memory.unavailable_reason().is_none());
+    assert_eq!(memory.encryption(), MemoryEncryption::Off);
+    assert_eq!(
+        jarvis_storage::file_state(&path).unwrap(),
+        jarvis_storage::FileState::Plain
+    );
+}
+
+#[tokio::test]
+async fn a_temporary_engine_is_not_encrypted() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    assert_eq!(memory.encryption(), MemoryEncryption::Off);
 }

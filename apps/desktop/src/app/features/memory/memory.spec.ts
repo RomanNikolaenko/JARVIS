@@ -17,6 +17,7 @@ const STATUS: MemoryStatus = {
   schemaVersion: 1,
   counts: { conversations: 2, messages: 6, facts: 1, projects: 0, episodes: 4 },
   embedding: { state: 'unavailable', model: null, indexed: 0, pending: 0, detail: 'text only' },
+  encryption: 'off',
 };
 
 describe('MemoryPage', () => {

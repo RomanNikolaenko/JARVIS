@@ -1214,18 +1214,20 @@ impl JarvisCore {
         };
         MemoryStatus {
             available: database.is_some(),
-            error: self.memory.unavailable_reason().map(str::to_owned),
+            error: self.memory.unavailable_reason(),
             saving_enabled: settings.memory.enabled,
             database_path: database
+                .as_ref()
                 .and_then(|db| db.path())
                 .map(|p| p.display().to_string()),
-            size_bytes: match database {
+            size_bytes: match &database {
                 Some(db) => db.size_bytes().await,
                 None => 0,
             },
-            schema_version: database.map_or(0, |db| db.report().schema_version),
+            schema_version: database.as_ref().map_or(0, |db| db.report().schema_version),
             counts,
             embedding,
+            encryption: self.memory.encryption(),
         }
     }
 

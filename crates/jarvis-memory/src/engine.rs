@@ -10,15 +10,16 @@
 //!
 //! Temporary conversations live only in this process. If the database
 //! cannot be opened, the engine still serves temporary conversations and
-//! reports the reason everywhere else.
+//! reports the reason everywhere else. An encrypted database opened without
+//! its key is locked until [`MemoryEngine::unlock`] gets the key.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use jarvis_storage::Database;
+use jarvis_storage::{Database, FileState, StorageError};
 use uuid::Uuid;
 
 use crate::context::{
@@ -32,8 +33,8 @@ use crate::types::{
     Episode, EpisodeCursor, Fact, FactInput, FactSource, FactSuggestion, MAX_FACT_CHARS, MAX_FACTS,
     MAX_MESSAGE_CHARS, MAX_NOTE_CHARS, MAX_PROJECT_DESCRIPTION_CHARS,
     MAX_PROJECT_INSTRUCTIONS_CHARS, MAX_PROJECT_NAME_CHARS, MAX_PROJECTS, MAX_TITLE_CHARS,
-    MemoryCounts, MemoryKind, MessageRole, MessageStatus, NewMessage, Project, ProjectInput,
-    SearchHit, SearchQuery, StoredMessage,
+    MemoryCounts, MemoryEncryption, MemoryKind, MessageRole, MessageStatus, NewMessage, Project,
+    ProjectInput, SearchHit, SearchQuery, StoredMessage,
 };
 use crate::vector::{self, Embedder, SimilarityCuts, VectorIndex, VectorKind};
 
@@ -52,6 +53,10 @@ const MAX_SEARCH_CHARS: usize = 500;
 const MAX_SEARCH_RESULTS: u32 = 100;
 /// Text sent to the embedding model per item.
 const EMBED_CHARS: usize = 2_000;
+
+fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(PoisonError::into_inner)
+}
 
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
@@ -118,55 +123,143 @@ struct TemporaryConversation {
 
 #[derive(Debug)]
 pub struct MemoryEngine {
-    db: Option<Database>,
-    unavailable: Option<String>,
+    db: RwLock<Option<Database>>,
+    unavailable: RwLock<Option<String>>,
+    /// The database file; `None` for an in-memory engine.
+    path: Option<PathBuf>,
+    /// The last open failed because the file is encrypted and the key is
+    /// missing or wrong.
+    locked: AtomicBool,
     temporary: Mutex<HashMap<Uuid, TemporaryConversation>>,
     vectors: tokio::sync::Mutex<Option<VectorIndex>>,
     temporary_seq: AtomicI64,
 }
 
 impl MemoryEngine {
-    /// Opens the database at `path`. Never fails: if the database cannot be
-    /// opened, the engine works without it and reports why.
+    /// Opens the plain database at `path`. Never fails: if the database
+    /// cannot be opened, the engine works without it and reports why.
     pub async fn open(path: impl Into<PathBuf>) -> Self {
-        match Database::open(path).await {
-            Ok(db) => Self::with_database(Some(db), None),
+        Self::open_with_key(path, None).await
+    }
+
+    /// Opens the database at `path`, using `key` if the file is encrypted.
+    /// Never fails: without the right key the engine is locked.
+    pub async fn open_with_key(path: impl Into<PathBuf>, key: Option<String>) -> Self {
+        let path = path.into();
+        match Database::open_with_key(path.clone(), key).await {
+            Ok(db) => Self::with_database(Some(db), None, Some(path)),
             Err(err) => {
                 tracing::error!("memory database unavailable: {err}");
-                Self::with_database(None, Some(err.to_string()))
+                let engine = Self::with_database(None, Some(err.to_string()), Some(path));
+                engine
+                    .locked
+                    .store(matches!(err, StorageError::Locked), Ordering::Relaxed);
+                engine
             }
         }
     }
 
     /// An engine on a private in-memory database (tests).
     pub fn in_memory() -> Result<Self> {
-        Ok(Self::with_database(Some(Database::open_in_memory()?), None))
+        Ok(Self::with_database(
+            Some(Database::open_in_memory()?),
+            None,
+            None,
+        ))
     }
 
-    fn with_database(db: Option<Database>, unavailable: Option<String>) -> Self {
+    fn with_database(
+        db: Option<Database>,
+        unavailable: Option<String>,
+        path: Option<PathBuf>,
+    ) -> Self {
         Self {
-            db,
-            unavailable,
+            db: RwLock::new(db),
+            unavailable: RwLock::new(unavailable),
+            path,
+            locked: AtomicBool::new(false),
             temporary: Mutex::default(),
             vectors: tokio::sync::Mutex::default(),
             temporary_seq: AtomicI64::new(1),
         }
     }
 
-    pub fn database(&self) -> Option<&Database> {
-        self.db.as_ref()
+    /// The open database (a handle sharing its connection).
+    pub fn database(&self) -> Option<Database> {
+        read(&self.db).clone()
     }
 
     /// Why the database is not available, if it is not.
-    pub fn unavailable_reason(&self) -> Option<&str> {
-        self.unavailable.as_deref()
+    pub fn unavailable_reason(&self) -> Option<String> {
+        read(&self.unavailable).clone()
+    }
+
+    /// Whether the database file is encrypted. The keychain is not this
+    /// engine's concern, so it never reports `Unsupported`.
+    pub fn encryption(&self) -> MemoryEncryption {
+        if self.locked.load(Ordering::Relaxed) {
+            return MemoryEncryption::Locked;
+        }
+        match (&self.path, read(&self.db).is_some()) {
+            (Some(path), true) => match jarvis_storage::file_state(path) {
+                Ok(FileState::Encrypted) => MemoryEncryption::On,
+                Ok(FileState::Plain | FileState::Missing) => MemoryEncryption::Off,
+                Err(err) => {
+                    tracing::warn!("cannot read the memory database header: {err}");
+                    MemoryEncryption::Off
+                }
+            },
+            _ => MemoryEncryption::Off,
+        }
+    }
+
+    /// Opens a locked database with `key` (its recovery code). Memory works
+    /// again at once for every caller that asks the engine for the database.
+    pub async fn unlock(&self, key: String) -> Result<()> {
+        match self.encryption() {
+            MemoryEncryption::Locked => {}
+            MemoryEncryption::On => {
+                return Err(MemoryError::Invalid(
+                    "Memory is already unlocked".to_owned(),
+                ));
+            }
+            MemoryEncryption::Off | MemoryEncryption::Unsupported => {
+                return Err(MemoryError::Invalid("Memory is not encrypted".to_owned()));
+            }
+        }
+        let Some(path) = self.path.clone() else {
+            return Err(MemoryError::Invalid("Memory is not encrypted".to_owned()));
+        };
+        let db = match Database::open_with_key(path, Some(key)).await {
+            Ok(db) => db,
+            Err(StorageError::Locked) => {
+                return Err(MemoryError::Invalid(
+                    "This recovery code does not open the memory database".to_owned(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        {
+            let mut slot = self.db.write().unwrap_or_else(PoisonError::into_inner);
+            if slot.is_some() {
+                // Another unlock won the race; keep its connection.
+                return Ok(());
+            }
+            *slot = Some(db);
+        }
+        *self
+            .unavailable
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+        self.locked.store(false, Ordering::Relaxed);
+        self.invalidate_vectors().await;
+        Ok(())
     }
 
     fn db(&self) -> Result<Database> {
-        self.db.clone().ok_or_else(|| {
+        self.database().ok_or_else(|| {
             MemoryError::Unavailable(
-                self.unavailable
-                    .clone()
+                self.unavailable_reason()
                     .unwrap_or_else(|| "the database is not open".to_owned()),
             )
         })
