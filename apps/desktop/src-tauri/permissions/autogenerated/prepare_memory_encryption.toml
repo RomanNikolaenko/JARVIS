@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-memory-encryption"
+description = "Enables the prepare_memory_encryption command without any pre-configured scope."
+commands.allow = ["prepare_memory_encryption"]
+
+[[permission]]
+identifier = "deny-prepare-memory-encryption"
+description = "Denies the prepare_memory_encryption command without any pre-configured scope."
+commands.deny = ["prepare_memory_encryption"]

@@ -18,8 +18,8 @@ use jarvis_core::jarvis_vision::{CaptureInfo, WindowInfo};
 use jarvis_core::jarvis_voice::{VoiceState, VoiceStatus, VoiceTranscript};
 use jarvis_core::{
     AgentStartRequest, AgentStatus, AppInfo, ChatStreamEvent, ChatTurnRequest, ErrorPayload,
-    HealthReport, ProviderModels, ProviderTestResult, RouteResolution, Settings, ToolInfo,
-    UiErrorReport, UpdateStatus, VisionStatus,
+    HealthReport, MemoryRecoveryCode, ProviderModels, ProviderTestResult, RouteResolution,
+    Settings, ToolInfo, UiErrorReport, UpdateStatus, VisionStatus,
 };
 use jarvis_events::SystemEvent;
 use jarvis_platform::{HardwareInfo, PlatformInfo, SystemMetrics};
@@ -74,6 +74,7 @@ fn export_typescript_bindings() {
         SearchQuery,
         SearchHit,
         MemoryStatus,
+        MemoryRecoveryCode,
         TransferReport,
         AgentStartRequest,
         AgentStatus,

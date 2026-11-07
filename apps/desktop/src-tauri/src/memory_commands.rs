@@ -1,5 +1,5 @@
 //! IPC commands of the memory: conversations and chat turns, facts,
-//! projects, the action history, search, export and import.
+//! projects, the action history, search, export and import, and encryption.
 //!
 //! Export and import files are chosen in native dialogs opened on the Rust
 //! side; the WebView never passes file paths.
@@ -9,7 +9,9 @@ use jarvis_core::jarvis_memory::{
     EpisodeCursor, Fact, FactInput, FactSuggestion, MemoryStatus, Project, ProjectInput, SearchHit,
     SearchQuery, TransferReport, text,
 };
-use jarvis_core::{ChatStreamEvent, ChatTurnRequest, CoreError, ErrorPayload, SinkClosed};
+use jarvis_core::{
+    ChatStreamEvent, ChatTurnRequest, CoreError, ErrorPayload, MemoryRecoveryCode, SinkClosed,
+};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
@@ -238,6 +240,27 @@ pub async fn clear_memory(state: State<'_, AppState>, confirmation: String) -> C
         )));
     }
     Ok(state.core().clear_memory().await?)
+}
+
+/// Creates the recovery code shown before encrypting memory.
+#[tauri::command]
+pub async fn prepare_memory_encryption(
+    state: State<'_, AppState>,
+) -> CommandResult<MemoryRecoveryCode> {
+    Ok(state.core().prepare_memory_encryption().await?)
+}
+
+/// Encrypts memory with the prepared code; `confirmation` is the code's last
+/// group, typed by the user.
+#[tauri::command]
+pub async fn encrypt_memory(state: State<'_, AppState>, confirmation: String) -> CommandResult<()> {
+    Ok(state.core().encrypt_memory(confirmation).await?)
+}
+
+/// Opens locked memory with its recovery code.
+#[tauri::command]
+pub async fn unlock_memory(state: State<'_, AppState>, code: String) -> CommandResult<()> {
+    Ok(state.core().unlock_memory(code).await?)
 }
 
 fn unix_millis() -> u128 {

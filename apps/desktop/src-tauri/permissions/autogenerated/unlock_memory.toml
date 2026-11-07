@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unlock-memory"
+description = "Enables the unlock_memory command without any pre-configured scope."
+commands.allow = ["unlock_memory"]
+
+[[permission]]
+identifier = "deny-unlock-memory"
+description = "Denies the unlock_memory command without any pre-configured scope."
+commands.deny = ["unlock_memory"]

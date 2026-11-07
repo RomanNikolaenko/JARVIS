@@ -2,6 +2,7 @@
 //! runtime, real `tauri.conf.json` and capabilities), so argument naming,
 //! serialization and the permission system are all exercised.
 
+use jarvis_core::jarvis_security::InMemorySecretStore;
 use jarvis_core::{AppPaths, CoreOptions, JarvisCore};
 use serde_json::{Value, json};
 use tauri::ipc::{CallbackFn, InvokeBody};
@@ -26,7 +27,10 @@ fn harness() -> Harness {
         log_dir: dir.path().join("logs"),
     };
     // No HTTP providers: tests must not depend on servers running locally.
-    let options = CoreOptions::new(paths, "0.0.0-test").with_provider_factory(None);
+    // Secrets stay in memory, never in the real keychain.
+    let options = CoreOptions::new(paths, "0.0.0-test")
+        .with_provider_factory(None)
+        .with_secrets(std::sync::Arc::new(InMemorySecretStore::default()));
     let core = tauri::async_runtime::block_on(JarvisCore::initialize(options)).expect("core");
 
     let app = with_commands(mock_builder())
@@ -143,6 +147,9 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "export_memory",
         "import_memory",
         "clear_memory",
+        "prepare_memory_encryption",
+        "encrypt_memory",
+        "unlock_memory",
         "start_agent_task",
         "get_agent_task",
         "cancel_agent_task",
@@ -478,6 +485,33 @@ fn clearing_memory_needs_the_confirmation_phrase() {
     assert_eq!(status["counts"]["facts"], 0);
     let removed = invoke(&h.main, "clear_episodes", json!({})).expect("clear episodes");
     assert!(removed.as_u64().is_some());
+}
+
+#[test]
+fn memory_encryption_over_ipc() {
+    let h = harness();
+    let status = invoke(&h.main, "get_memory_status", json!({})).expect("status");
+    assert_eq!(status["encryption"], "off");
+
+    let code = "123456-".repeat(7) + "123456";
+    let error = invoke(&h.main, "unlock_memory", json!({ "code": code })).expect_err("plain");
+    assert_eq!(error["code"], "validation", "{error}");
+    let error = invoke(
+        &h.main,
+        "encrypt_memory",
+        json!({ "confirmation": "123456" }),
+    )
+    .expect_err("no code shown");
+    assert_eq!(error["code"], "validation", "{error}");
+
+    let prepared = invoke(&h.main, "prepare_memory_encryption", json!({})).expect("prepare");
+    let code = prepared["code"].as_str().expect("code").to_owned();
+    assert_eq!(code.len(), 55, "{code}");
+    let last = code.rsplit('-').next().expect("group");
+    invoke(&h.main, "encrypt_memory", json!({ "confirmation": last })).expect("encrypt");
+    let status = invoke(&h.main, "get_memory_status", json!({})).expect("status");
+    assert_eq!(status["encryption"], "on");
+    assert_eq!(status["available"], true);
 }
 
 #[test]

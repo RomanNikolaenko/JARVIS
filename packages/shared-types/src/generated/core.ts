@@ -173,6 +173,15 @@ export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
 export type LoggingSettings = { level: LogLevel, };
 
 /**
+ * The recovery code, shown once before encrypting.
+ */
+export type MemoryRecoveryCode = { 
+/**
+ * Eight groups of six digits joined by `-`.
+ */
+code: string, };
+
+/**
  * Long-term memory and context management.
  */
 export type MemorySettings = { 

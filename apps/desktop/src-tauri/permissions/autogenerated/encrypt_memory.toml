@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-encrypt-memory"
+description = "Enables the encrypt_memory command without any pre-configured scope."
+commands.allow = ["encrypt_memory"]
+
+[[permission]]
+identifier = "deny-encrypt-memory"
+description = "Denies the encrypt_memory command without any pre-configured scope."
+commands.deny = ["encrypt_memory"]
