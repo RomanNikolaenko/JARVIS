@@ -146,14 +146,27 @@ pub(crate) fn migrate(
     Ok(report)
 }
 
-/// Writes a consistent copy of the database next to it (`VACUUM INTO`).
+/// Writes a consistent copy of the database next to it: `VACUUM INTO` for a
+/// plain database, `sqlcipher_export` for an encrypted one, so the copy is
+/// encrypted with the same key (an attached database without a KEY clause
+/// takes the key of the main one).
 fn backup(conn: &Connection, path: &Path, version: u32) -> Result<PathBuf> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "jarvis.db".to_owned());
     let target = path.with_file_name(format!("{name}.v{version}-{}.bak", now_ms()));
-    conn.execute("VACUUM INTO ?1", [target.to_string_lossy()])?;
+    let encrypted = crate::file_state(path)
+        .map_err(|err| StorageError::io(format!("reading {}", path.display()), err))?
+        == crate::FileState::Encrypted;
+    if encrypted {
+        conn.execute("ATTACH DATABASE ?1 AS backup", [target.to_string_lossy()])?;
+        let exported = crate::encryption::export_into(conn, "backup");
+        conn.execute("DETACH DATABASE backup", [])?;
+        exported?;
+    } else {
+        conn.execute("VACUUM INTO ?1", [target.to_string_lossy()])?;
+    }
     tracing::info!("database backed up to {}", target.display());
     Ok(target)
 }

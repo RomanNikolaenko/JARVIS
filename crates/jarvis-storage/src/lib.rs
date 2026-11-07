@@ -10,6 +10,7 @@
 //! [`file_state`] tells the two apart by the header. On Unix the database is
 //! created with mode 0600 inside a 0700 directory.
 
+mod encryption;
 mod error;
 mod migrations;
 
@@ -171,6 +172,7 @@ fn open_file(path: &Path, key: Option<&str>) -> Result<(Connection, MigrationRep
             .map_err(|err| StorageError::io(format!("creating {}", dir.display()), err))?;
         restrict_permissions(dir, 0o700);
     }
+    encryption::tidy_leftovers(path)?;
     let state = file_state(path)
         .map_err(|err| StorageError::io(format!("reading {}", path.display()), err))?;
     let corrupt = |err: rusqlite::Error| {
