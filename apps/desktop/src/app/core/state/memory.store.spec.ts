@@ -150,6 +150,13 @@ class FakeApi {
     this.suggestionHandler = handler;
     return () => (this.suggestionHandler = null);
   });
+  prepareMemoryEncryption = vi.fn(async () => ({ code: '111111-222222-333333-444444-555555-666666-777777-888888' }));
+  encryptMemory = vi.fn(async (_confirmation: string) => {
+    this.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'on' });
+  });
+  unlockMemory = vi.fn(async (_code: string) => {
+    this.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'on' });
+  });
 }
 
 describe('MemoryStore', () => {
@@ -596,6 +603,45 @@ describe('MemoryStore', () => {
     pending.resolve();
     await deleting;
     expect(store.busy()).toBe(false);
+  });
+
+  it('prepares the recovery code and encrypts with its last group', async () => {
+    expect(await store.prepareEncryption()).toBe('111111-222222-333333-444444-555555-666666-777777-888888');
+    expect(await store.encrypt('888888')).toBe(true);
+    expect(api.encryptMemory).toHaveBeenCalledWith('888888');
+    expect(store.status()?.encryption).toBe('on');
+    expect(store.dataOperation()).toBeNull();
+    expect(store.busy()).toBe(false);
+  });
+
+  it('keeps an encryption failure visible and reports it', async () => {
+    api.encryptMemory.mockRejectedValueOnce(new IpcError('limitExceeded', 'Stop the running replies'));
+    expect(await store.encrypt('888888')).toBe(false);
+    expect(store.dataError()?.message).toBe('Stop the running replies');
+    expect(store.status()?.encryption).toBe('off');
+  });
+
+  it('reports a keychain failure while preparing and refreshes the status', async () => {
+    api.prepareMemoryEncryption.mockRejectedValueOnce(new IpcError('unavailable', 'Encryption needs the system keychain'));
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'unsupported' });
+    expect(await store.prepareEncryption()).toBeNull();
+    expect(store.dataError()?.message).toBe('Encryption needs the system keychain');
+    await vi.waitFor(() => expect(store.status()?.encryption).toBe('unsupported'));
+  });
+
+  it('unlocks with the recovery code and reloads memory', async () => {
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, available: false, encryption: 'locked' });
+    await store.refreshStatus();
+    api.unlockMemory.mockRejectedValueOnce(new IpcError('validation', 'This recovery code does not open the memory database'));
+    expect(await store.unlock('1')).toBe(false);
+    expect(store.unlockError()?.message).toBe('This recovery code does not open the memory database');
+    api.listFacts.mockClear();
+    expect(await store.unlock('111111-222222-333333-444444-555555-666666-777777-888888')).toBe(true);
+    expect(api.unlockMemory).toHaveBeenLastCalledWith('111111-222222-333333-444444-555555-666666-777777-888888');
+    expect(store.unlockError()).toBeNull();
+    expect(store.unlocking()).toBe(false);
+    expect(store.status()?.encryption).toBe('on');
+    expect(api.listFacts).toHaveBeenCalled();
   });
 
   it('splits highlighted snippets', () => {

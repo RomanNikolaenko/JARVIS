@@ -11,7 +11,32 @@
 </header>
 
 @if (store.status(); as status) {
-  @if (!status.available) {
+  @if (status.encryption === 'locked') {
+    <form class="banner error unlock" role="alert" (submit)="unlock($event)">
+      <jv-icon name="shield" [size]="16" />
+      <div class="unlock-body">
+        <p>Memory is encrypted and locked, so only temporary chats work. Enter its recovery code to open it.</p>
+        <div class="unlock-row">
+          <label class="field">
+            <span class="field-label">Recovery code</span>
+            <input
+              class="mono"
+              aria-label="Recovery code"
+              autocomplete="off"
+              spellcheck="false"
+              [value]="recoveryCode()"
+              (input)="recoveryCode.set(valueOf($event))" />
+          </label>
+          <button type="submit" class="primary" [disabled]="!recoveryCode().trim() || store.unlocking()">
+            {{ store.unlocking() ? 'Unlocking…' : 'Unlock' }}
+          </button>
+        </div>
+        @if (store.unlockError(); as error) {
+          <p class="error-text">{{ error.message }}</p>
+        }
+      </div>
+    </form>
+  } @else if (!status.available) {
     <p class="banner error" role="alert">
       <jv-icon name="warning" [size]="16" />
       The memory database is unavailable, so only temporary chats work: {{ status.error }}

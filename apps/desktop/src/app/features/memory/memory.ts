@@ -28,6 +28,7 @@ interface TabItem {
 export class MemoryPage {
   protected readonly store = inject(MemoryStore);
   protected readonly tab = signal<Tab>('facts');
+  protected readonly recoveryCode = signal('');
   protected readonly tabs: readonly TabItem[] = [
     { id: 'facts', label: 'Facts', icon: 'brain' },
     { id: 'projects', label: 'Projects', icon: 'folder' },
@@ -45,5 +46,18 @@ export class MemoryPage {
 
   constructor() {
     void this.store.loadAll();
+  }
+
+  protected async unlock(event: Event): Promise<void> {
+    event.preventDefault();
+    const code = this.recoveryCode().trim();
+    if (!code || this.store.unlocking()) return;
+    if (await this.store.unlock(code)) {
+      this.recoveryCode.set('');
+    }
+  }
+
+  protected valueOf(event: Event): string {
+    return (event.target as HTMLInputElement).value;
   }
 }

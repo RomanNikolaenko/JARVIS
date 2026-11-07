@@ -55,7 +55,28 @@ describe('MemoryPage', () => {
     })),
     rejectFactSuggestion: vi.fn(async () => undefined),
     updateSettings: vi.fn(async (settings: Settings) => settings),
+    prepareMemoryEncryption: vi.fn(async () => ({ code: '111111-222222-333333-444444-555555-666666-777777-888888' })),
+    encryptMemory: vi.fn(async (_confirmation: string) => undefined),
+    unlockMemory: vi.fn(async (_code: string) => undefined),
   };
+
+  afterEach(() => {
+    api.getMemoryStatus.mockResolvedValue(STATUS);
+    TestBed.resetTestingModule();
+  });
+
+  async function openData(fixture: Awaited<ReturnType<typeof render>>['fixture'], element: HTMLElement) {
+    button(element, 'Data & settings').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  function encryptionRow(element: HTMLElement): string {
+    const row = [...element.querySelectorAll('.facts-list > div')].find(
+      (d) => d.querySelector('dt')?.textContent === 'Encryption'
+    );
+    return row?.querySelector('dd')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+  }
 
   function suggestion(id: string, content: string): FactSuggestion {
     return { id, content, projectId: null, sourceConversationId: 'c1', sourceConversationTitle: 'Morning chat', createdAtMs: 1 };
@@ -158,6 +179,95 @@ describe('MemoryPage', () => {
     clear.click();
     await fixture.whenStable();
     expect(api.clearMemory).toHaveBeenCalledWith('DELETE ALL MEMORY');
+  });
+
+  it.each([
+    ['off', 'Memory is not encrypted'],
+    ['on', 'Encrypted (key in the system keychain)'],
+    ['locked', 'Locked'],
+    ['unsupported', 'Encryption needs the system keychain, which is not available'],
+  ] as const)('shows the encryption state %s', async (encryption, text) => {
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, available: encryption !== 'locked', encryption });
+    const { fixture, element } = await render();
+    await openData(fixture, element);
+    expect(encryptionRow(element)).toContain(text);
+  });
+
+  it('encrypts only after the last group of the recovery code is typed', async () => {
+    const { fixture, element } = await render();
+    await openData(fixture, element);
+    button(element, 'Encrypt memory…').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const dialog = element.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    const groups = [...dialog.querySelectorAll('.code-group')].map((g) => g.textContent?.trim());
+    expect(groups).toEqual(['111111', '222222', '333333', '444444', '555555', '666666', '777777', '888888']);
+    expect(dialog.textContent).toContain('Without this code and without the keychain entry');
+    const encrypt = button(dialog, 'Encrypt');
+    expect(encrypt.disabled).toBe(true);
+    const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Last group of the recovery code"]')!;
+    input.value = '777777';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(encrypt.disabled).toBe(true);
+    input.value = '888888';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(encrypt.disabled).toBe(false);
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'on' });
+    encrypt.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(api.encryptMemory).toHaveBeenCalledWith('888888');
+    expect(element.querySelector('[role="dialog"]')).toBeNull();
+    expect(encryptionRow(element)).toContain('Encrypted (key in the system keychain)');
+  });
+
+  it('unlocks locked memory with the recovery code and shows a wrong code', async () => {
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, available: false, error: 'locked', encryption: 'locked' });
+    api.unlockMemory.mockRejectedValueOnce({
+      code: 'validation',
+      message: 'This recovery code does not open the memory database',
+    });
+    const { fixture, element } = await render();
+    const form = element.querySelector<HTMLElement>('.unlock')!;
+    expect(form.textContent).toContain('Recovery code');
+    const input = form.querySelector<HTMLInputElement>('input[aria-label="Recovery code"]')!;
+    input.value = '123';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    button(form, 'Unlock').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(api.unlockMemory).toHaveBeenCalledWith('123');
+    expect(element.querySelector('.unlock')?.textContent).toContain('This recovery code does not open the memory database');
+
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'on' });
+    input.value = '111111-222222-333333-444444-555555-666666-777777-888888';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    button(element.querySelector<HTMLElement>('.unlock')!, 'Unlock').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(api.unlockMemory).toHaveBeenLastCalledWith('111111-222222-333333-444444-555555-666666-777777-888888');
+    expect(element.querySelector('.unlock')).toBeNull();
+  });
+
+  it('notes that an export of encrypted memory is a plain file', async () => {
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'on' });
+    const { fixture, element } = await render();
+    await openData(fixture, element);
+    expect(element.textContent).toContain('An export is a plain JSON file');
+  });
+
+  it('disables encryption without a keychain and says why', async () => {
+    api.getMemoryStatus.mockResolvedValue({ ...STATUS, encryption: 'unsupported' });
+    const { fixture, element } = await render();
+    await openData(fixture, element);
+    const encrypt = button(element, 'Encrypt memory…');
+    expect(encrypt.disabled).toBe(true);
+    expect(encrypt.title).toContain('system keychain');
   });
 
   it('renders search snippets with highlights and without extra spaces', async () => {

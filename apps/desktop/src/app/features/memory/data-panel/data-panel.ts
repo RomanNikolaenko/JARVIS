@@ -8,6 +8,7 @@ import { SettingsStore } from '../../../core/state/settings.store';
 import { formatBytes } from '../../../shared/format';
 import { HudPanel } from '../../../shared/hud-panel/hud-panel';
 import { Icon } from '../../../shared/icon/icon';
+import { EncryptDialog } from './encrypt-dialog';
 
 /** Word the user types before all memory is deleted. */
 export const CLEAR_WORD = 'DELETE';
@@ -16,7 +17,7 @@ const AUTOMATIC = '';
 /** Database status, memory settings, export/import and deleting everything. */
 @Component({
   selector: 'jv-data-panel',
-  imports: [HudPanel, Icon, RouterLink],
+  imports: [EncryptDialog, HudPanel, Icon, RouterLink],
   templateUrl: './data-panel.html',
   styleUrls: ['../memory-shared.scss', './data-panel.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -35,6 +36,9 @@ export class DataPanel {
   protected readonly dirty = signal(false);
   protected readonly saved = signal(false);
   protected readonly confirmation = signal('');
+  /** The recovery code while the encryption dialog is open. */
+  protected readonly recoveryCode = signal<string | null>(null);
+  protected readonly preparing = signal(false);
   protected readonly settingsError = this.settingsStore.error;
   protected readonly saving = this.settingsStore.saving;
   protected readonly shareWithCloud = computed(() => this.settingsStore.settings()?.privacy.shareMemoryWithCloud ?? false);
@@ -114,6 +118,21 @@ export class DataPanel {
     }
     this.confirmation.set('');
     await this.store.clearAll();
+  }
+
+  protected async startEncryption(): Promise<void> {
+    if (this.preparing() || this.store.busy()) return;
+    this.preparing.set(true);
+    try {
+      this.recoveryCode.set(await this.store.prepareEncryption());
+    } finally {
+      this.preparing.set(false);
+    }
+  }
+
+  protected closeEncryption(): void {
+    this.recoveryCode.set(null);
+    this.store.dataError.set(null);
   }
 
   protected valueOf(event: Event): string {

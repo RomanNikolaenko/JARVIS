@@ -47,6 +47,9 @@ export function snippetParts(snippet: string): { text: string; match: boolean }[
   return parts;
 }
 
+/** A long operation on the whole database. */
+export type DataOperation = 'export' | 'import' | 'clear' | 'encrypt';
+
 /** State of the Memory screen: facts, projects, action history, search. */
 @Injectable({ providedIn: 'root' })
 export class MemoryStore {
@@ -59,7 +62,7 @@ export class MemoryStore {
   private clearingHistory: Promise<void> | null = null;
   private searchEpoch = 0;
   private searchRequest: { key: string; promise: Promise<void> } | null = null;
-  private dataRequest: { kind: 'export' | 'import' | 'clear'; promise: Promise<void> } | null = null;
+  private dataRequest: { kind: DataOperation; promise: Promise<void> } | null = null;
   private suggestionEpoch = 0;
   private suggestionsFollowed = false;
 
@@ -76,12 +79,14 @@ export class MemoryStore {
   readonly error = signal<IpcError | null>(null);
   readonly busy = signal(false);
   readonly lastTransfer = signal<{ kind: 'export' | 'import'; report: TransferReport } | null>(null);
-  readonly dataOperation = signal<'export' | 'import' | 'clear' | null>(null);
+  readonly dataOperation = signal<DataOperation | null>(null);
   readonly dataError = signal<IpcError | null>(null);
   /** Facts JARVIS found in conversations, waiting for review. */
   readonly suggestions = signal<readonly FactSuggestion[]>([]);
   /** Their number, pushed by the core on every change (navigation counter). */
   readonly pendingSuggestions = signal(0);
+  readonly unlocking = signal(false);
+  readonly unlockError = signal<IpcError | null>(null);
 
   readonly projectNames = computed(() => new Map(this.projects().map((p) => [p.id, p.name] as const)));
 
@@ -396,8 +401,51 @@ export class MemoryStore {
     });
   }
 
-  /** One database transfer/clear operation, including its dialog and refresh. */
-  private runDataOperation(kind: 'export' | 'import' | 'clear', action: () => Promise<void>): Promise<void> {
+  /** Creates the recovery code to show; `null` (and `dataError`) on failure. */
+  async prepareEncryption(): Promise<string | null> {
+    if (this.busy()) return null;
+    this.dataError.set(null);
+    try {
+      return (await this.api.prepareMemoryEncryption()).code;
+    } catch (error) {
+      this.dataError.set(IpcError.from(error));
+      // A missing keychain turns the status into "unsupported".
+      void this.refreshStatus();
+      return null;
+    }
+  }
+
+  /** Encrypts memory with the prepared code; `true` when it is encrypted. */
+  async encrypt(confirmation: string): Promise<boolean> {
+    let encrypted = false;
+    await this.runDataOperation('encrypt', async () => {
+      await this.api.encryptMemory(confirmation);
+      encrypted = true;
+      await this.refreshStatus();
+    });
+    return encrypted;
+  }
+
+  /** Opens locked memory with its recovery code and loads it. */
+  async unlock(code: string): Promise<boolean> {
+    if (this.unlocking()) return false;
+    this.unlocking.set(true);
+    this.unlockError.set(null);
+    try {
+      await this.api.unlockMemory(code);
+    } catch (error) {
+      this.unlockError.set(IpcError.from(error));
+      return false;
+    } finally {
+      this.unlocking.set(false);
+    }
+    this.invalidateEpisodes();
+    await this.loadAll();
+    return true;
+  }
+
+  /** One database transfer/clear/encrypt operation, including its dialog and refresh. */
+  private runDataOperation(kind: DataOperation, action: () => Promise<void>): Promise<void> {
     if (this.dataRequest) {
       return this.dataRequest.kind === kind ? this.dataRequest.promise : Promise.resolve();
     }

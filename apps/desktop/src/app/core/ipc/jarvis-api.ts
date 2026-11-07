@@ -21,6 +21,7 @@ import type {
   Fact,
   FactInput,
   FactSuggestion,
+  MemoryRecoveryCode,
   MemoryStatus,
   Project,
   ProjectInput,
@@ -317,6 +318,21 @@ export class JarvisApi {
   /** Deletes all saved memory; `confirmation` must be the agreed phrase. */
   clearMemory(confirmation: string): Promise<void> {
     return this.bridge.invoke('clear_memory', { confirmation });
+  }
+
+  /** Creates the recovery code shown before encrypting memory. */
+  prepareMemoryEncryption(): Promise<MemoryRecoveryCode> {
+    return this.bridge.invoke('prepare_memory_encryption');
+  }
+
+  /** Encrypts memory; `confirmation` is the last group of the prepared code. */
+  encryptMemory(confirmation: string): Promise<void> {
+    return this.bridge.invoke('encrypt_memory', { confirmation });
+  }
+
+  /** Opens locked memory with its recovery code. */
+  unlockMemory(code: string): Promise<void> {
+    return this.bridge.invoke('unlock_memory', { code });
   }
 
   // ---- Agents and tools ----

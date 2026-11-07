@@ -3,7 +3,20 @@
 }
 @if (store.dataOperation(); as operation) {
   <p role="status">
-    {{ operation === 'export' ? 'Exporting memory…' : operation === 'import' ? 'Importing memory…' : 'Deleting memory…' }}
+    @switch (operation) {
+      @case ('export') {
+        Exporting memory…
+      }
+      @case ('import') {
+        Importing memory…
+      }
+      @case ('encrypt') {
+        Encrypting memory…
+      }
+      @default {
+        Deleting memory…
+      }
+    }
   </p>
 }
 <div class="columns">
@@ -39,6 +52,49 @@
           </dd>
         </div>
         <div>
+          <dt>Encryption</dt>
+          <dd>
+            @switch (status.encryption) {
+              @case ('on') {
+                <span class="chip accent">on</span> Encrypted (key in the system keychain)
+              }
+              @case ('locked') {
+                <span class="chip danger">locked</span> Locked
+              }
+              @case ('unsupported') {
+                <span class="chip warning">unavailable</span> Encryption needs the system keychain, which is not available
+              }
+              @default {
+                Memory is not encrypted
+              }
+            }
+            @if (status.encryption === 'off' || status.encryption === 'unsupported') {
+              <div>
+                <button
+                  type="button"
+                  [disabled]="
+                    status.encryption === 'unsupported' ||
+                    !status.available ||
+                    !status.savingEnabled ||
+                    store.busy() ||
+                    preparing()
+                  "
+                  [title]="
+                    status.encryption === 'unsupported'
+                      ? 'Encryption needs the system keychain, which is not available'
+                      : !status.savingEnabled
+                        ? 'Turn on saving memory first'
+                        : ''
+                  "
+                  (click)="startEncryption()">
+                  <jv-icon name="shield" [size]="15" />
+                  Encrypt memory…
+                </button>
+              </div>
+            }
+          </dd>
+        </div>
+        <div>
           <dt>Semantic search</dt>
           <dd>
             @switch (status.embedding.state) {
@@ -65,16 +121,30 @@
     }
     <p class="hint">
       <jv-icon name="shield" [size]="14" />
-      Stored only on this computer, without encryption: it relies on your user account's protection. Deleted items are overwritten
-      in the database file.
+      @if (store.status()?.encryption === 'on') {
+        Stored only on this computer and encrypted (SQLCipher, AES-256); the key is in the system keychain. Deleted items are
+        overwritten in the database file.
+      } @else {
+        Stored only on this computer, without encryption: it relies on your user account's protection. Deleted items are
+        overwritten in the database file.
+      }
     </p>
   </jv-hud-panel>
+  @if (recoveryCode(); as code) {
+    <jv-encrypt-dialog [code]="code" (closed)="closeEncryption()" />
+  }
 
   <jv-hud-panel heading="Export and import">
     <p class="hint">
       A JSON file with conversations, facts, projects and the action history. Importing adds what is missing and skips what
       already exists.
     </p>
+    @if (store.status()?.encryption === 'on') {
+      <p class="hint">
+        <jv-icon name="warning" [size]="14" />
+        An export is a plain JSON file: it is not encrypted.
+      </p>
+    }
     <div class="form-actions start">
       <button type="button" [disabled]="store.busy()" (click)="store.exportMemory()">
         <jv-icon name="download" [size]="15" />

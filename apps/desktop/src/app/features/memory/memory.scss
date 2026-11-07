@@ -91,3 +91,30 @@ button.link {
   font: inherit;
   text-decoration: underline;
 }
+
+.unlock {
+  align-items: flex-start;
+
+  .unlock-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  p {
+    margin: 0;
+  }
+
+  .unlock-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 8px;
+
+    .field {
+      flex: 1;
+      min-width: 260px;
+    }
+  }
+}
