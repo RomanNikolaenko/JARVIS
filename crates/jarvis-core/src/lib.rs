@@ -13,6 +13,7 @@ pub mod error;
 mod fact_suggestions;
 pub mod health;
 mod memory;
+mod memory_encryption;
 mod plugins;
 pub mod routing;
 mod ui_errors;
@@ -50,6 +51,7 @@ pub use error::{CoreError, ErrorCode, ErrorPayload};
 pub use health::{ComponentHealth, HealthReport, HealthStatus};
 pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
+pub use memory_encryption::{MEMORY_KEY_SECRET, MemoryRecoveryCode};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
 pub use updates::{AvailableUpdate, UpdatePhase, UpdateStatus};
@@ -221,6 +223,7 @@ pub struct JarvisCore {
     chat: ChatService,
     memory: Arc<MemoryEngine>,
     memory_state: Arc<memory::MemoryState>,
+    encryption: memory_encryption::EncryptionState,
     fact_suggestion_pause: Duration,
     agents: agents::AgentSystem,
     secrets: Arc<dyn SecretStore>,
@@ -324,6 +327,8 @@ impl JarvisCore {
 
         let memory =
             Arc::new(MemoryEngine::open(paths.data_dir.join("memory").join("jarvis.db")).await);
+        let encryption = memory_encryption::EncryptionState::default();
+        memory_encryption::unlock_at_start(&memory, &secrets, &encryption, &events).await;
         match memory.unavailable_reason() {
             Some(reason) => events.error(
                 EventCategory::Memory,
@@ -393,6 +398,7 @@ impl JarvisCore {
             chat,
             memory: Arc::clone(&memory),
             memory_state: Arc::default(),
+            encryption,
             fact_suggestion_pause,
             agents,
             secrets: Arc::clone(&secrets),

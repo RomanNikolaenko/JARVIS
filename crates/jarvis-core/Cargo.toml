@@ -10,6 +10,7 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 futures.workspace = true
+getrandom.workspace = true
 jarvis-agent.workspace = true
 jarvis-ai.workspace = true
 jarvis-events.workspace = true

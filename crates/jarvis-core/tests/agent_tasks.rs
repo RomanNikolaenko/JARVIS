@@ -15,7 +15,7 @@ use jarvis_ai::{
 use jarvis_core::jarvis_agent::{
     AgentTask, StepKind, StepOutcome, TaskLimits, TaskStatus, TaskStep, TaskStore,
 };
-use jarvis_core::jarvis_security::PendingApproval;
+use jarvis_core::jarvis_security::{InMemorySecretStore, PendingApproval};
 use jarvis_core::{AgentStartRequest, AppPaths, CoreOptions, ErrorCode, JarvisCore, Settings};
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -153,7 +153,9 @@ async fn initialize(paths: &AppPaths, provider: Arc<AgentScript>) -> Arc<JarvisC
     JarvisCore::initialize(
         CoreOptions::new(paths.clone(), "9.9.9")
             .with_static_providers(vec![provider])
-            .with_provider_factory(None),
+            .with_provider_factory(None)
+            // Never the real keychain.
+            .with_secrets(Arc::new(InMemorySecretStore::default())),
     )
     .await
     .unwrap()
@@ -693,4 +695,42 @@ async fn permissions_revoked_during_model_discovery_block_start_and_resume() {
             t.core.shutdown().await;
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypting_memory_waits_for_running_agent_tasks() {
+    let provider = AgentScript::new(DataLocality::OnDevice, &[WRITE_SUMMARY, FINAL]);
+    let t = start(Arc::clone(&provider), |_| {}).await;
+    let code = t.core.prepare_memory_encryption().await.unwrap().code;
+    let last = code.rsplit('-').next().unwrap().to_owned();
+    let task = t
+        .core
+        .start_agent_task(goal("Write a summary after approval"))
+        .await
+        .unwrap();
+    let approval = wait_for_approval(&t.core, task.id).await;
+
+    let err = t.core.encrypt_memory(last.clone()).await.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LimitExceeded, "{err}");
+    assert!(err.to_string().contains("agent tasks"), "{err}");
+
+    assert!(t.core.resolve_approval(approval.id, false));
+    wait_for(&t.core, task.id, |task| task.status.is_finished()).await;
+    for _ in 0..200 {
+        if t.core.agent_status().running_tasks == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    t.core.encrypt_memory(last).await.unwrap();
+    // The finished task is still there, read from the encrypted database.
+    assert!(
+        t.core
+            .agent_task(task.id)
+            .await
+            .unwrap()
+            .status
+            .is_finished()
+    );
+    t.core.shutdown().await;
 }

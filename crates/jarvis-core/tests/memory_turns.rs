@@ -12,7 +12,9 @@ use jarvis_ai::{
     AiError, AiProvider, ChatChunk, ChatRequest, ChatRole, ChatStream, DataLocality, FinishReason,
     ModelCapabilities, ModelInfo, ProviderDescriptor, ProviderId, ProviderKind,
 };
-use jarvis_core::jarvis_memory::{FactInput, MessageRole, MessageStatus, SearchQuery};
+use jarvis_core::jarvis_memory::{
+    FactInput, MemoryEncryption, MessageRole, MessageStatus, SearchQuery,
+};
 use jarvis_core::{
     AppPaths, ChatStreamEvent, ChatTurnRequest, CoreOptions, ErrorCode, JarvisCore, SinkClosed,
 };
@@ -870,4 +872,56 @@ async fn a_message_right_after_a_reply_waits_for_it_to_be_saved() {
         .collect();
     assert_eq!(roles, expected);
     test.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn encrypting_memory_waits_for_running_replies() {
+    let provider = Recorder::new(DataLocality::OnDevice);
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths {
+        config_dir: dir.path().join("config"),
+        data_dir: dir.path().join("data"),
+        log_dir: dir.path().join("logs"),
+    };
+    let core = JarvisCore::initialize(
+        CoreOptions::new(paths, "9.9.9")
+            .with_static_providers(vec![provider.clone()])
+            .with_provider_factory(None)
+            .with_secrets(Arc::new(
+                jarvis_core::jarvis_security::InMemorySecretStore::default(),
+            )),
+    )
+    .await
+    .unwrap();
+    let conversation = core.create_conversation(None, false).await.unwrap();
+    let code = core.prepare_memory_encryption().await.unwrap().code;
+    let last = code.rsplit('-').next().unwrap().to_owned();
+
+    let gate = Arc::new(CapabilityGate::default());
+    *provider.reply_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    core.send_message(turn(conversation.id, "Hello"), move |event| {
+        tx.send(event).map_err(|_| SinkClosed)
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+        .await
+        .expect("the reply is in flight");
+
+    let err = core.encrypt_memory(last.clone()).await.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LimitExceeded, "{err}");
+    assert!(err.to_string().contains("running replies"), "{err}");
+
+    gate.release.notify_one();
+    while rx.recv().await.is_some() {}
+    core.encrypt_memory(last).await.unwrap();
+    assert_eq!(core.memory_status().await.encryption, MemoryEncryption::On);
+    let saved = core.memory().conversation(conversation.id).await.unwrap();
+    assert_eq!(
+        saved.messages.len(),
+        2,
+        "the reply was saved before encrypting"
+    );
+    core.shutdown().await;
 }

@@ -167,7 +167,7 @@ impl MemoryState {
     }
 
     /// Whether a reply is running in any conversation.
-    async fn any_busy(&self) -> bool {
+    pub(crate) async fn any_busy(&self) -> bool {
         let slots: Vec<Arc<TurnSlot>> = guard(&self.turns).values().cloned().collect();
         for slot in slots {
             if !slot.settle().await {
@@ -1227,7 +1227,7 @@ impl JarvisCore {
             schema_version: database.as_ref().map_or(0, |db| db.report().schema_version),
             counts,
             embedding,
-            encryption: self.memory.encryption(),
+            encryption: self.encryption.status(self.memory.encryption()),
         }
     }
 

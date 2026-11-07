@@ -79,6 +79,8 @@ xcap = "0.9"
 x11rb = { version = "0.14", features = ["randr"] }
 ashpd = { version = "0.13", default-features = false, features = ["screenshot", "tokio"] }
 base64 = "0.22"
+# Random recovery codes (already in the tree through other crates)
+getrandom = "0.3"
 
 # Local database: bundled SQLCipher (SQLite with FTS5 and encryption) and the
 # OpenSSL it uses, both built from source

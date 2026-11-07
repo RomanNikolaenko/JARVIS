@@ -2337,6 +2337,7 @@ version = "0.1.3"
 dependencies = [
  "async-trait",
  "futures",
+ "getrandom 0.3.4",
  "image",
  "jarvis-agent",
  "jarvis-ai",
