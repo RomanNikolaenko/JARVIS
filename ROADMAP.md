@@ -219,6 +219,11 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
   SVG and meter widths repainted on every frame); now 2.6 %, 1.1 % while
   another window has the focus (animations pause), under 0.1 % on other
   screens; the smoke test fails if the idle renderer gets busy again
+- ✅ Chat latency (2026-11-12): no sign-in check per Claude Code message,
+  no new model listing per message while a local server is off (about 2 s
+  each on Windows), Claude Code without its post-answer summary request
+- ⬜ Keep a Claude Code process ready for the next message (would save about
+  1 s of start-up; needs its streaming-input mode)
 - ✅ CHANGELOG, release guide
 - ✅ Signed automatic updates (ADR 0014): `tauri-plugin-updater`, key pair
   outside the repository, signatures bound to the version, `latest.json`

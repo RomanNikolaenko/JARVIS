@@ -22,7 +22,9 @@ access to the computer, and must keep the cloud opt-in.
   single message.
 - **Sign-in stays with the CLI.** JARVIS stores no key for these backends and
   never reads the CLI's credential files. Model listing runs `codex login
-  status` / `claude auth status` and only looks at the exit code. Signing in
+  status` / `claude auth status` and only looks at the exit code; a chat
+  request does not (its model's capabilities come from the static list, and a
+  signed-out CLI fails the request with the same hint). Signing in
   (`codex login`, `claude auth login`) is done by the user in a terminal.
 - **The CLI's own agent is switched off** with its documented options, so the
   model only answers with text and JARVIS tools still go through the Security
@@ -36,7 +38,9 @@ access to the computer, and must keep the cloud opt-in.
     skills), `--tools ""`, `--disallowedTools "mcp__*"`,
     `--disable-slash-commands`, `--no-session-persistence`, `--max-turns 1`
     and a replaced system prompt. `--bare` is not used: it ignores the
-    subscription sign-in.
+    subscription sign-in. The process gets
+    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, which skips the update
+    check, telemetry and a summary request after each answer.
 
   These are requests to a third-party program, not isolation enforced by
   JARVIS; a CLI update could change their effect.
@@ -63,8 +67,12 @@ access to the computer, and must keep the cloud opt-in.
 
 - Subscription limits and the vendors' terms apply; JARVIS shows the CLI's
   own limit message.
-- Each request pays the CLI's start-up time (about 4–6 s to the first text in
-  live checks). Codex gives its answer at the end of the turn: like
+- Each request pays the CLI's start-up time. Live check on 2026-11-12
+  (Claude Code 2.1.316, Opus, a one-word reply): about 1.1 s to start and
+  2.2 s to the first text and to the end; before the changes of that day the
+  end came 1–1.7 s later, and JARVIS added about 3 s before starting the CLI
+  while a local server was off (a sign-in check and a new model listing per
+  message). Codex gives its answer at the end of the turn: like
   `codex exec --output-last-message`, the last agent message is the answer
   and earlier ones ("I'll run …") are dropped. Claude Code streams text.
 - Sampling options (temperature, output limit) are left to the CLI.

@@ -380,7 +380,7 @@ impl ChatService {
             let provider = self.registry.get(provider_id)?;
             routing::check_privacy(provider.descriptor(), allow_cloud)?;
             let capabilities = provider.capabilities(model).await?;
-            let catalog = self.catalog.get(&self.registry, false).await;
+            let catalog = self.catalog.get_recent(&self.registry).await;
             let context_window = catalog
                 .iter()
                 .find(|p| p.provider.id == *provider_id)

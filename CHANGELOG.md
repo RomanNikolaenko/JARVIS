@@ -47,6 +47,13 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Changed
 
+- Replies start sooner. With Claude Code, JARVIS no longer runs a sign-in
+  check before every message, and the CLI skips its update check, telemetry
+  and the summary request it sent after each answer (in a live check the
+  CLI run for a short reply took about 2.2 s instead of 3.8–6.3 s). A message no longer waits for a new list of
+  every provider's models when Ollama or LM Studio is off: Windows needs
+  about 2 s to report the refused connection, and that delay came before
+  each reply.
 - An agent no longer asks you again for an action you denied in the same
   task. A 3B model requested the same file three times after "Deny"; now the
   repeated request is refused at once, marked "already denied by you" in the

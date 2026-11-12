@@ -203,7 +203,7 @@ impl CliProvider {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        scrub_env(&mut command);
+        scrub_env(&mut command, self.kind);
         let mut child = jarvis_platform::spawn_owned(command).map_err(|err| {
             AiError::Unavailable(format!("cannot start {}: {err}", self.kind.product()))
         })?;
@@ -282,6 +282,17 @@ impl CliProvider {
     fn codex_home(&self) -> Option<PathBuf> {
         self.codex_home.clone().or_else(codex_home)
     }
+
+    /// The models this CLI offers, without starting it.
+    async fn known_models(&self) -> Vec<ModelInfo> {
+        let cache = match (self.kind, self.codex_home()) {
+            (CliKind::Codex, Some(home)) => {
+                tokio::fs::read(home.join("models_cache.json")).await.ok()
+            }
+            _ => None,
+        };
+        self.models(cache.as_deref())
+    }
 }
 
 #[async_trait]
@@ -299,13 +310,22 @@ impl AiProvider for CliProvider {
     async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
         let program = self.program()?;
         self.check_signed_in(&program).await?;
-        let cache = match (self.kind, self.codex_home()) {
-            (CliKind::Codex, Some(home)) => {
-                tokio::fs::read(home.join("models_cache.json")).await.ok()
-            }
-            _ => None,
-        };
-        Ok(self.models(cache.as_deref()))
+        Ok(self.known_models().await)
+    }
+
+    /// Answers from the model list alone. Asking the CLI for its sign-in
+    /// status costs a process start (most of a second) before every message;
+    /// a signed-out CLI still fails the request with the sign-in hint.
+    async fn capabilities(&self, model: &str) -> Result<ModelCapabilities, AiError> {
+        self.program()?;
+        self.known_models()
+            .await
+            .into_iter()
+            .find(|info| info.id == model)
+            .map(|info| info.capabilities)
+            .ok_or_else(|| AiError::ModelNotFound {
+                model: model.to_owned(),
+            })
     }
 
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, AiError> {
@@ -346,7 +366,7 @@ impl AiProvider for CliProvider {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        scrub_env(&mut command);
+        scrub_env(&mut command, self.kind);
         let mut process = jarvis_platform::spawn_owned(command).map_err(|err| {
             AiError::Unavailable(format!("cannot start {}: {err}", self.kind.product()))
         })?;
@@ -858,9 +878,15 @@ fn stderr_chunks(stderr: impl AsyncRead + Unpin + Send + 'static) -> BoxStream<'
     .boxed()
 }
 
-fn scrub_env(command: &mut std::process::Command) {
+fn scrub_env(command: &mut std::process::Command, kind: CliKind) {
     for name in PRIVATE_ENV {
         command.env_remove(name);
+    }
+    if kind == CliKind::ClaudeCode {
+        // Skips the update check, telemetry and the summary request Claude
+        // Code sends after each answer; it otherwise ends a reply about 1.5 s
+        // after its last word.
+        command.env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
     }
 }
 
@@ -995,6 +1021,44 @@ mod tests {
             failure(CliKind::ClaudeCode, "  "),
             AiError::Unavailable(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn capabilities_do_not_start_the_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        // Not a runnable program: starting it for a sign-in check would fail.
+        let program = dir.path().join("claude.txt");
+        std::fs::write(&program, "not a program").unwrap();
+        let descriptor = ProviderDescriptor {
+            id: crate::ProviderId::new("claude-code"),
+            display_name: "Claude Code".into(),
+            kind: crate::ProviderKind::Cloud,
+            locality: crate::DataLocality::ThirdPartyCloud,
+        };
+        let provider = CliProvider::new(descriptor, CliKind::ClaudeCode).with_program(&program);
+        let capabilities = provider.capabilities("sonnet").await.unwrap();
+        assert!(capabilities.chat && capabilities.streaming);
+        assert!(matches!(
+            provider.capabilities("gpt-x").await,
+            Err(AiError::ModelNotFound { .. })
+        ));
+        assert!(provider.list_models().await.is_err());
+    }
+
+    #[test]
+    fn claude_code_runs_without_background_traffic() {
+        let mut command = std::process::Command::new("claude");
+        scrub_env(&mut command, CliKind::ClaudeCode);
+        assert!(command.get_envs().any(|(name, value)| {
+            name == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" && value == Some("1".as_ref())
+        }));
+        let mut command = std::process::Command::new("codex");
+        scrub_env(&mut command, CliKind::Codex);
+        assert!(
+            !command
+                .get_envs()
+                .any(|(name, _)| name == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+        );
     }
 
     #[test]

@@ -630,7 +630,7 @@ impl JarvisCore {
     async fn resolve_embedder(&self, settings: &Settings) -> Option<Arc<dyn Embedder>> {
         let allow_cloud =
             settings.privacy.allow_cloud_providers && settings.privacy.share_memory_with_cloud;
-        let catalog = self.catalog.get(&self.providers, false).await;
+        let catalog = self.catalog.get_recent(&self.providers).await;
         let usable = |entry: &crate::ProviderModels| {
             entry.error.is_none()
                 && entry.provider.kind != ProviderKind::Diagnostic

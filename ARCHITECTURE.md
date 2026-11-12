@@ -215,7 +215,11 @@ across network chunks. See also [ADR 0003](docs/decisions/0003-ai-provider-abstr
 
 - **Catalog:** cached snapshot of every provider's models (30 s; 5 s if a
   provider failed), refreshed on demand, invalidated when providers change.
-  Concurrent callers share one refresh.
+  Concurrent callers share one refresh. A chat request with an explicit
+  model and the embedder lookup reuse any snapshot up to 10 minutes old,
+  errors included: a new listing would hold every message for about 2 s while
+  a local server is off (Windows reports a refused connection that late).
+  Automatic routing still uses the 30 s / 5 s rule.
 - **Router:** task categories `general`, `reasoning`, `coding`, `vision`,
   `embeddings`, `toolCalling` with required capabilities. Explicit choices in
   `ai.routing` win (`reasoning`/`coding` inherit `general`); otherwise the
