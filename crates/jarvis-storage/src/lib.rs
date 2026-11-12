@@ -16,6 +16,7 @@ mod migrations;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -68,6 +69,9 @@ pub fn file_state(path: &Path) -> std::io::Result<FileState> {
 #[derive(Debug, Clone)]
 pub struct Database {
     connection: Arc<Mutex<Connection>>,
+    /// Set when a failed encryption could not reopen any database file: every
+    /// call fails until JARVIS restarts and tidies the leftovers.
+    closed: Arc<AtomicBool>,
     path: Option<PathBuf>,
     report: MigrationReport,
 }
@@ -95,6 +99,7 @@ impl Database {
                 })??;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            closed: Arc::default(),
             path: Some(path),
             report,
         })
@@ -107,6 +112,7 @@ impl Database {
         let report = migrations::migrate(&mut connection, None, MIGRATIONS)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            closed: Arc::default(),
             path: None,
             report,
         })
@@ -120,8 +126,15 @@ impl Database {
         E: From<StorageError> + Send + 'static,
     {
         let connection = Arc::clone(&self.connection);
+        let closed = Arc::clone(&self.closed);
         tokio::task::spawn_blocking(move || {
             let mut guard = connection.lock().unwrap_or_else(PoisonError::into_inner);
+            if closed.load(Ordering::Acquire) {
+                return Err(E::from(StorageError::Internal(
+                    "the memory database could not be reopened after a failed encryption; restart JARVIS"
+                        .to_owned(),
+                )));
+            }
             f(&mut guard)
         })
         .await

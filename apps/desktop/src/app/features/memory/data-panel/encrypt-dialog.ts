@@ -1,4 +1,15 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  type ElementRef,
+  afterNextRender,
+  computed,
+  inject,
+  input,
+  output,
+  signal,
+  viewChild,
+} from '@angular/core';
 
 import { MemoryStore } from '../../../core/state/memory.store';
 import { Icon } from '../../../shared/icon/icon';
@@ -11,13 +22,17 @@ import { Icon } from '../../../shared/icon/icon';
   selector: 'jv-encrypt-dialog',
   imports: [Icon],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { '(document:keydown.escape)': 'cancel()' },
+  host: {
+    '(document:keydown.escape)': 'cancel()',
+    '(keydown.tab)': 'trapFocus($event)',
+    '(keydown.shift.tab)': 'trapFocus($event)',
+  },
   template: `
     <div class="backdrop"></div>
-    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="encrypt-title">
+    <div #dialog class="dialog" role="dialog" aria-modal="true" aria-labelledby="encrypt-title">
       <h2 id="encrypt-title">Encrypt memory</h2>
       <p>Write down this recovery code and keep it somewhere safe. It is shown only now.</p>
-      <div class="code" aria-label="Recovery code">
+      <div class="code" role="group" aria-label="Recovery code">
         @for (group of groups(); track $index) {
           <span class="code-group">{{ group }}</span>
         }
@@ -39,6 +54,7 @@ import { Icon } from '../../../shared/icon/icon';
       <label class="field">
         <span class="field-label">Type the last group ({{ lastLength() }} digits)</span>
         <input
+          #confirmation
           class="mono"
           aria-label="Last group of the recovery code"
           autocomplete="off"
@@ -134,6 +150,28 @@ export class EncryptDialog {
   protected readonly lastLength = computed(() => this.groups().at(-1)?.length ?? 0);
   protected readonly matches = computed(() => this.typed().trim() === this.groups().at(-1));
   protected readonly encrypting = computed(() => this.store.dataOperation() === 'encrypt');
+  private readonly dialog = viewChild.required<ElementRef<HTMLElement>>('dialog');
+  private readonly confirmation = viewChild.required<ElementRef<HTMLInputElement>>('confirmation');
+
+  constructor() {
+    afterNextRender(() => this.confirmation().nativeElement.focus());
+  }
+
+  /** Keeps Tab inside the dialog while it is open. */
+  protected trapFocus(event: Event): void {
+    const focusable = [...this.dialog().nativeElement.querySelectorAll<HTMLElement>('button:not([disabled]), input')];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const backwards = (event as KeyboardEvent).shiftKey;
+    if (backwards && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!backwards && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 
   protected async copy(): Promise<void> {
     try {

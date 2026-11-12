@@ -24,6 +24,7 @@ impl Database {
         let path = self.file_path()?;
         let key = key.to_owned();
         let connection = std::sync::Arc::clone(&self.connection);
+        let closed = std::sync::Arc::clone(&self.closed);
         tokio::task::spawn_blocking(move || {
             let mut guard = connection.lock().unwrap_or_else(PoisonError::into_inner);
             if file_state(&path).map_err(|err| io_error("reading", &path, err))? != FileState::Plain
@@ -42,7 +43,13 @@ impl Database {
                 ));
             }
             export_copy(&guard, &path, &key)?;
-            switch_connection(&mut guard, &path, &key)?;
+            if let Err(err) = switch_connection(&mut guard, &path, &key) {
+                // Neither file could be reopened: the placeholder has no schema.
+                if guard.path().is_none_or(str::is_empty) {
+                    closed.store(true, std::sync::atomic::Ordering::Release);
+                }
+                return Err(err);
+            }
             drop(guard);
             wipe_plain_files(&path);
             Ok(())
@@ -87,11 +94,11 @@ impl Database {
 
 fn export_copy(conn: &Connection, path: &Path, key: &str) -> Result<()> {
     let copy = sibling(path, ".encrypting");
-    remove_file(&copy)?;
+    remove_copy(&copy)?;
     let result = export(conn, &copy, key);
     if result.is_err() {
         // A partial copy is useless; the plain database is untouched.
-        let _ = remove_file(&copy);
+        let _ = remove_copy(&copy);
     }
     result
 }
@@ -110,7 +117,9 @@ fn switch_connection(conn: &mut Connection, path: &Path, key: &str) -> Result<()
         *conn = plain;
         return Err(err.into());
     }
-    let reopened = swap_files(path, &copy, &old).and_then(|()| open_keyed(path, key));
+    let reopened = swap_files(path, &copy, &old)
+        .and_then(|()| sync_dir(path))
+        .and_then(|()| open_keyed(path, key));
     match reopened {
         Ok(encrypted) => {
             *conn = encrypted;
@@ -267,6 +276,7 @@ pub(crate) fn tidy_leftovers(path: &Path, key: Option<&str>) -> Result<()> {
                 }
                 tracing::warn!("finishing an interrupted memory encryption");
                 rename(&copy, path)?;
+                sync_dir(path)?;
             }
             FileState::Missing if state(&old)? == FileState::Plain => {
                 tracing::warn!(
@@ -287,7 +297,7 @@ pub(crate) fn tidy_leftovers(path: &Path, key: Option<&str>) -> Result<()> {
             .map_err(|err| io_error("checking", &old, err))?
     {
         // Stopped before the swap: the plain database is still in use.
-        remove_file(&copy)?;
+        remove_copy(&copy)?;
     }
     Ok(())
 }
@@ -351,7 +361,7 @@ pub(crate) fn finish_interrupted_encryption(path: &Path) {
 fn wipe_plain_files(path: &Path) {
     let old = sibling(path, ".plain-old");
     let result = plain_backups(path).and_then(|mut files| {
-        remove_file(&sibling(path, ".encrypting"))?;
+        remove_copy(&sibling(path, ".encrypting"))?;
         files.extend([sibling(&old, "-wal"), sibling(&old, "-shm"), old]);
         for file in files {
             wipe(&file).map_err(|err| io_error("wiping", &file, err))?;
@@ -429,13 +439,59 @@ pub(crate) fn sibling(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Renames, retrying briefly while another process (an antivirus scanning
+/// the new copy, a backup tool) holds the file open on Windows.
 fn rename(from: &Path, to: &Path) -> Result<()> {
-    std::fs::rename(from, to).map_err(|err| {
-        StorageError::io(
-            format!("renaming {} to {}", from.display(), to.display()),
-            err,
-        )
-    })
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(err) if attempt < RENAME_RETRIES && in_use(&err) => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100 * attempt));
+            }
+            Err(err) => {
+                return Err(StorageError::io(
+                    format!("renaming {} to {}", from.display(), to.display()),
+                    err,
+                ));
+            }
+        }
+    }
+}
+
+const RENAME_RETRIES: u64 = 8;
+
+/// ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION on Windows.
+fn in_use(err: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(err.raw_os_error(), Some(5 | 32))
+}
+
+/// Makes renames in the database directory durable before plain data is
+/// wiped. NTFS journals metadata, so Windows needs nothing here.
+#[cfg(unix)]
+fn sync_dir(path: &Path) -> Result<()> {
+    let Some(dir) = path.parent() else {
+        return Ok(());
+    };
+    std::fs::File::open(dir)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|err| io_error("syncing", dir, err))
+}
+
+#[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
+fn sync_dir(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Deletes an encrypted copy and the journal SQLite may have left beside it.
+fn remove_copy(copy: &Path) -> Result<()> {
+    remove_file(copy)?;
+    for suffix in ["-wal", "-shm"] {
+        remove_file(&sibling(copy, suffix))?;
+    }
+    Ok(())
 }
 
 fn remove_file(file: &Path) -> Result<()> {
@@ -563,6 +619,32 @@ mod tests {
             .expect("search");
         assert_eq!(found, 1, "full-text search works on the copy");
         assert_eq!(version, crate::SCHEMA_VERSION);
+    }
+
+    #[tokio::test]
+    async fn stale_journals_of_an_old_copy_are_removed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jarvis.db");
+        let db = plain_database(&path).await;
+        let copy = sibling(&path, ".encrypting");
+        std::fs::write(sibling(&copy, "-wal"), b"stale").expect("stale wal");
+        std::fs::write(sibling(&copy, "-shm"), b"stale").expect("stale shm");
+        db.encrypt_in_place(KEY).await.expect("encrypt");
+        assert!(!sibling(&copy, "-wal").exists());
+        assert!(!sibling(&copy, "-shm").exists());
+        assert_eq!(conversations(&db).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_closed_database_fails_every_call() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = plain_database(&dir.path().join("jarvis.db")).await;
+        db.closed.store(true, std::sync::atomic::Ordering::Release);
+        let err = db
+            .call(|conn| Ok::<_, StorageError>(conn.execute("SELECT 1", [])?))
+            .await
+            .expect_err("closed");
+        assert!(matches!(err, StorageError::Internal(_)), "{err:?}");
     }
 
     #[tokio::test]

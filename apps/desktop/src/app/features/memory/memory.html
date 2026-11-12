@@ -12,7 +12,7 @@
 
 @if (store.status(); as status) {
   @if (status.encryption === 'locked') {
-    <form class="banner error unlock" role="alert" (submit)="unlock($event)">
+    <form class="banner error unlock" aria-label="Unlock memory" (submit)="unlock($event)">
       <jv-icon name="shield" [size]="16" />
       <div class="unlock-body">
         <p>Memory is encrypted and locked, so only temporary chats work. Enter its recovery code to open it.</p>
@@ -32,7 +32,7 @@
           </button>
         </div>
         @if (store.unlockError(); as error) {
-          <p class="error-text">{{ error.message }}</p>
+          <p class="error-text" role="alert">{{ error.message }}</p>
         }
       </div>
     </form>
