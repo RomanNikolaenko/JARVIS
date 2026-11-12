@@ -32,7 +32,10 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   CLI 0.166 on ChatGPT and Claude Code 2.1.316 on Claude Pro: answers in
   4–8 s, history, the usage-limit message, and no tools of the CLI (Claude
   Code reports no tools, MCP servers or commands; Codex cannot run a command)
-- ⬜ Images through Claude Code; a live check inside the desktop app
+- ✅ Images through Claude Code (PNG and JPEG as `stream-json` image blocks;
+  live check 2026-11-12: Haiku named the colour of a test image)
+- ⬜ A live check of Claude Code inside the desktop app (chat, images, the
+  waiting process)
 - ✅ Verification against real servers (Phase 9): Ollama 0.40.11 and the
   llama.cpp server (the OpenAI-compatible protocol LM Studio speaks); the LM
   Studio app itself is not installed on the dev machine

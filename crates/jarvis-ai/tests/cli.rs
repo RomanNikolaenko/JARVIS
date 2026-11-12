@@ -115,7 +115,15 @@ impl FakeCli {
             };
             let event: serde_json::Value = serde_json::from_str(line).unwrap();
             assert_eq!(event["type"], "user");
-            prompt = event["message"]["content"].as_str().unwrap().to_owned();
+            let content = &event["message"]["content"];
+            prompt = match content.as_array() {
+                // Text first, then one block per image.
+                Some(blocks) => {
+                    let images = blocks.iter().filter(|b| b["type"] == "image").count();
+                    format!("{}\nimages: {images}", blocks[0]["text"].as_str().unwrap())
+                }
+                None => content.as_str().unwrap().to_owned(),
+            };
         }
         let mode = prompt
             .lines()
@@ -184,6 +192,20 @@ impl FakeCli {
                 }
                 send(
                     json!({"type": "result", "subtype": "success", "is_error": false, "result": "ignored", "usage": {"input_tokens": 7, "output_tokens": 3}}),
+                );
+            }
+            (FakeCli::Claude, "images") => {
+                let images = prompt
+                    .lines()
+                    .find_map(|line| line.strip_prefix("images: "))
+                    .unwrap_or("0");
+                let named = prompt.contains("[attached image: image-1.png]");
+                let text = format!("images={images} named={named}");
+                send(
+                    json!({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}}),
+                );
+                send(
+                    json!({"type": "result", "subtype": "success", "is_error": false, "result": "", "usage": {"output_tokens": 1}}),
                 );
             }
             (FakeCli::Claude, "pid") => {
@@ -321,13 +343,16 @@ async fn claude_code_streams_its_answer() {
         media_type: "image/png".into(),
         base64: "iVBORw0KGgo=".into(),
     }];
-    let refused = claude
-        .stream_chat(request(
+    let answer = collect(
+        &claude,
+        request(
             "sonnet",
-            vec![ChatMessage::user("Look").with_images(images)],
-        ))
-        .await;
-    assert!(matches!(refused, Err(AiError::InvalidRequest(_))));
+            vec![ChatMessage::user("mode: images").with_images(images)],
+        ),
+    )
+    .await
+    .expect("answer");
+    assert_eq!(answer, "images=1 named=true");
     let option = claude
         .stream_chat(request(
             "--dangerously-skip-permissions",

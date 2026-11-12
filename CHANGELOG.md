@@ -6,6 +6,9 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Added
 
+- Images can be sent to Claude Code models (PNG and JPEG, like the other
+  vision models). As with every cloud model, this needs "Send screenshots
+  and photos to cloud AI providers" under Settings → Privacy.
 - Memory can be encrypted at rest (Memory → Data & settings → "Encrypt
   memory…", off by default). JARVIS shows a recovery code of 48 digits once;
   after you type its last group, the database is converted to SQLCipher

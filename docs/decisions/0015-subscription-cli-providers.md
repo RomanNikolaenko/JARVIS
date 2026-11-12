@@ -63,7 +63,11 @@ access to the computer, and must keep the cloud opt-in.
   Claude Code lists "default" and the documented aliases `opus`, `sonnet`,
   `haiku` and `fable`. Model IDs are checked so they cannot become options.
   No native tool calling and no embeddings; Codex models accept images when
-  the cache lists image input, Claude Code requests with images are refused.
+  the cache lists image input. All Claude Code models accept images (PNG and
+  JPEG): they travel as base64 image blocks after the text of the
+  `stream-json` message, named `image-1.png`, … in the transcript; no file is
+  written. Images reach a cloud model only with the capture-sharing
+  permission.
 - **Errors:** usage limits become `AiError::LimitReached` (not retried),
   sign-in problems name the login command, a missing CLI explains how to
   install it.

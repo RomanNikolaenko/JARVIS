@@ -30,7 +30,7 @@ use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 
 use crate::{
     AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatRole, ChatStream, FinishReason,
-    ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
+    ImageData, ModelCapabilities, ModelInfo, ProviderDescriptor, TokenUsage,
 };
 
 /// Model ID that leaves the choice to the CLI (the account's default).
@@ -296,17 +296,18 @@ impl CliProvider {
             }
             // Aliases documented for `claude --model`; the account decides
             // which model each one means.
+            // Every current Claude model reads images.
             CliKind::ClaudeCode => vec![
                 model(
                     CLI_DEFAULT_MODEL,
                     "Default (chosen by Claude Code)",
                     None,
-                    false,
+                    true,
                 ),
-                model("opus", "Opus (latest)", None, false),
-                model("sonnet", "Sonnet (latest)", None, false),
-                model("haiku", "Haiku (latest)", None, false),
-                model("fable", "Fable (latest)", None, false),
+                model("opus", "Opus (latest)", None, true),
+                model("sonnet", "Sonnet (latest)", None, true),
+                model("haiku", "Haiku (latest)", None, true),
+                model("fable", "Fable (latest)", None, true),
             ],
         }
     }
@@ -375,21 +376,24 @@ impl AiProvider for CliProvider {
                 let dir = work_dir()?;
                 let images = write_images(dir.path(), &request.messages)?;
                 let args = codex_args(dir.path(), &request.model, &images);
-                let prompt = transcript(&request.messages, &images, self.kind);
+                let names: Vec<String> = images
+                    .iter()
+                    .filter_map(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .collect();
+                let prompt = transcript(&request.messages, &names, self.kind);
                 (self.start(&program, &args, dir)?, prompt)
             }
             CliKind::ClaudeCode => {
-                if request.messages.iter().any(|m| !m.images.is_empty()) {
-                    return Err(AiError::InvalidRequest(
-                        "images are not supported through Claude Code".into(),
-                    ));
-                }
+                let images: Vec<&ImageData> =
+                    request.messages.iter().flat_map(|m| &m.images).collect();
+                let names = image_names(&images)?;
                 let started = match self.take_prepared(&request.model) {
                     Some(started) => started,
                     None => self.start(&program, &claude_args(&request.model), work_dir()?)?,
                 };
-                let prompt = transcript(&request.messages, &[], self.kind);
-                (started, claude_input(&prompt))
+                let prompt = transcript(&request.messages, &names, self.kind);
+                (started, claude_input(&prompt, &images))
             }
         };
         let Started {
@@ -860,11 +864,28 @@ fn claude_args(model: &str) -> Vec<String> {
     args
 }
 
-/// The prompt as the one user message of `--input-format stream-json`.
-fn claude_input(prompt: &str) -> String {
+/// The prompt as the one user message of `--input-format stream-json`. The
+/// conversation's images follow the text, in the order of their names in it.
+fn claude_input(prompt: &str, images: &[&ImageData]) -> String {
+    let content = if images.is_empty() {
+        Value::from(prompt)
+    } else {
+        let mut blocks = vec![serde_json::json!({"type": "text", "text": prompt})];
+        blocks.extend(images.iter().map(|image| {
+            serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.media_type,
+                    "data": image.base64,
+                },
+            })
+        }));
+        Value::from(blocks)
+    };
     let mut line = serde_json::json!({
         "type": "user",
-        "message": {"role": "user", "content": prompt},
+        "message": {"role": "user", "content": content},
     })
     .to_string();
     line.push('\n');
@@ -873,7 +894,7 @@ fn claude_input(prompt: &str) -> String {
 
 /// The conversation as one prompt. A CLI takes a single message per run, so
 /// the history and JARVIS's instructions travel inside it.
-fn transcript(messages: &[ChatMessage], images: &[PathBuf], kind: CliKind) -> String {
+fn transcript(messages: &[ChatMessage], image_names: &[String], kind: CliKind) -> String {
     let mut text = String::new();
     if kind == CliKind::Codex {
         text.push_str(
@@ -893,7 +914,7 @@ fn transcript(messages: &[ChatMessage], images: &[PathBuf], kind: CliKind) -> St
             instructions.join("\n\n")
         );
     }
-    let mut image_names = images.iter().filter_map(|p| p.file_name());
+    let mut image_names = image_names.iter();
     for message in messages.iter().filter(|m| m.role != ChatRole::System) {
         let role = match message.role {
             ChatRole::Assistant => "assistant",
@@ -902,7 +923,7 @@ fn transcript(messages: &[ChatMessage], images: &[PathBuf], kind: CliKind) -> St
         let _ = write!(text, "<message role=\"{role}\">\n{}\n", message.content);
         for _ in &message.images {
             if let Some(name) = image_names.next() {
-                let _ = writeln!(text, "[attached image: {}]", name.to_string_lossy());
+                let _ = writeln!(text, "[attached image: {name}]");
             }
         }
         text.push_str("</message>\n");
@@ -913,26 +934,39 @@ fn transcript(messages: &[ChatMessage], images: &[PathBuf], kind: CliKind) -> St
 /// Saves the conversation's images for `--image`. They live in the request's
 /// private temporary folder and go away with it.
 fn write_images(dir: &Path, messages: &[ChatMessage]) -> Result<Vec<PathBuf>, AiError> {
+    let images: Vec<&ImageData> = messages.iter().flat_map(|m| &m.images).collect();
     let mut paths = Vec::new();
-    for image in messages.iter().flat_map(|m| &m.images) {
-        let extension = match image.media_type.as_str() {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            other => {
-                return Err(AiError::InvalidRequest(format!(
-                    "unsupported image type {other}"
-                )));
-            }
-        };
+    for (image, name) in images.iter().zip(image_names(&images)?) {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&image.base64)
             .map_err(|err| AiError::InvalidRequest(format!("invalid image data: {err}")))?;
-        let path = dir.join(format!("image-{}.{extension}", paths.len() + 1));
+        let path = dir.join(name);
         std::fs::write(&path, bytes)
             .map_err(|err| AiError::Unavailable(format!("cannot save an image: {err}")))?;
         paths.push(path);
     }
     Ok(paths)
+}
+
+/// Names the images `image-1.png`, `image-2.jpg`, … in conversation order.
+/// Only PNG and JPEG are accepted.
+fn image_names(images: &[&ImageData]) -> Result<Vec<String>, AiError> {
+    images
+        .iter()
+        .enumerate()
+        .map(|(index, image)| {
+            let extension = match image.media_type.as_str() {
+                "image/png" => "png",
+                "image/jpeg" => "jpg",
+                other => {
+                    return Err(AiError::InvalidRequest(format!(
+                        "unsupported image type {other}"
+                    )));
+                }
+            };
+            Ok(format!("image-{}.{extension}", index + 1))
+        })
+        .collect()
 }
 
 /// Turns a CLI's error text into an error the user can act on.
@@ -1121,7 +1155,6 @@ fn codex_cached_models(bytes: &[u8]) -> Vec<CodexCachedModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ImageData;
 
     fn events(kind: CliKind, lines: &[&str]) -> Vec<Result<ChatChunk, AiError>> {
         let mut parser = match kind {
@@ -1297,15 +1330,53 @@ mod tests {
             std::fs::read(&images[0]).expect("image"),
             b"\x89PNG\r\n\x1a\n"
         );
-        let text = transcript(&messages, &images, CliKind::ClaudeCode);
+        let names = vec!["image-1.png".to_owned()];
+        let text = transcript(&messages, &names, CliKind::ClaudeCode);
         assert_eq!(
             text,
             "<instructions>\nBe brief.\n</instructions>\n\n<message role=\"user\">\nHi\n</message>\n<message role=\"assistant\">\nHello!\n</message>\n<message role=\"user\">\nWhat is this?\n[attached image: image-1.png]\n</message>\n"
         );
         assert!(
-            transcript(&messages, &images, CliKind::Codex)
+            transcript(&messages, &names, CliKind::Codex)
                 .starts_with("You are the language model behind JARVIS")
         );
+    }
+
+    #[test]
+    fn claude_code_gets_images_after_the_text() {
+        let png = ImageData {
+            media_type: "image/png".into(),
+            base64: "iVBORw0KGgo=".into(),
+        };
+        let jpeg = ImageData {
+            media_type: "image/jpeg".into(),
+            base64: "/9j/".into(),
+        };
+        assert_eq!(
+            image_names(&[&png, &jpeg]).expect("names"),
+            ["image-1.png", "image-2.jpg"]
+        );
+        let gif = ImageData {
+            media_type: "image/gif".into(),
+            base64: "R0lG".into(),
+        };
+        assert!(matches!(
+            image_names(&[&gif]),
+            Err(AiError::InvalidRequest(_))
+        ));
+
+        let line = claude_input("look", &[&png, &jpeg]);
+        assert!(line.ends_with('\n'));
+        let event: Value = serde_json::from_str(&line).expect("json");
+        let content = &event["message"]["content"];
+        assert_eq!(
+            content[0],
+            serde_json::json!({"type": "text", "text": "look"})
+        );
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[2]["source"]["data"], "/9j/");
+        let plain: Value = serde_json::from_str(&claude_input("hi", &[])).expect("json");
+        assert_eq!(plain["message"]["content"], "hi");
     }
 
     #[test]
