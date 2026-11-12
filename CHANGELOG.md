@@ -16,6 +16,9 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   and plain backups are overwritten and deleted. Exports stay plain JSON.
   Building JARVIS now needs Perl (OpenSSL is compiled from source; on
   Windows a native Perl such as Strawberry Perl, see DEVELOPMENT.md).
+- The memory database engine is SQLCipher 4.20 on SQLite 3.54.1 (rusqlite
+  0.42), which fixes the SQLite flaw CVE-2026-119375 (RUSTSEC-2026-0459 and
+  RUSTSEC-2026-0502) present in the earlier bundled SQLite.
 
 - JARVIS can suggest facts from your conversations (Memory → Data &
   settings → "Suggest facts from conversations", off by default). Two

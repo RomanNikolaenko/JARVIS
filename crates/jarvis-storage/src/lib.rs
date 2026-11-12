@@ -275,7 +275,7 @@ mod tests {
             })
             .await
             .expect("SQLCipher answers cipher_version");
-        assert!(version.starts_with("4.14.0"), "{version}");
+        assert!(version.starts_with("4."), "{version}");
     }
 
     #[tokio::test]

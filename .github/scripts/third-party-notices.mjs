@@ -28,11 +28,12 @@ const RULE = '='.repeat(80);
 const THIN_RULE = '-'.repeat(80);
 
 // C libraries compiled into the app under their own licence, which lives
-// below the crate's root: SQLCipher in libsqlite3-sys, OpenSSL in openssl-src.
-// openssl-src is a build dependency, but the library it builds is linked in,
-// so it is listed like a shipped crate.
+// below the crate's root: SQLCipher in sqlcipher-src, OpenSSL in openssl-src.
+// Both are build dependencies, but the libraries they build are linked in,
+// so they are listed like shipped crates. (sqlcipher-src also carries
+// libtomcrypt, which is not compiled: SQLCipher uses OpenSSL here.)
 const BUNDLED_LICENSES = {
-  'libsqlite3-sys': ['sqlcipher/LICENSE'],
+  'sqlcipher-src': ['sqlcipher/LICENSE-sqlcipher'],
   'openssl-src': ['openssl/LICENSE.txt'],
 };
 
