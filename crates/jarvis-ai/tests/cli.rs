@@ -57,6 +57,9 @@ fn main() {
         ("models_need_a_signed_in_cli", || {
             Box::pin(models_need_a_signed_in_cli())
         }),
+        ("claude_code_starts_the_next_process_early", || {
+            Box::pin(claude_code_starts_the_next_process_early())
+        }),
     ];
     let filter: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
     let mut ran = 0;
@@ -102,6 +105,18 @@ impl FakeCli {
         }
         let mut prompt = String::new();
         std::io::stdin().read_to_string(&mut prompt).unwrap();
+        if args
+            .windows(2)
+            .any(|w| w[0] == "--input-format" && w[1] == "stream-json")
+        {
+            // One user message; without one the real CLI exits quietly.
+            let Some(line) = prompt.lines().next() else {
+                std::process::exit(0);
+            };
+            let event: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(event["type"], "user");
+            prompt = event["message"]["content"].as_str().unwrap().to_owned();
+        }
         let mode = prompt
             .lines()
             .rev()
@@ -169,6 +184,15 @@ impl FakeCli {
                 }
                 send(
                     json!({"type": "result", "subtype": "success", "is_error": false, "result": "ignored", "usage": {"input_tokens": 7, "output_tokens": 3}}),
+                );
+            }
+            (FakeCli::Claude, "pid") => {
+                let text = format!("pid={}", std::process::id());
+                send(
+                    json!({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}}),
+                );
+                send(
+                    json!({"type": "result", "subtype": "success", "is_error": false, "result": "", "usage": {"output_tokens": 1}}),
                 );
             }
             (_, "crash") => {
@@ -453,4 +477,50 @@ async fn models_need_a_signed_in_cli() {
         matches!(&result, Err(AiError::Unavailable(m)) if m.contains("codex login")),
         "{result:?}"
     );
+}
+
+async fn claude_code_starts_the_next_process_early() {
+    let pid_of = |answer: String| -> u32 { answer.strip_prefix("pid=").unwrap().parse().unwrap() };
+    let ask = |model: &'static str| request(model, vec![ChatMessage::user("mode: pid")]);
+    let claude =
+        provider(CliKind::ClaudeCode, &this_exe()).with_prepared_for(Duration::from_secs(3));
+    assert_eq!(claude.prepared_process_id(), None);
+
+    let first = pid_of(collect(&claude, ask("sonnet")).await.expect("answer"));
+    let ready = claude
+        .prepared_process_id()
+        .expect("a process for the next message");
+    assert_ne!(ready, first);
+    // The next message with the same model goes to that process.
+    let second = pid_of(collect(&claude, ask("sonnet")).await.expect("answer"));
+    assert_eq!(second, ready);
+
+    // Another model gets a new process; the waiting one is stopped.
+    let ready = claude.prepared_process_id().expect("ready");
+    let third = pid_of(collect(&claude, ask("opus")).await.expect("answer"));
+    assert_ne!(third, ready);
+    wait_until_stopped(ready).await;
+
+    // An unused process is stopped after its wait.
+    let ready = claude.prepared_process_id().expect("ready");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while claude.prepared_process_id().is_some() {
+        assert!(Instant::now() < deadline, "the waiting process was kept");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    wait_until_stopped(ready).await;
+
+    // Dropping the provider stops it too.
+    collect(&claude, ask("sonnet")).await.expect("answer");
+    let ready = claude.prepared_process_id().expect("ready");
+    drop(claude);
+    wait_until_stopped(ready).await;
+}
+
+async fn wait_until_stopped(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while jarvis_platform::process_memory(pid).is_some() {
+        assert!(Instant::now() < deadline, "process {pid} kept running");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

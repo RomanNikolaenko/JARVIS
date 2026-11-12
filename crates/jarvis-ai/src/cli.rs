@@ -2,8 +2,10 @@
 //! in with their subscription: the OpenAI Codex CLI (ChatGPT) and Claude Code.
 //!
 //! JARVIS never handles those credentials; the CLI keeps them in its own
-//! store. Every request starts the CLI once, in a new empty temporary folder,
-//! and passes the conversation through stdin. The CLI's own tools, plugins,
+//! store. Every request runs the CLI once, in a new empty temporary folder,
+//! and passes the conversation through stdin. Claude Code reads it as one
+//! `stream-json` message, so the process for the next request can start
+//! early and wait (see [`PREPARED_FOR`]). The CLI's own tools, plugins,
 //! MCP servers and hooks are switched off with its documented flags, so the
 //! model answers with text only and JARVIS tools keep going through the
 //! security policy. Those switches are requests to a third-party program,
@@ -13,6 +15,8 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -22,6 +26,7 @@ use futures::stream::{self, BoxStream};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
 
 use crate::{
     AiError, AiProvider, ChatChunk, ChatMessage, ChatRequest, ChatRole, ChatStream, FinishReason,
@@ -43,6 +48,10 @@ const MAX_ERROR_CHARS: usize = 1_000;
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 /// Time allowed for `login status` / `auth status`.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(6);
+/// How long a Claude Code process started for the next message waits for
+/// it. Starting takes about a second; a waiting process holds roughly
+/// 150 MB, so it is kept only while the user is chatting.
+pub const PREPARED_FOR: Duration = Duration::from_secs(5 * 60);
 
 /// Replaces Claude Code's coding-agent prompt. JARVIS's own instructions
 /// travel with the conversation (see [`transcript`]).
@@ -143,6 +152,11 @@ pub struct CliProvider {
     kind: CliKind,
     program: Option<PathBuf>,
     codex_home: Option<PathBuf>,
+    /// The Claude Code process started for the next request. Dropping the
+    /// provider (settings changed, JARVIS closing) stops it.
+    prepared: Arc<Mutex<Option<Prepared>>>,
+    prepared_for: Duration,
+    next_prepared: AtomicU64,
 }
 
 impl CliProvider {
@@ -152,7 +166,25 @@ impl CliProvider {
             kind,
             program: None,
             codex_home: None,
+            prepared: Arc::default(),
+            prepared_for: PREPARED_FOR,
+            next_prepared: AtomicU64::new(0),
         }
+    }
+
+    /// Changes how long a process started for the next request waits
+    /// ([`PREPARED_FOR`] by default).
+    pub fn with_prepared_for(mut self, wait: Duration) -> Self {
+        self.prepared_for = wait;
+        self
+    }
+
+    /// Process ID of the Claude Code process waiting for the next request.
+    #[doc(hidden)]
+    pub fn prepared_process_id(&self) -> Option<u32> {
+        lock(&self.prepared)
+            .as_ref()
+            .and_then(|prepared| prepared.started.process.id())
     }
 
     /// Runs this program instead of looking for the CLI in `PATH` and the
@@ -338,15 +370,13 @@ impl AiProvider for CliProvider {
             });
         }
         let program = self.program()?;
-        let dir = tempfile::Builder::new()
-            .prefix("jarvis-cli-")
-            .tempdir()
-            .map_err(|err| AiError::Unavailable(format!("cannot create a work folder: {err}")))?;
-
-        let (args, images) = match self.kind {
+        let (started, input) = match self.kind {
             CliKind::Codex => {
+                let dir = work_dir()?;
                 let images = write_images(dir.path(), &request.messages)?;
-                (codex_args(dir.path(), &request.model, &images), images)
+                let args = codex_args(dir.path(), &request.model, &images);
+                let prompt = transcript(&request.messages, &images, self.kind);
+                (self.start(&program, &args, dir)?, prompt)
             }
             CliKind::ClaudeCode => {
                 if request.messages.iter().any(|m| !m.images.is_empty()) {
@@ -354,40 +384,34 @@ impl AiProvider for CliProvider {
                         "images are not supported through Claude Code".into(),
                     ));
                 }
-                (claude_args(&request.model), Vec::new())
+                let started = match self.take_prepared(&request.model) {
+                    Some(started) => started,
+                    None => self.start(&program, &claude_args(&request.model), work_dir()?)?,
+                };
+                let prompt = transcript(&request.messages, &[], self.kind);
+                (started, claude_input(&prompt))
             }
         };
-        let prompt = transcript(&request.messages, &images, self.kind);
-
-        let mut command = std::process::Command::new(&program);
-        command
-            .args(&args)
-            .current_dir(dir.path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        scrub_env(&mut command, self.kind);
-        let mut process = jarvis_platform::spawn_owned(command).map_err(|err| {
-            AiError::Unavailable(format!("cannot start {}: {err}", self.kind.product()))
-        })?;
-        tracing::debug!(program = %program.display(), "started a CLI chat request");
-
-        let stdin = process.stdin().take();
-        let stdout = process.stdout().take();
-        let stderr = process.stderr().take();
-        let (Some(mut stdin), Some(stdout), Some(stderr)) = (stdin, stdout, stderr) else {
-            return Err(AiError::Unavailable("the CLI's pipes are missing".into()));
-        };
+        let Started {
+            process,
+            dir,
+            mut stdin,
+            stdout,
+            stderr,
+        } = started;
         // CLIs read the whole prompt before they answer. A failed write means
         // the CLI stopped early; its output says why.
-        if stdin.write_all(prompt.as_bytes()).await.is_ok() {
+        if stdin.write_all(input.as_bytes()).await.is_ok() {
             let _ = stdin.shutdown().await;
         }
         drop(stdin);
+        if self.kind == CliKind::ClaudeCode {
+            self.prepare(&program, &request.model);
+        }
 
         let run = Run {
-            process,
-            dir: Some(dir),
+            _process: process,
+            _dir: dir,
             output: stream::select(lines(stdout), stderr_chunks(stderr)).boxed(),
             parser: match self.kind {
                 CliKind::Codex => Parser::Codex(CodexParser::default()),
@@ -401,24 +425,147 @@ impl AiProvider for CliProvider {
     }
 }
 
-/// One running request. Dropping it kills the CLI and deletes the folder.
-struct Run {
+impl CliProvider {
+    /// Starts the CLI in `dir` with its pipes open; nothing is written yet.
+    fn start(
+        &self,
+        program: &Path,
+        args: &[String],
+        dir: tempfile::TempDir,
+    ) -> Result<Started, AiError> {
+        let dir = WorkDir(Some(dir));
+        let mut command = std::process::Command::new(program);
+        command
+            .args(args)
+            .current_dir(dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        scrub_env(&mut command, self.kind);
+        let mut process = jarvis_platform::spawn_owned(command).map_err(|err| {
+            AiError::Unavailable(format!("cannot start {}: {err}", self.kind.product()))
+        })?;
+        tracing::debug!(program = %program.display(), "started a CLI process");
+        let stdin = process.stdin().take();
+        let stdout = process.stdout().take();
+        let stderr = process.stderr().take();
+        let (Some(stdin), Some(stdout), Some(stderr)) = (stdin, stdout, stderr) else {
+            return Err(AiError::Unavailable("the CLI's pipes are missing".into()));
+        };
+        Ok(Started {
+            process,
+            dir,
+            stdin,
+            stdout,
+            stderr,
+        })
+    }
+
+    /// The waiting process, if it was started for this model and is still
+    /// running. Any other waiting process is stopped.
+    fn take_prepared(&self, model: &str) -> Option<Started> {
+        let prepared = lock(&self.prepared).take()?;
+        let mut started = prepared.started;
+        let running = matches!(started.process.try_wait(), Ok(None));
+        (prepared.model == model && running).then_some(started)
+    }
+
+    /// Starts the process for the next request with this model. It waits for
+    /// its message for [`PREPARED_FOR`] and is stopped after that.
+    fn prepare(&self, program: &Path, model: &str) {
+        let started = match work_dir().and_then(|dir| self.start(program, &claude_args(model), dir))
+        {
+            Ok(started) => started,
+            Err(err) => {
+                tracing::debug!("could not start a CLI process in advance: {err}");
+                return;
+            }
+        };
+        let id = self.next_prepared.fetch_add(1, Ordering::Relaxed);
+        let replaced = lock(&self.prepared).replace(Prepared {
+            id,
+            model: model.to_owned(),
+            started,
+        });
+        drop(replaced);
+        let slot = Arc::downgrade(&self.prepared);
+        let wait = self.prepared_for;
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let Some(slot) = slot.upgrade() else { return };
+            let mut slot = lock(&slot);
+            let expired = if slot.as_ref().is_some_and(|prepared| prepared.id == id) {
+                slot.take()
+            } else {
+                None
+            };
+            drop(slot);
+            drop(expired);
+        });
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn work_dir() -> Result<tempfile::TempDir, AiError> {
+    tempfile::Builder::new()
+        .prefix("jarvis-cli-")
+        .tempdir()
+        .map_err(|err| AiError::Unavailable(format!("cannot create a work folder: {err}")))
+}
+
+/// A started CLI that has not received its prompt yet. Dropping it kills the
+/// process (the first field) and then deletes the folder.
+#[derive(Debug)]
+struct Started {
     process: jarvis_platform::OwnedProcess,
-    dir: Option<tempfile::TempDir>,
+    dir: WorkDir,
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+}
+
+/// A Claude Code process waiting for the next request.
+#[derive(Debug)]
+struct Prepared {
+    id: u64,
+    model: String,
+    started: Started,
+}
+
+/// A request's work folder, deleted when dropped.
+#[derive(Debug)]
+struct WorkDir(Option<tempfile::TempDir>);
+
+impl WorkDir {
+    fn path(&self) -> &Path {
+        self.0
+            .as_ref()
+            .map_or(Path::new(""), tempfile::TempDir::path)
+    }
+}
+
+impl Drop for WorkDir {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            remove_when_released(dir.keep());
+        }
+    }
+}
+
+/// One running request. Dropping it kills the CLI (the first field) and then
+/// deletes the folder.
+struct Run {
+    // Kept only to be dropped in this order.
+    _process: jarvis_platform::OwnedProcess,
+    _dir: WorkDir,
     output: BoxStream<'static, Output>,
     parser: Parser,
     kind: CliKind,
     stderr: Vec<u8>,
     pending: VecDeque<Result<ChatChunk, AiError>>,
-}
-
-impl Drop for Run {
-    fn drop(&mut self) {
-        let _ = self.process.start_kill();
-        if let Some(dir) = self.dir.take() {
-            remove_when_released(dir.keep());
-        }
-    }
 }
 
 /// Deletes a request's work folder, which may hold the conversation's
@@ -685,6 +832,8 @@ fn codex_args(dir: &Path, model: &str, images: &[PathBuf]) -> Vec<String> {
 fn claude_args(model: &str) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
+        "--input-format",
+        "stream-json",
         "--output-format",
         "stream-json",
         "--verbose",
@@ -709,6 +858,17 @@ fn claude_args(model: &str) -> Vec<String> {
         args.push(model.to_owned());
     }
     args
+}
+
+/// The prompt as the one user message of `--input-format stream-json`.
+fn claude_input(prompt: &str) -> String {
+    let mut line = serde_json::json!({
+        "type": "user",
+        "message": {"role": "user", "content": prompt},
+    })
+    .to_string();
+    line.push('\n');
+    line
 }
 
 /// The conversation as one prompt. A CLI takes a single message per run, so

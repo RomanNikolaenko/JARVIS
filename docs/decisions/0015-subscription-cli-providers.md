@@ -19,7 +19,12 @@ access to the computer, and must keep the cloud opt-in.
   `jarvis-ai`. Each request starts the installed CLI once (`codex exec`,
   `claude -p`) and passes the conversation through stdin: JARVIS's system
   instructions and the history become one prompt, since a CLI run takes a
-  single message.
+  single message. Claude Code reads it as one `--input-format stream-json`
+  user message. That lets the process for the next request start right after
+  a request with the same model and wait for it; it is stopped after
+  5 minutes without a message, when another model is used, or when the
+  provider is replaced or JARVIS closes. A waiting process holds about
+  150 MB of memory (296 MB committed in the 2026-11-12 check).
 - **Sign-in stays with the CLI.** JARVIS stores no key for these backends and
   never reads the CLI's credential files. Model listing runs `codex login
   status` / `claude auth status` and only looks at the exit code; a chat
@@ -72,7 +77,8 @@ access to the computer, and must keep the cloud opt-in.
   2.2 s to the first text and to the end; before the changes of that day the
   end came 1–1.7 s later, and JARVIS added about 3 s before starting the CLI
   while a local server was off (a sign-in check and a new model listing per
-  message). Codex gives its answer at the end of the turn: like
+  message). With the waiting process, the next replies ended after
+  1.3–1.4 s (first request 2.8 s). Codex gives its answer at the end of the turn: like
   `codex exec --output-last-message`, the last agent message is the answer
   and earlier ones ("I'll run …") are dropped. Claude Code streams text.
 - Sampling options (temperature, output limit) are left to the CLI.

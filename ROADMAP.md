@@ -222,8 +222,9 @@ were dropped ([ADR 0013](docs/decisions/0013-local-data-only.md)).
 - ✅ Chat latency (2026-11-12): no sign-in check per Claude Code message,
   no new model listing per message while a local server is off (about 2 s
   each on Windows), Claude Code without its post-answer summary request
-- ⬜ Keep a Claude Code process ready for the next message (would save about
-  1 s of start-up; needs its streaming-input mode)
+- ✅ A Claude Code process waits for the next message (`--input-format
+  stream-json`, same model, up to 5 minutes, about 150 MB): a short reply
+  ends in 1.3–1.4 s instead of 2.8 s
 - ✅ CHANGELOG, release guide
 - ✅ Signed automatic updates (ADR 0014): `tauri-plugin-updater`, key pair
   outside the repository, signatures bound to the version, `latest.json`

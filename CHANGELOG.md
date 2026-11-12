@@ -54,6 +54,10 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
   every provider's models when Ollama or LM Studio is off: Windows needs
   about 2 s to report the refused connection, and that delay came before
   each reply.
+- With Claude Code, the process for your next message starts while you read
+  the answer, so the next reply skips the CLI's start-up (a short reply took
+  1.3–1.4 s instead of 2.8 s). It uses about 150 MB of memory and stops after
+  5 minutes without a message, when you switch models or when JARVIS closes.
 - An agent no longer asks you again for an action you denied in the same
   task. A 3B model requested the same file three times after "Deny"; now the
   repeated request is refused at once, marked "already denied by you" in the
