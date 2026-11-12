@@ -4,7 +4,8 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use jarvis_core::jarvis_memory::{ConversationPatch, FactInput, MemoryEncryption, SearchQuery};
 use jarvis_core::{AppPaths, CoreOptions, ErrorCode, JarvisCore, MEMORY_KEY_SECRET};
@@ -28,6 +29,37 @@ impl SecretStore for FailingSecretStore {
 
     fn delete_secret(&self, _key: &str) -> Result<(), SecretError> {
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct GatedSecretStore {
+    secrets: InMemorySecretStore,
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    proceed: Mutex<mpsc::Receiver<()>>,
+}
+
+impl SecretStore for GatedSecretStore {
+    fn get_secret(&self, key: &str) -> Result<Option<String>, SecretError> {
+        self.secrets.get_secret(key)
+    }
+
+    fn set_secret(&self, key: &str, secret: &str) -> Result<(), SecretError> {
+        if key == MEMORY_KEY_SECRET
+            && let Some(entered) = self.entered.lock().unwrap().take()
+        {
+            entered.send(()).unwrap();
+            self.proceed
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .map_err(|err| SecretError::Storage(err.to_string()))?;
+        }
+        self.secrets.set_secret(key, secret)
+    }
+
+    fn delete_secret(&self, key: &str) -> Result<(), SecretError> {
+        self.secrets.delete_secret(key)
     }
 }
 
@@ -253,6 +285,42 @@ async fn a_failing_keychain_leaves_the_plain_database() {
     let status = test.core.memory_status().await;
     assert_eq!(status.encryption, MemoryEncryption::Unsupported);
     assert_eq!(status.counts.facts, 1);
+    test.core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fact_saved_while_the_keychain_waits_survives_encryption() {
+    let (entered, keychain_waiting) = tokio::sync::oneshot::channel();
+    let (release, proceed) = mpsc::channel();
+    let secrets = Arc::new(GatedSecretStore {
+        secrets: InMemorySecretStore::default(),
+        entered: Mutex::new(Some(entered)),
+        proceed: Mutex::new(proceed),
+    });
+    let test = start(secrets).await;
+    let code = test.core.prepare_memory_encryption().await.unwrap().code;
+    let core = Arc::clone(&test.core);
+    let encrypting = tokio::spawn(async move { core.encrypt_memory(last_group(&code)).await });
+    tokio::time::timeout(Duration::from_secs(10), keychain_waiting)
+        .await
+        .unwrap()
+        .unwrap();
+
+    test.core
+        .save_fact(fact("The meeting moved to Monday"))
+        .await
+        .unwrap();
+    let concurrent_prepare = test.core.prepare_memory_encryption().await;
+    release.send(()).unwrap();
+    encrypting.await.unwrap().unwrap();
+
+    let status = test.core.memory_status().await;
+    assert_eq!(status.encryption, MemoryEncryption::On);
+    assert_eq!(status.counts.facts, 1);
+    assert_eq!(
+        concurrent_prepare.unwrap_err().code(),
+        ErrorCode::LimitExceeded
+    );
     test.core.shutdown().await;
 }
 

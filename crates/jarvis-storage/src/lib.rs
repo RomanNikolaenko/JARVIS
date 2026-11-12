@@ -173,7 +173,7 @@ fn open_file(path: &Path, key: Option<&str>) -> Result<(Connection, MigrationRep
             .map_err(|err| StorageError::io(format!("creating {}", dir.display()), err))?;
         restrict_permissions(dir, 0o700);
     }
-    encryption::tidy_leftovers(path)?;
+    encryption::tidy_leftovers(path, key)?;
     let state = file_state(path)
         .map_err(|err| StorageError::io(format!("reading {}", path.display()), err))?;
     let corrupt = |err: rusqlite::Error| {
@@ -190,7 +190,8 @@ fn open_file(path: &Path, key: Option<&str>) -> Result<(Connection, MigrationRep
     let mut connection = Connection::open(path).map_err(corrupt)?;
     // The key must be the first statement. Leftovers are tidied by now, so
     // the header says whether the file is encrypted.
-    if let Some(key) = key.filter(|_| state == FileState::Encrypted) {
+    if state == FileState::Encrypted {
+        let key = key.ok_or(StorageError::Locked)?;
         connection
             .pragma_update(None, "key", key)
             .map_err(corrupt)?;
@@ -200,11 +201,16 @@ fn open_file(path: &Path, key: Option<&str>) -> Result<(Connection, MigrationRep
         other => other,
     })?;
     restrict_permissions(path, 0o600);
+    let finish_encryption = state == FileState::Encrypted
+        && encryption::verify_interrupted_encryption(path, &connection)?;
     let report =
         migrations::migrate(&mut connection, Some(path), MIGRATIONS).map_err(|err| match err {
             StorageError::Sqlite(err) => corrupt(err),
             other => other,
         })?;
+    if finish_encryption {
+        encryption::finish_interrupted_encryption(path);
+    }
     Ok((connection, report))
 }
 
@@ -335,8 +341,7 @@ mod tests {
     /// A database encrypted the way the app does it.
     async fn encrypted_database(path: &Path) -> Database {
         let db = Database::open(path).await.expect("plain");
-        db.export_encrypted(KEY).await.expect("export");
-        db.switch_to_encrypted(KEY).await.expect("switch");
+        db.encrypt_in_place(KEY).await.expect("encrypt");
         db
     }
 

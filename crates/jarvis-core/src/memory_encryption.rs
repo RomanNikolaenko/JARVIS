@@ -52,7 +52,7 @@ pub(crate) struct EncryptionState {
     prepared: Mutex<Option<String>>,
     /// The last keychain call failed: encryption is unsupported here.
     keychain_failed: AtomicBool,
-    /// One encryption at a time.
+    /// Serializes preparing a code, encrypting and unlocking.
     running: tokio::sync::Mutex<()>,
 }
 
@@ -65,6 +65,12 @@ impl std::fmt::Debug for EncryptionState {
 }
 
 impl EncryptionState {
+    fn begin(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, CoreError> {
+        self.running.try_lock().map_err(|_| {
+            CoreError::LimitExceeded("Memory encryption is already in progress".to_owned())
+        })
+    }
+
     fn prepared(&self) -> std::sync::MutexGuard<'_, Option<String>> {
         self.prepared.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -188,6 +194,7 @@ impl JarvisCore {
     /// Creates the recovery code to show before encrypting. Each call
     /// replaces the previous code.
     pub async fn prepare_memory_encryption(&self) -> Result<MemoryRecoveryCode, CoreError> {
+        let _running = self.encryption.begin()?;
         if !self.config.current().memory.enabled {
             return Err(CoreError::Validation(
                 "Turn on saving memory before encrypting it".to_owned(),
@@ -226,6 +233,7 @@ impl JarvisCore {
     /// Encrypts memory with the prepared code. `confirmation` is the code's
     /// last group, typed by the user to show it was written down.
     pub async fn encrypt_memory(&self, confirmation: String) -> Result<(), CoreError> {
+        let _running = self.encryption.begin()?;
         let Some(code) = self.encryption.prepared().clone() else {
             return Err(CoreError::Validation(
                 "Show the recovery code before encrypting memory".to_owned(),
@@ -236,11 +244,6 @@ impl JarvisCore {
                 "These digits are not the last group of the recovery code".to_owned(),
             ));
         }
-        let Ok(_running) = self.encryption.running.try_lock() else {
-            return Err(CoreError::LimitExceeded(
-                "Memory is already being encrypted".to_owned(),
-            ));
-        };
         if self.memory_state.any_busy().await || self.agent_status().running_tasks > 0 {
             return Err(CoreError::LimitExceeded(
                 "Stop the running replies and agent tasks before encrypting memory".to_owned(),
@@ -258,21 +261,12 @@ impl JarvisCore {
         };
         self.check_space_for_encryption(&database).await?;
 
+        // Save the key before taking the database lock. A write accepted while
+        // the keychain is busy will be included in the export.
+        self.encryption
+            .keychain_result(store_key(&self.secrets, &code).await)?;
         database
-            .export_encrypted(&code)
-            .await
-            .map_err(MemoryError::from)?;
-        if let Err(err) = self
-            .encryption
-            .keychain_result(store_key(&self.secrets, &code).await)
-        {
-            if let Err(discard) = database.discard_encrypted_copy().await {
-                tracing::warn!("cannot delete the encrypted copy: {discard}");
-            }
-            return Err(err);
-        }
-        database
-            .switch_to_encrypted(&code)
+            .encrypt_in_place(&code)
             .await
             .map_err(MemoryError::from)?;
         *self.encryption.prepared() = None;
@@ -285,6 +279,7 @@ impl JarvisCore {
     /// keychain for the next start.
     pub async fn unlock_memory(&self, code: String) -> Result<(), CoreError> {
         let code = normalize(&code)?;
+        let _running = self.encryption.begin()?;
         self.memory.unlock(code.clone()).await?;
         match self
             .encryption

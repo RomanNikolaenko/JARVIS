@@ -1091,8 +1091,7 @@ const KEY: &str = "111111-222222-333333-444444-555555-666666-777777-888888";
 /// An encrypted memory database with one conversation.
 async fn encrypted_memory(path: &std::path::Path) {
     let db = jarvis_storage::Database::open(path).await.unwrap();
-    db.export_encrypted(KEY).await.unwrap();
-    db.switch_to_encrypted(KEY).await.unwrap();
+    db.encrypt_in_place(KEY).await.unwrap();
     drop(db);
     let memory = MemoryEngine::open_with_key(path, Some(KEY.to_owned())).await;
     assert!(memory.unavailable_reason().is_none());
