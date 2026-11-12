@@ -81,7 +81,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   not measured yet
 - ✅ Text matches judged by shared terms: fewer than the best hit's are
   dropped, one shared word of a question yields to the semantic side
-- ⬜ Encryption at rest (key in the OS keychain)
+- ✅ Encryption at rest (2026-11-12, opt-in): SQLCipher 4 with a vendored
+  OpenSSL; the key is a 48-digit recovery code shown once and kept in the OS
+  keychain; encryption in place safe against interruption, encrypted
+  migration backups, locked state and unlock with the code (Memory → Data &
+  settings)
 - ✅ Facts suggested from conversations (opt-in, 2026-11-03): after a pause
   the conversation's model proposes facts the user stated; they are used
   only after the user accepts them on the Memory screen; a check gives way

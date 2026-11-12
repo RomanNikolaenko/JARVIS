@@ -57,8 +57,9 @@ crates/
                               features, RAM, GPUs, Vulkan), process helpers
   jarvis-runtime/             RuntimeManager: llama.cpp installer, GGUF library,
                               verified downloads, supervised llama-server
-  jarvis-storage/             SQLite database (bundled, FTS5), versioned
-                              migrations with checksums and backups
+  jarvis-storage/             SQLite/SQLCipher database (bundled, FTS5),
+                              versioned migrations with checksums and backups,
+                              encryption in place
   jarvis-memory/              MemoryEngine (conversations, facts, projects,
                               episodes, FTS + vector search, export/import),
                               Context Manager (token budgets, compaction)
@@ -335,6 +336,30 @@ See [ADR 0009](docs/decisions/0009-local-memory.md).
 | Semantic | `facts` (global or per project, pinned or not) | pinned facts always, others when relevant |
 | Project | `projects` (description, instructions) | injected into every chat of the project |
 | Episodic | `episodes` (actions from the event bus, no message text) | Memory screen, search |
+
+**Encryption at rest** (opt-in, Memory → Data & settings → *Encrypt memory…*).
+The database is SQLCipher 4 (bundled with a vendored OpenSSL); a plain file
+stays plain until the user encrypts it. The key is a recovery code of 48
+random digits (8 groups of 6, about 159 bits), used as the SQLCipher
+passphrase (AES-256, PBKDF2-SHA512) and kept in the OS keychain (`jarvis` /
+`memory-key`). The code is shown once; the user confirms its last group.
+`JarvisCore::encrypt_memory` refuses while a reply or an agent task runs or
+when free space is below the database size + 10 %, stores the code in the
+keychain first, then `Database::encrypt_in_place` exports `<db>.encrypting`
+(`sqlcipher_export` + `user_version`), compares row counts, renames the
+plain file to `<db>.plain-old`, moves the copy in and reopens it under the
+one connection lock, and zero-fills and deletes the plain file and the plain
+migration backups (`.plain-old` last). Opening tidies leftovers first: a copy
+next to a plain database is deleted; after a stop between the renames the
+copy is promoted only if it opens with the key and passes `quick_check`.
+Migration backups of an encrypted database are encrypted. The file state
+comes from the header (`SQLite format 3 ` = plain); an encrypted file
+without the right key is *locked*: memory is unavailable (temporary chats
+work) until `unlock_memory` gets the recovery code, which is then stored
+in the keychain again. The keychain is read only when encryption needs it
+(start with a locked database, prepare, encrypt, unlock); after a failed
+keychain call plain memory reports `unsupported`. Agent tasks keep the
+database they got at start: after an unlock they use it from the next start.
 
 A conversation turn (`JarvisCore::send_message`):
 
@@ -975,7 +1000,15 @@ must be granted by a capability; anything not granted is denied. See
   teacher"): words alone cannot tell whose work is meant.
 - Vector search is brute force in memory (fine for tens of thousands of
   items).
-- The memory database is not encrypted at rest.
+- Memory encryption is opt-in. Exports are plain JSON. Zero-filling the old
+  plain file does not reach copies an SSD or a copy-on-write file system
+  keeps elsewhere; encrypt early to limit them. Losing both the keychain
+  entry and the recovery code loses the memory.
+- A plain database whose first 16 bytes are damaged cannot be told apart
+  from an encrypted one: it is reported as locked (asking for a recovery
+  code) instead of damaged. Plain migration backups are deleted when memory
+  is encrypted, not re-encrypted, and a copied recovery code stays in the
+  clipboard until something else is copied.
 - Facts are saved explicitly or accepted from suggestions; nothing the model
   finds is used before the user accepts it. A small model suggests one-off
   states and sentences from JARVIS's replies, and copies the user's words

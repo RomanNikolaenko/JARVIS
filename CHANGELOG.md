@@ -6,6 +6,17 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Added
 
+- Memory can be encrypted at rest (Memory → Data & settings → "Encrypt
+  memory…", off by default). JARVIS shows a recovery code of 48 digits once;
+  after you type its last group, the database is converted to SQLCipher
+  (AES-256) and the code is kept in the system keychain, so memory opens by
+  itself at start. Write the code down: if the keychain entry is lost (for
+  example after reinstalling the system), memory stays locked until you
+  enter the code, and without both it cannot be recovered. The old plain file
+  and plain backups are overwritten and deleted. Exports stay plain JSON.
+  Building JARVIS now needs Perl (OpenSSL is compiled from source; on
+  Windows a native Perl such as Strawberry Perl, see DEVELOPMENT.md).
+
 - JARVIS can suggest facts from your conversations (Memory → Data &
   settings → "Suggest facts from conversations", off by default). Two
   minutes after a conversation pauses, its model looks once for lasting
