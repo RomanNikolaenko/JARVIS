@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import type {
+  CaptureInfo,
   ChatStreamEvent,
   ChatTurnRequest,
   ContextReport,
@@ -13,8 +14,16 @@ import type {
 import { SETTINGS } from '../../testing/settings.fixture';
 import { IpcError } from '../ipc/ipc-error';
 import { JarvisApi } from '../ipc/jarvis-api';
-import { ChatStore, CHAT_CANCEL_TIMEOUT_MS, CONVERSATION_LIST_TIMEOUT_MS, CONVERSATION_OPEN_TIMEOUT_MS } from './chat.store';
+import {
+  ChatStore,
+  CHAT_CANCEL_TIMEOUT_MS,
+  CHAT_NOTE_SAVE_TIMEOUT_MS,
+  CHAT_SEND_TIMEOUT_MS,
+  CONVERSATION_LIST_TIMEOUT_MS,
+  CONVERSATION_OPEN_TIMEOUT_MS,
+} from './chat.store';
 import { SettingsStore } from './settings.store';
+import { VisionStore } from './vision.store';
 
 const ECHO: ProviderModels = {
   provider: {
@@ -75,6 +84,16 @@ const CONTEXT: ContextReport = {
   memorySkipped: null,
 };
 
+const CAPTURE: CaptureInfo = {
+  id: 'new-draft-image',
+  source: 'screen',
+  label: 'Display 1',
+  width: 100,
+  height: 100,
+  preview: 'data:image/jpeg;base64,AAAA',
+  capturedAtMs: 1,
+};
+
 class FakeApi {
   connected = true;
   turns: ChatTurnRequest[] = [];
@@ -97,6 +116,8 @@ class FakeApi {
     },
   ]);
   getSettings = vi.fn();
+  captureScreen = vi.fn(async (): Promise<CaptureInfo> => CAPTURE);
+  discardCapture = vi.fn(async () => true);
   listConversations = vi.fn(async () => this.list);
 
   async getConversation(id: string): Promise<ConversationDetail> {
@@ -437,6 +458,134 @@ describe('ChatStore', () => {
     expect(store.entries()[0].images).toEqual([capture]);
   });
 
+  it('reports preflight and conversation creation failures as not sent', async () => {
+    const onResult = vi.fn();
+    expect(await store.send(' ', false, [], onResult)).toBe('notSent');
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('notSent');
+    onResult.mockClear();
+    vi.spyOn(api, 'createConversation').mockRejectedValueOnce(new Error('Storage is unavailable'));
+    expect(await store.send('Keep this draft', false, [], onResult)).toBe('notSent');
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('notSent');
+    expect(api.turns).toEqual([]);
+    expect(store.busy()).toBe(false);
+  });
+
+  it('reports a core admission refusal without pretending the turn started', async () => {
+    const onResult = vi.fn();
+    api.sendError = new IpcError('permissionDenied', 'Blocked by policy', 'core');
+    expect(await store.send('Keep this draft', false, [], onResult)).toBe('notSent');
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('notSent');
+    expect(store.entries()[1]).toMatchObject({ status: 'failed', error: 'Blocked by policy' });
+    expect(store.busy()).toBe(false);
+  });
+
+  it('reports a bridge refusal before native invocation as not sent', async () => {
+    const onResult = vi.fn();
+    api.sendError = new IpcError('unavailable', 'The native bridge is unavailable', 'notDispatched');
+    expect(await store.send('Keep this draft', false, [], onResult)).toBe('notSent');
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('notSent');
+    expect(store.entries()[1]).toMatchObject({ status: 'failed', error: 'The native bridge is unavailable' });
+    expect(store.busy()).toBe(false);
+  });
+
+  it.each([
+    new IpcError('io', 'Storage failed', 'core'),
+    new IpcError('internal', 'Core task failed', 'core'),
+    new IpcError('permissionDenied', 'Transport failed', 'transport'),
+    new IpcError('timeout', 'Local deadline expired'),
+  ])('keeps the outcome unknown for an ambiguous dispatched error: %s', async (error) => {
+    const onResult = vi.fn();
+    api.sendError = error;
+    expect(await store.send('Do not resend', false, [], onResult)).toBe('unknown');
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('unknown');
+    expect(store.entries()[1].error).toContain('may still be running');
+    expect(store.entries()[1].error).toContain('No message was resent');
+    expect(store.entries()[1].error).toContain('Check saved messages');
+    expect(store.busy()).toBe(false);
+  });
+
+  it.each(['resolve', 'reject', 'timeout'] as const)(
+    'reports admission immediately and keeps streaming after a late invoke %s',
+    async (outcome) => {
+      await store.open('c1');
+      const response = deferred<string>();
+      let emit!: (event: ChatStreamEvent) => void;
+      vi.spyOn(api, 'sendMessage').mockImplementationOnce((_request, onEvent) => {
+        emit = onEvent;
+        return response.promise;
+      });
+      const onResult = vi.fn();
+      if (outcome === 'timeout') vi.useFakeTimers();
+      const sending = store.send('Accepted turn', false, [], onResult);
+      expect(emit).toBeDefined();
+      emit(started());
+      expect(onResult).toHaveBeenCalledExactlyOnceWith('accepted');
+      expect(store.busy()).toBe(true);
+      if (outcome === 'resolve') response.resolve('req-1');
+      else if (outcome === 'reject') response.reject(new IpcError('privacyBlocked', 'Late failure', 'core'));
+      else await vi.advanceTimersByTimeAsync(CHAT_SEND_TIMEOUT_MS);
+      try {
+        expect(await sending).toBe('accepted');
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(onResult).toHaveBeenCalledOnce();
+      expect(store.phase()).toBe('streaming');
+      expect(store.entries().at(-1)).toMatchObject({ status: 'streaming' });
+      expect(store.entries().at(-1)?.error).toBeUndefined();
+      emit({ type: 'finished', finishReason: 'stop', usage: null, elapsedMs: 1 });
+      expect(store.busy()).toBe(false);
+    }
+  );
+
+  it('reports an unacknowledged dispatch as unknown at its deadline and ignores late events', async () => {
+    await store.open('c1');
+    const response = deferred<string>();
+    let emit!: (event: ChatStreamEvent) => void;
+    vi.spyOn(api, 'sendMessage').mockImplementationOnce((_request, onEvent) => {
+      emit = onEvent;
+      return response.promise;
+    });
+    const onResult = vi.fn();
+    vi.useFakeTimers();
+    try {
+      const sending = store.send('Uncertain turn', false, [], onResult);
+      await vi.advanceTimersByTimeAsync(CHAT_SEND_TIMEOUT_MS);
+      expect(await sending).toBe('unknown');
+      expect(onResult).toHaveBeenCalledExactlyOnceWith('unknown');
+      const entries = store.entries();
+      response.resolve('late-id');
+      emit(started());
+      emit({ type: 'delta', text: 'late reply' });
+      await Promise.resolve();
+      expect(store.entries()).toBe(entries);
+      expect(store.busy()).toBe(false);
+      expect(onResult).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out conversation creation without dispatching a late result', async () => {
+    const response = deferred<Conversation>();
+    vi.spyOn(api, 'createConversation').mockReturnValueOnce(response.promise);
+    const onResult = vi.fn();
+    vi.useFakeTimers();
+    try {
+      const sending = store.send('Keep this draft', false, [], onResult);
+      await vi.advanceTimersByTimeAsync(CHAT_SEND_TIMEOUT_MS);
+      expect(await sending).toBe('notSent');
+      expect(onResult).toHaveBeenCalledExactlyOnceWith('notSent');
+      response.resolve(conversation('late'));
+      await Promise.resolve();
+      expect(api.turns).toEqual([]);
+      expect(store.conversation()).toBeNull();
+      expect(store.busy()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('streams the reply with its context report and refreshes the title', async () => {
     await store.send('hello');
     api.list = [conversation('c1', { title: 'hello', messageCount: 2 })];
@@ -660,6 +809,34 @@ describe('ChatStore', () => {
     expect(api.patches).toHaveLength(1);
   });
 
+  it('keeps the selected project fixed while creating a conversation for a pinned note', async () => {
+    await store.setProject('original-project');
+    const created = deferred<Conversation>();
+    const create = vi.spyOn(api, 'createConversation').mockReturnValueOnce(created.promise);
+    const updated = conversation('created', { projectId: 'original-project', pinnedNote: 'Note' });
+    const update = vi.spyOn(api, 'updateConversation').mockResolvedValueOnce(updated);
+    const saving = store.setPinnedNote('Note');
+    await store.setProject('late-project');
+    expect(store.projectId()).toBe('original-project');
+    expect(create).toHaveBeenCalledExactlyOnceWith('original-project', false);
+    expect(update).not.toHaveBeenCalled();
+    created.resolve(conversation('created', { projectId: 'original-project' }));
+    expect(await saving).toBe(true);
+    expect(store.projectId()).toBe('original-project');
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('refuses project changes during a reply (existing conversation: %s)', async (existing) => {
+    if (existing) await store.open('current');
+    else await store.setProject('draft-project');
+    const previous = store.projectId();
+    store.phase.set('connecting');
+    await store.setProject('other-project');
+    expect(store.projectId()).toBe(previous);
+    expect(api.patches).toEqual([]);
+    expect(api.created).toEqual([]);
+  });
+
   it.each(['resolve', 'reject'])('ignores stale metadata %s for a reopened conversation', async (outcome) => {
     await store.open('c1');
     const pending = deferred<Conversation>();
@@ -699,6 +876,213 @@ describe('ChatStore', () => {
     expect(store.conversation()?.pinnedNote).toBe('');
     expect(store.savingNote()).toBe(false);
     expect(await store.rename('c1', 'later')).toBe(false);
+  });
+
+  it('times out note conversation creation without applying or writing a late conversation', async () => {
+    const created = deferred<Conversation>();
+    const create = vi.spyOn(api, 'createConversation').mockReturnValueOnce(created.promise);
+    vi.useFakeTimers();
+    try {
+      const saving = store.setPinnedNote('Keep my draft');
+      await vi.advanceTimersByTimeAsync(CHAT_NOTE_SAVE_TIMEOUT_MS);
+      expect(await saving).toBe(false);
+      expect(store.savingNote()).toBe(false);
+      expect(store.error()?.code).toBe('timeout');
+      expect(store.error()?.message).toContain('conversation may have been created');
+      expect(store.error()?.message).toContain('note was not saved');
+      expect(store.conversation()).toBeNull();
+      expect(store.noteCreationId()).toBeNull();
+      expect(api.patches).toEqual([]);
+      expect(create).toHaveBeenCalledOnce();
+      created.resolve(conversation('late-created'));
+      await Promise.resolve();
+      expect(store.conversation()).toBeNull();
+      expect(api.patches).toEqual([]);
+      expect(await store.setPinnedNote('Explicit retry')).toBe(true);
+      expect(store.conversation()?.pinnedNote).toBe('Explicit retry');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['resolve', 'reject'] as const)(
+    'retains a timed-out native note write fence until its late %s and ignores the stale result',
+    async (outcome) => {
+      await store.open('c1');
+      const native = deferred<Conversation>();
+      const update = vi.spyOn(api, 'updateConversation').mockReturnValueOnce(native.promise);
+      vi.useFakeTimers();
+      try {
+        const saving = store.setPinnedNote('Timed-out note');
+        await vi.advanceTimersByTimeAsync(CHAT_NOTE_SAVE_TIMEOUT_MS);
+        expect(await saving).toBe(false);
+        expect(store.savingNote()).toBe(false);
+        expect(store.acceptsInput()).toBe(true);
+        expect(store.error()?.code).toBe('timeout');
+        expect(store.error()?.message).toContain('save outcome is unknown');
+        expect(await store.setPinnedNote('Must wait for the old write')).toBe(false);
+        expect(store.error()?.message).toContain('awaiting confirmation');
+        expect(update).toHaveBeenCalledOnce();
+        expect(await store.rename('c1', 'Must not race')).toBe(false);
+        expect(await store.remove('c1')).toBe(false);
+        if (outcome === 'resolve') native.resolve(conversation('c1', { pinnedNote: 'Timed-out note' }));
+        else native.reject(new Error('Old native failure'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(store.conversation()?.pinnedNote).toBe('');
+        expect(store.error()?.message).toContain('awaiting confirmation');
+        expect(await store.setPinnedNote('Explicit latest note')).toBe(true);
+        expect(store.conversation()?.pinnedNote).toBe('Explicit latest note');
+        expect(update).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('does not let an invalidated creation release the saving state of a newer note operation', async () => {
+    const first = deferred<Conversation>();
+    const second = deferred<Conversation>();
+    const create = vi.spyOn(api, 'createConversation').mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const old = store.setPinnedNote('Old draft');
+    store.startNew();
+    expect(await old).toBe(false);
+    const fresh = store.setPinnedNote('New draft');
+    first.resolve(conversation('stale-created'));
+    await Promise.resolve();
+    expect(store.savingNote()).toBe(true);
+    expect(store.conversation()).toBeNull();
+    expect(api.patches).toEqual([]);
+    second.resolve(conversation('newly-created'));
+    expect(await fresh).toBe(true);
+    expect(store.savingNote()).toBe(false);
+    expect(store.conversation()?.id).toBe('newly-created');
+    expect(store.conversation()?.pinnedNote).toBe('New draft');
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(api.patches.map((item) => item.id)).toEqual(['newly-created']);
+  });
+
+  it('confirms a successful note without waiting for a stalled conversation-list refresh', async () => {
+    await store.open('c1');
+    api.listConversations.mockReturnValueOnce(new Promise(() => undefined));
+    expect(await store.setPinnedNote('Saved independently of list refresh')).toBe(true);
+    expect(store.savingNote()).toBe(false);
+    expect(store.conversation()?.pinnedNote).toBe('Saved independently of list refresh');
+    expect(store.conversationsLoading()).toBe(true);
+  });
+
+  it.each(['io', 'timeout'] as const)(
+    'reports a native note write %s exactly and releases its reservation for an explicit retry',
+    async (code) => {
+      await store.open('c1');
+      const update = vi.spyOn(api, 'updateConversation').mockRejectedValueOnce({ code, message: 'Storage is unavailable' });
+      expect(await store.setPinnedNote('Not confirmed')).toBe(false);
+      expect(store.error()).toMatchObject({ code, message: 'Storage is unavailable' });
+      expect(store.savingNote()).toBe(false);
+      expect(store.conversation()?.pinnedNote).toBe('');
+      expect(update).toHaveBeenCalledOnce();
+      expect(await store.setPinnedNote('Explicit retry')).toBe(true);
+      expect(update).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each(['open', 'new', 'disconnect', 'destroy'] as const)(
+    'settles an interrupted note creation immediately after %s without dispatching its note later',
+    async (action) => {
+      const created = deferred<Conversation>();
+      vi.spyOn(api, 'createConversation').mockReturnValueOnce(created.promise);
+      const saving = store.setPinnedNote('Original draft');
+      if (action === 'open') await store.open('other');
+      else if (action === 'new') store.startNew(true);
+      else if (action === 'disconnect') store.connectionLost(new IpcError('unavailable', 'Offline'));
+      else TestBed.resetTestingModule();
+      expect(await saving).toBe(false);
+      expect(store.savingNote()).toBe(false);
+      const current = store.conversation();
+      const failure = store.error();
+      created.resolve(conversation('stale-created'));
+      await Promise.resolve();
+      expect(store.conversation()).toBe(current);
+      expect(store.error()).toBe(failure);
+      expect(api.patches).toEqual([]);
+    }
+  );
+
+  it.each(['resolve', 'reject'] as const)(
+    'does not let an invalidated note write %s replace another note or release its saving state',
+    async (outcome) => {
+      await store.open('old');
+      const first = deferred<Conversation>();
+      const second = deferred<Conversation>();
+      const update = vi.spyOn(api, 'updateConversation').mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const old = store.setPinnedNote('Old note');
+      await store.open('new');
+      expect(await old).toBe(false);
+      const fresh = store.setPinnedNote('New note');
+      if (outcome === 'resolve') first.resolve(conversation('old', { pinnedNote: 'Stale note' }));
+      else first.reject(new Error('Old failure'));
+      await Promise.resolve();
+      expect(store.savingNote()).toBe(true);
+      expect(store.conversation()?.id).toBe('new');
+      expect(store.conversation()?.pinnedNote).toBe('');
+      expect(store.error()).toBeNull();
+      second.resolve(conversation('new', { pinnedNote: 'New note' }));
+      expect(await fresh).toBe(true);
+      expect(store.savingNote()).toBe(false);
+      expect(store.conversation()?.pinnedNote).toBe('New note');
+      expect(update).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('blocks new writes to the same conversation after disconnect until the old native note write settles', async () => {
+    await store.open('c1');
+    const pending = deferred<Conversation>();
+    const update = vi.spyOn(api, 'updateConversation').mockReturnValueOnce(pending.promise);
+    const saving = store.setPinnedNote('Uncertain note');
+    store.connectionLost(new IpcError('unavailable', 'Offline'));
+    expect(await saving).toBe(false);
+    expect(store.savingNote()).toBe(false);
+    expect(await store.setPinnedNote('Must wait')).toBe(false);
+    expect(update).toHaveBeenCalledOnce();
+    pending.resolve(conversation('c1', { pinnedNote: 'Uncertain note' }));
+    await Promise.resolve();
+    expect(store.conversation()?.pinnedNote).toBe('');
+    expect(await store.setPinnedNote('Latest explicit note')).toBe(true);
+  });
+
+  it('advances the editor session only for accepted new chats and successfully opened conversations', async () => {
+    const initial = store.editorContext();
+    store.startNew();
+    expect(store.editorContext()).toBe(initial + 1);
+    store.startNew(true);
+    expect(store.editorContext()).toBe(initial + 2);
+    const detail = await api.getConversation('saved');
+    const opening = deferred<ConversationDetail>();
+    const get = vi.spyOn(api, 'getConversation').mockReturnValueOnce(opening.promise);
+    const pending = store.open('saved');
+    expect(store.editorContext()).toBe(initial + 2);
+    opening.resolve(detail);
+    await pending;
+    expect(store.editorContext()).toBe(initial + 3);
+    get.mockRejectedValueOnce(new Error('Read failed'));
+    await store.open('failed');
+    expect(store.editorContext()).toBe(initial + 3);
+    await store.rename('saved', 'New title');
+    expect(store.editorContext()).toBe(initial + 3);
+  });
+
+  it('preserves the editor session when the first message or note creates its current conversation', async () => {
+    const initial = store.editorContext();
+    expect(await store.setPinnedNote('First note')).toBe(true);
+    expect(store.editorContext()).toBe(initial);
+    store.startNew();
+    const draftSession = store.editorContext();
+    await store.send('First message');
+    expect(store.editorContext()).toBe(draftSession);
+    store.startNew(); // Ignored while the reply is active.
+    expect(store.editorContext()).toBe(draftSession);
+    await store.open('ignored');
+    expect(store.editorContext()).toBe(draftSession);
   });
 
   it('deletes the open conversation and starts a new chat', async () => {
@@ -759,6 +1143,30 @@ describe('ChatStore', () => {
     expect(store.conversation()?.id).toBe('new');
   });
 
+  it('advances the editor session when deletion empties the current chat before another open fails', async () => {
+    await store.open('old');
+    const initialEditor = store.editorContext();
+    const deleting = deferred<void>();
+    vi.spyOn(api, 'deleteConversation').mockReturnValueOnce(deleting.promise);
+    const pending = store.remove('old');
+    const opening = deferred<ConversationDetail>();
+    vi.spyOn(api, 'getConversation').mockReturnValueOnce(opening.promise);
+    const open = store.open('new');
+    expect(store.editorContext()).toBe(initialEditor);
+    deleting.resolve();
+    expect(await pending).toBe('deleted');
+    expect(store.conversation()).toBeNull();
+    expect(store.entries()).toEqual([]);
+    expect(store.editorContext()).toBe(initialEditor + 1);
+    expect(store.loading()).toBe(true);
+    opening.reject(new Error('New conversation cannot be opened'));
+    await open;
+    expect(store.loading()).toBe(false);
+    expect(store.conversation()).toBeNull();
+    expect(store.editorContext()).toBe(initialEditor + 1);
+    expect(store.error()?.message).toBe('New conversation cannot be opened');
+  });
+
   it('does not reopen a deleted conversation from an earlier read', async () => {
     const detail = await api.getConversation('deleted');
     const response = deferred<ConversationDetail>();
@@ -802,7 +1210,7 @@ describe('ChatStore', () => {
     });
     expect(store.entries()[1]).toMatchObject({ status: 'failed', error: 'AI request timed out' });
 
-    api.sendError = new IpcError('limitExceeded', 'JARVIS is still answering');
+    api.sendError = new IpcError('limitExceeded', 'JARVIS is still answering', 'core');
     await store.send('again');
     expect(store.entries()[3]).toMatchObject({
       status: 'failed',
@@ -942,13 +1350,16 @@ describe('ChatStore', () => {
       old = onEvent;
       return response.promise;
     });
-    const first = store.send('first');
+    const onResult = vi.fn();
+    const first = store.send('first', false, [], onResult);
     await vi.waitFor(() => expect(old).toBeDefined());
     old({ type: 'finished', finishReason: 'stop', usage: null, elapsedMs: 1 });
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('accepted');
     await store.send('second');
     if (outcome === 'resolve') response.resolve('obsolete-id');
     else response.reject(new Error('obsolete failure'));
-    await first;
+    expect(await first).toBe('accepted');
+    expect(onResult).toHaveBeenCalledOnce();
     expect(store.activeRequestId()).toBe('req-1');
     expect(store.phase()).toBe('connecting');
     expect(store.entries()[1].status).toBe('complete');
@@ -958,15 +1369,64 @@ describe('ChatStore', () => {
   it('does not send after a conversation creation completes following disconnect', async () => {
     const created = deferred<Conversation>();
     vi.spyOn(api, 'createConversation').mockReturnValueOnce(created.promise);
-    const pending = store.send('first');
+    const onResult = vi.fn();
+    const pending = store.send('first', false, [], onResult);
     store.connectionLost(new IpcError('unavailable', 'Offline'));
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('notSent');
+    expect(store.entries()[1].error).toBe('Connection lost: Offline The message was not sent.');
     store.startNew();
     created.resolve(conversation('late'));
-    await pending;
+    expect(await pending).toBe('notSent');
     expect(api.turns).toEqual([]);
     expect(store.conversation()).toBeNull();
     expect(store.entries()).toEqual([]);
+    expect(onResult).toHaveBeenCalledOnce();
   });
+
+  it('reports disconnect during admission as unknown before a late native refusal arrives', async () => {
+    await store.open('c1');
+    const response = deferred<string>();
+    vi.spyOn(api, 'sendMessage').mockReturnValueOnce(response.promise);
+    const onResult = vi.fn();
+    const sending = store.send('Uncertain first turn', false, [], onResult);
+    store.connectionLost(new IpcError('unavailable', 'Offline'));
+    expect(onResult).toHaveBeenCalledExactlyOnceWith('unknown');
+    await store.send('A new turn');
+    const entries = store.entries();
+    response.reject(new IpcError('permissionDenied', 'Old refusal', 'core'));
+    expect(await sending).toBe('unknown');
+    expect(store.entries()).toBe(entries);
+    expect(store.phase()).toBe('connecting');
+    expect(store.activeRequestId()).toBe('req-1');
+    expect(onResult).toHaveBeenCalledOnce();
+  });
+
+  it.each(['creation', 'dispatch', 'streaming'] as const)(
+    'settles an owned send once when destroyed during %s',
+    async (stage) => {
+      if (stage !== 'creation') await store.open('c1');
+      const creation = deferred<Conversation>();
+      const dispatch = deferred<string>();
+      vi.spyOn(api, 'createConversation').mockReturnValueOnce(creation.promise);
+      let emit!: (event: ChatStreamEvent) => void;
+      const invoke = vi.spyOn(api, 'sendMessage').mockImplementationOnce((_request, onEvent) => {
+        emit = onEvent;
+        return dispatch.promise;
+      });
+      const onResult = vi.fn();
+      const sending = store.send('Pending turn', false, [], onResult);
+      if (stage === 'streaming') emit(started());
+      TestBed.resetTestingModule();
+      const expected = stage === 'creation' ? 'notSent' : stage === 'dispatch' ? 'unknown' : 'accepted';
+      expect(onResult).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(await sending).toBe(expected);
+      creation.resolve(conversation('late'));
+      if (stage !== 'creation') dispatch.reject(new Error('Late native failure'));
+      await Promise.resolve();
+      expect(invoke).toHaveBeenCalledTimes(stage === 'creation' ? 0 : 1);
+      expect(onResult).toHaveBeenCalledOnce();
+    }
+  );
 
   it('does not let a pending conversation read overwrite an explicitly started new chat', async () => {
     const detail = await api.getConversation('old');
@@ -992,5 +1452,225 @@ describe('ChatStore', () => {
     await store.send('second');
     expect(store.entries()).toEqual(before);
     expect(api.turns).toHaveLength(1);
+  });
+
+  describe('saved messages checks', () => {
+    async function uncertainTurn() {
+      await store.send('Uncertain turn');
+      api.emit(started());
+      api.emit({ type: 'delta', text: 'Unsaved partial response' });
+      store.connectionLost(new IpcError('unavailable', 'Connection closed'));
+      expect(store.entries().at(-1)?.outcomeUnknown).toBe(true);
+      expect(store.canCheckSaved()).toBe(true);
+    }
+
+    it('reads a separate snapshot without changing the transcript, draft context, note or captures', async () => {
+      await uncertainTurn();
+      const detail = await api.getConversation('c1');
+      const get = vi.spyOn(api, 'getConversation').mockResolvedValueOnce(detail);
+      const vision = TestBed.inject(VisionStore);
+      vision.attachments.set([CAPTURE]);
+      const capture = deferred<CaptureInfo>();
+      api.captureScreen.mockReturnValueOnce(capture.promise);
+      const capturing = vision.captureScreen(null);
+      const entries = store.entries();
+      const openConversation = store.conversation();
+      const context = store.inputContext();
+      const summary = store.summary();
+
+      await store.checkSavedMessages();
+      const nextCapture = { ...CAPTURE, id: 'captured-during-check' };
+      capture.resolve(nextCapture);
+      await capturing;
+
+      expect(get).toHaveBeenCalledExactlyOnceWith('c1');
+      expect(store.savedMessages()).toBe(detail);
+      expect(store.entries()).toBe(entries);
+      expect(store.conversation()).toBe(openConversation);
+      expect(store.summary()).toBe(summary);
+      expect(store.inputContext()).toBe(context);
+      expect(vision.attachments()).toEqual([CAPTURE, nextCapture]);
+      expect(api.discardCapture).not.toHaveBeenCalled();
+      expect(store.entries().at(-1)).toMatchObject({ content: 'Unsaved partial response', outcomeUnknown: true });
+      expect(api.turns).toHaveLength(1);
+      expect(api.cancelled).toEqual([]);
+      expect(store.canCheckSaved()).toBe(true);
+    });
+
+    it('coalesces repeated checks and keeps the action available while checking', async () => {
+      await uncertainTurn();
+      const detail = await api.getConversation('c1');
+      const response = deferred<ConversationDetail>();
+      const get = vi.spyOn(api, 'getConversation').mockReturnValueOnce(response.promise);
+      const first = store.checkSavedMessages();
+      const second = store.checkSavedMessages();
+      expect(second).toBe(first);
+      expect(get).toHaveBeenCalledOnce();
+      expect(store.checkingSavedMessages()).toBe(true);
+      expect(store.canCheckSaved()).toBe(true);
+      response.resolve(detail);
+      await first;
+      expect(store.checkingSavedMessages()).toBe(false);
+    });
+
+    it('does not infer completion from missing saved messages or clear an uncertain response', async () => {
+      await uncertainTurn();
+      const entries = store.entries();
+      const detail: ConversationDetail = { conversation: store.conversation()!, messages: [], summary: null };
+      vi.spyOn(api, 'getConversation').mockResolvedValueOnce(detail);
+      await store.checkSavedMessages();
+      expect(store.savedMessages()?.messages).toEqual([]);
+      expect(store.entries()).toBe(entries);
+      expect(store.canCheckSaved()).toBe(true);
+      expect(store.savedMessagesError()).toBeNull();
+    });
+
+    it('keeps the last successful snapshot if the next check fails and allows an explicit retry', async () => {
+      await uncertainTurn();
+      const detail = await api.getConversation('c1');
+      const get = vi
+        .spyOn(api, 'getConversation')
+        .mockResolvedValueOnce(detail)
+        .mockRejectedValueOnce(new Error('Read failed'))
+        .mockResolvedValueOnce({ ...detail, messages: [] });
+      await store.checkSavedMessages();
+      await store.checkSavedMessages();
+      expect(store.savedMessages()).toBe(detail);
+      expect(store.savedMessagesError()?.message).toBe('Read failed');
+      expect(store.error()).toBeNull();
+      await store.checkSavedMessages();
+      expect(get).toHaveBeenCalledTimes(3);
+      expect(store.savedMessages()?.messages).toEqual([]);
+      expect(store.savedMessagesError()).toBeNull();
+    });
+
+    it('refuses a snapshot for a different or temporary conversation', async () => {
+      await uncertainTurn();
+      const detail = await api.getConversation('c1');
+      vi.spyOn(api, 'getConversation')
+        .mockResolvedValueOnce({ ...detail, conversation: { ...detail.conversation, id: 'other' } })
+        .mockResolvedValueOnce({ ...detail, conversation: { ...detail.conversation, temporary: true } });
+      await store.checkSavedMessages();
+      expect(store.savedMessages()).toBeNull();
+      expect(store.savedMessagesError()?.message).toContain('do not belong');
+      await store.checkSavedMessages();
+      expect(store.savedMessages()).toBeNull();
+      expect(store.savedMessagesError()?.message).toContain('do not belong');
+    });
+
+    it.each(['resolve', 'reject'] as const)('times out and ignores a late %s after a successful retry', async (outcome) => {
+      await uncertainTurn();
+      const detail = await api.getConversation('c1');
+      const late = deferred<ConversationDetail>();
+      const fresh = { ...detail, messages: [] };
+      vi.spyOn(api, 'getConversation').mockReturnValueOnce(late.promise).mockResolvedValueOnce(fresh);
+      vi.useFakeTimers();
+      try {
+        const first = store.checkSavedMessages();
+        await vi.advanceTimersByTimeAsync(CONVERSATION_OPEN_TIMEOUT_MS);
+        await first;
+        expect(store.checkingSavedMessages()).toBe(false);
+        expect(store.savedMessagesError()?.code).toBe('timeout');
+        await store.checkSavedMessages();
+        if (outcome === 'resolve') late.resolve(detail);
+        else late.reject(new Error('Late failure'));
+        await Promise.resolve();
+        expect(store.savedMessages()).toBe(fresh);
+        expect(store.savedMessagesError()).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(['send', 'open', 'new', 'delete', 'disconnect', 'destroy'] as const)(
+      'invalidates a pending check when a subsequent %s action changes its context',
+      async (action) => {
+        await uncertainTurn();
+        const detail = await api.getConversation('c1');
+        const late = deferred<ConversationDetail>();
+        vi.spyOn(api, 'getConversation').mockReturnValueOnce(late.promise);
+        const pending = store.checkSavedMessages();
+        if (action === 'send') await store.send('Next turn');
+        else if (action === 'open') await store.open('other');
+        else if (action === 'new') store.startNew();
+        else if (action === 'delete') await store.remove('c1');
+        else if (action === 'disconnect') store.connectionLost(new IpcError('unavailable', 'Offline again'));
+        else TestBed.resetTestingModule();
+        expect(store.savedMessages()).toBeNull();
+        expect(store.checkingSavedMessages()).toBe(false);
+        late.resolve(detail);
+        await pending;
+        expect(store.savedMessages()).toBeNull();
+        expect(store.savedMessagesError()).toBeNull();
+        expect(store.checkingSavedMessages()).toBe(false);
+      }
+    );
+
+    it('does not let an invalidated check release a newer check pending after another connection loss', async () => {
+      await uncertainTurn();
+      const detail = await api.getConversation('c1');
+      const first = deferred<ConversationDetail>();
+      const second = deferred<ConversationDetail>();
+      vi.spyOn(api, 'getConversation').mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      const old = store.checkSavedMessages();
+      store.connectionLost(new IpcError('unavailable', 'Offline again'));
+      const fresh = store.checkSavedMessages();
+      first.resolve(detail);
+      await old;
+      expect(store.checkingSavedMessages()).toBe(true);
+      expect(store.savedMessages()).toBeNull();
+      second.resolve(detail);
+      await fresh;
+      expect(store.checkingSavedMessages()).toBe(false);
+      expect(store.savedMessages()).toBe(detail);
+    });
+
+    it('preserves a snapshot when a new send fails preflight without dispatching', async () => {
+      await uncertainTurn();
+      await store.checkSavedMessages();
+      const saved = store.savedMessages();
+      expect(await store.send(' ')).toBe('notSent');
+      expect(store.savedMessages()).toBe(saved);
+    });
+
+    it.each(['temporary', 'busy', 'opening', 'savingNote', 'deleting', 'certain', 'noConversation', 'destroyed'] as const)(
+      'does not read saved messages when the current conversation is %s',
+      async (state) => {
+        await uncertainTurn();
+        const get = vi.spyOn(api, 'getConversation');
+        if (state === 'temporary') store.conversation.update((item) => ({ ...item!, temporary: true }));
+        else if (state === 'busy') store.phase.set('connecting');
+        else if (state === 'opening') store.loading.set(true);
+        else if (state === 'savingNote') store.savingNote.set(true);
+        else if (state === 'deleting') store.deletingIds.set(['c1']);
+        else if (state === 'certain')
+          store.entries.update((entries) => entries.map((entry) => ({ ...entry, outcomeUnknown: false })));
+        else if (state === 'noConversation') store.conversation.set(null);
+        else TestBed.resetTestingModule();
+        expect(store.canCheckSaved()).toBe(false);
+        await store.checkSavedMessages();
+        expect(get).not.toHaveBeenCalled();
+      }
+    );
+
+    it('exposes the check for unknown dispatch failures but not confirmed refusals or creation failures', async () => {
+      api.sendError = new IpcError('permissionDenied', 'Refused', 'core');
+      await store.send('Known refusal');
+      expect(store.canCheckSaved()).toBe(false);
+      expect(store.entries().at(-1)?.outcomeUnknown).toBe(false);
+      api.sendError = new IpcError('internal', 'Connection closed', 'transport');
+      await store.send('Unknown dispatch');
+      expect(store.canCheckSaved()).toBe(true);
+      expect(store.entries().at(-1)?.outcomeUnknown).toBe(true);
+      store.startNew();
+      const create = deferred<Conversation>();
+      vi.spyOn(api, 'createConversation').mockReturnValueOnce(create.promise);
+      const sending = store.send('Not dispatched');
+      store.connectionLost(new IpcError('unavailable', 'Offline'));
+      create.resolve(conversation('late'));
+      await sending;
+      expect(store.canCheckSaved()).toBe(false);
+      expect(store.entries().at(-1)?.outcomeUnknown).toBe(false);
+    });
   });
 });

@@ -179,6 +179,7 @@ async fn save_paused_task(core: &JarvisCore) -> AgentTask {
             input: Some(r#"{"path":"notes.txt"}"#.into()),
             summary: Some("Private context saved before pausing".into()),
             decision: None,
+            denied_action_fingerprint: None,
             outcome: StepOutcome::Succeeded,
             output: Some("Confidential journal contents for the original model".into()),
             started_at_ms: 1,
@@ -357,7 +358,11 @@ async fn a_task_reads_asks_before_writing_and_is_audited() {
 
     let listed = t.core.list_agent_tasks(10).await.unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(t.core.clear_finished_agent_tasks().await.unwrap(), 1);
+    assert_eq!(
+        t.core.clear_finished_agent_task_ids().await.unwrap(),
+        vec![task.id]
+    );
+    assert_eq!(t.core.clear_finished_agent_tasks().await.unwrap(), 0);
     // Audit entries stay when tasks are deleted.
     assert_eq!(t.core.audit_log(50, None).await.unwrap().len(), 4);
 }

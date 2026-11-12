@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import type { AcceptFactSuggestion, FactSuggestion, MemoryStatus, Settings } from '@jarvis/shared-types';
+import type { AcceptFactSuggestion, FactInput, FactSuggestion, MemoryStatus, Settings } from '@jarvis/shared-types';
 
 import { JarvisApi } from '../../core/ipc/jarvis-api';
+import { IpcError } from '../../core/ipc/ipc-error';
 import { MemoryStore } from '../../core/state/memory.store';
 import { SettingsStore } from '../../core/state/settings.store';
 import { SETTINGS } from '../../testing/settings.fixture';
@@ -37,6 +38,13 @@ describe('MemoryPage', () => {
       },
     ]),
     listProjects: vi.fn(async () => []),
+    saveFact: vi.fn(async (input: FactInput) => ({
+      ...input,
+      id: 'saved-fact',
+      source: 'user' as const,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    })),
     listEpisodes: vi.fn(async () => []),
     listAiModels: vi.fn(async () => []),
     getModelRoutes: vi.fn(async () => []),
@@ -107,6 +115,63 @@ describe('MemoryPage', () => {
     expect(element.querySelector('.subtitle')?.textContent).toContain('2 conversations');
     expect(element.textContent).toContain('The user prefers short answers.');
     expect(element.querySelector('.chip.accent')?.textContent).toContain('pinned');
+  });
+
+  it('offers a read-only reload after a confirmed save refresh fails without repeating the save', async () => {
+    const { fixture, element } = await render();
+    const store = TestBed.inject(MemoryStore);
+    api.saveFact.mockClear();
+    api.listFacts.mockRejectedValueOnce(new Error('List read failed'));
+    const saved = await store.saveFact({
+      id: null,
+      content: 'Confirmed saved fact',
+      projectId: null,
+      pinned: false,
+      sourceConversationId: null,
+    });
+    expect(saved?.id).toBe('saved-fact');
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('List read failed'));
+    fixture.detectChanges();
+    expect(element.querySelector('.refresh-error')?.textContent).toContain('Changes were saved');
+    expect(element.querySelector('.refresh-error')?.textContent).toContain('List read failed');
+    expect(store.error()).toBeNull();
+    expect(store.busy()).toBe(false);
+    api.listFacts.mockResolvedValueOnce([
+      {
+        id: 'saved-fact',
+        content: 'Confirmed saved fact',
+        projectId: null,
+        pinned: false,
+        source: 'user',
+        sourceConversationId: null,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+    ]);
+    button(element, 'Reload memory').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(element.querySelector('.refresh-error')).toBeNull();
+    expect(element.textContent).toContain('Confirmed saved fact');
+    expect(api.saveFact).toHaveBeenCalledOnce();
+  });
+
+  it('does not start a reload while a foreground operation is busy', async () => {
+    const { fixture, element } = await render();
+    const store = TestBed.inject(MemoryStore);
+    store.refreshError.set(new IpcError('timeout', 'Lists did not respond'));
+    store.busy.set(true);
+    const reload = vi.spyOn(store, 'loadAll').mockResolvedValue();
+    fixture.detectChanges();
+    const retry = button(element, 'Reload memory');
+    expect(retry.disabled).toBe(true);
+    retry.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(reload).not.toHaveBeenCalled();
+    store.busy.set(false);
+    fixture.detectChanges();
+    retry.click();
+    await fixture.whenStable();
+    expect(reload).toHaveBeenCalledOnce();
   });
 
   it('shows suggested facts for review and accepts or rejects them', async () => {

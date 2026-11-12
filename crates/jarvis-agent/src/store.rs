@@ -16,15 +16,19 @@ pub struct TaskStore {
     db: Database,
 }
 
+fn task_id(row: &Row<'_>) -> rusqlite::Result<Uuid> {
+    let id: String = row.get(0)?;
+    Uuid::parse_str(&id).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
 fn row_to_task(row: &Row<'_>) -> rusqlite::Result<AgentTask> {
     let json_error = |index: usize, err: serde_json::Error| {
         rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(err))
     };
-    let id: String = row.get(0)?;
     Ok(AgentTask {
-        id: Uuid::parse_str(&id).map_err(|err| {
-            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
-        })?,
+        id: task_id(row)?,
         goal: row.get(1)?,
         status: TaskStatus::parse(&row.get::<_, String>(2)?),
         provider_id: row.get(3)?,
@@ -130,26 +134,37 @@ impl TaskStore {
             .await?)
     }
 
-    /// Deletes finished tasks with known outcomes; retains unresolved action
-    /// journals for manual review and the tasks in `running`, whose runs
-    /// still save. Returns how many tasks were deleted.
+    /// Returns how many finished tasks with known outcomes were deleted.
     pub async fn delete_finished(&self, running: &[Uuid]) -> Result<usize> {
+        Ok(self.delete_finished_ids(running).await?.len())
+    }
+
+    /// Returns the IDs deleted by this cleanup. Unresolved journals and tasks
+    /// in `running` are retained.
+    pub async fn delete_finished_ids(&self, running: &[Uuid]) -> Result<Vec<Uuid>> {
         let running =
             serde_json::to_string(&running.iter().map(Uuid::to_string).collect::<Vec<_>>())
                 .map_err(AgentError::internal)?;
         Ok(self
             .db
             .call(move |conn| {
-                Ok::<_, StorageError>(conn.execute(
-                    "DELETE FROM agent_tasks
-                     WHERE status IN ('completed', 'unverified', 'failed', 'cancelled')
-                       AND id NOT IN (SELECT value FROM json_each(?1))
-                       AND NOT EXISTS (
-                           SELECT 1 FROM json_each(agent_tasks.steps) AS step
-                           WHERE json_extract(step.value, '$.outcome') IN ('unknown', 'inProgress')
-                       )",
-                    [running],
-                )?)
+                let transaction = conn.transaction()?;
+                let removed = {
+                    let mut statement = transaction.prepare(
+                        "DELETE FROM agent_tasks
+                         WHERE status IN ('completed', 'unverified', 'failed', 'cancelled')
+                           AND id NOT IN (SELECT value FROM json_each(?1))
+                           AND NOT EXISTS (
+                               SELECT 1 FROM json_each(agent_tasks.steps) AS step
+                               WHERE json_extract(step.value, '$.outcome') IN ('unknown', 'inProgress')
+                           )
+                         RETURNING id",
+                    )?;
+                    let rows = statement.query_map([running], task_id)?;
+                    rows.collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                transaction.commit()?;
+                Ok::<_, StorageError>(removed)
             })
             .await?)
     }

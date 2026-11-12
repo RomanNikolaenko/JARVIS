@@ -17,7 +17,8 @@ use jarvis_security::{
     ApprovalBroker, ApprovalOutcome, ApprovalRequest, AuditEvent, AuditLog, NewAuditEntry,
     PolicyDecision, RiskLevel, SecurityPolicy,
 };
-use jarvis_tools::{ProcessRegistry, ToolContext, ToolLimits, ToolRegistry};
+use jarvis_tools::{PreparedCall, ProcessRegistry, ToolContext, ToolLimits, ToolRegistry};
+use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +42,7 @@ const MAX_FAILED_ACTIONS: u32 = 3;
 const MAX_VERIFICATION_ROUNDS: u32 = 1;
 const MAX_STEP_TEXT: usize = 4000;
 const TOOL_RUN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const DENIED_BY_USER: &str = "denied by you";
 
 /// A chat model the agent talks to.
 #[async_trait]
@@ -133,6 +135,14 @@ fn clip(text: &str, max: usize) -> String {
         let cut: String = text.chars().take(max).collect();
         format!("{cut}…")
     }
+}
+
+fn denial_fingerprint(call: &PreparedCall) -> String {
+    let mut digest = Sha256::new();
+    digest.update(call.action.tool.as_bytes());
+    digest.update(b"\n");
+    digest.update(call.args.to_string().as_bytes());
+    format!("{:x}", digest.finalize())
 }
 
 impl AgentManager {
@@ -368,6 +378,10 @@ impl AgentManager {
     }
 
     pub async fn delete_finished(&self) -> Result<usize> {
+        Ok(self.delete_finished_ids().await?.len())
+    }
+
+    pub async fn delete_finished_ids(&self) -> Result<Vec<Uuid>> {
         let _transition = self.transitions.lock().await;
         let unsaved: Vec<_> = self.unsaved().values().cloned().collect();
         for task in unsaved {
@@ -384,7 +398,7 @@ impl AgentManager {
         // that final save bring the task back. No run starts meanwhile:
         // launches hold `transitions`.
         let running: Vec<Uuid> = self.running().keys().copied().collect();
-        self.env.store.delete_finished(&running).await
+        self.env.store.delete_finished_ids(&running).await
     }
 
     /// Deletes only the journal explicitly selected after manual review.
@@ -454,7 +468,7 @@ struct Run {
     pause: watch::Receiver<bool>,
     /// Model replies and the observations that answered them.
     history: Vec<(String, String)>,
-    /// Actions the user denied in this run (tool and normalized input).
+    /// Actions the user denied in this task (tool and normalized input).
     /// Asked for again, they are refused without another approval request.
     denied: HashSet<String>,
     started: Instant,
@@ -464,12 +478,13 @@ struct Run {
 impl Run {
     fn new(
         manager: Arc<AgentManager>,
-        task: AgentTask,
+        mut task: AgentTask,
         model: Arc<dyn AgentModel>,
         cancel: CancellationToken,
         pause: watch::Receiver<bool>,
     ) -> Self {
         let history = rebuild_history(&task.steps);
+        let denied = rebuild_denials(&mut task.steps, &manager.env);
         Self {
             manager,
             task,
@@ -477,7 +492,7 @@ impl Run {
             cancel,
             pause,
             history,
-            denied: HashSet::new(),
+            denied,
             started: Instant::now(),
             persistence_error: None,
         }
@@ -529,6 +544,7 @@ impl Run {
             input: None,
             summary: None,
             decision: None,
+            denied_action_fingerprint: None,
             outcome: StepOutcome::Info,
             output: Some(text.into()),
             started_at_ms: now_ms(),
@@ -691,6 +707,7 @@ impl Run {
                         input: None,
                         summary: None,
                         decision: None,
+                        denied_action_fingerprint: None,
                         outcome: StepOutcome::Succeeded,
                         output: Some(clip(&answer, MAX_STEP_TEXT)),
                         started_at_ms: now_ms(),
@@ -812,6 +829,7 @@ impl Run {
             input: None,
             summary: None,
             decision: None,
+            denied_action_fingerprint: None,
             outcome: if plan.is_empty() {
                 StepOutcome::Failed
             } else {
@@ -880,6 +898,7 @@ impl Run {
             input: None,
             summary: None,
             decision: None,
+            denied_action_fingerprint: None,
             outcome,
             output: Some(clip(&output, MAX_STEP_TEXT)),
             started_at_ms: now_ms(),
@@ -907,6 +926,7 @@ impl Run {
             input: Some(input.to_string()),
             summary: None,
             decision: None,
+            denied_action_fingerprint: None,
             outcome: StepOutcome::Failed,
             output: None,
             started_at_ms: now_ms(),
@@ -976,6 +996,7 @@ impl Run {
 
         let mut approved = false;
         let decision = settings.policy.evaluate(&action);
+        let denial_key = denial_fingerprint(&prepared);
         match decision {
             PolicyDecision::Deny { reason } => {
                 self.record(audit(AuditEvent::PolicyDenied, reason.clone()))
@@ -984,23 +1005,20 @@ impl Run {
                 let output = format!("Refused by the security policy: {reason}");
                 return (finish(step, StepOutcome::Denied, output), None);
             }
+            _ if self.denied.contains(&denial_key) => {
+                self.record(audit(
+                    AuditEvent::Denied,
+                    "asked again after you denied it in this task".to_owned(),
+                ))
+                .await;
+                step.decision = Some("already denied by you".to_owned());
+                let output = "Not asked again: the user already denied this exact action \
+                              in this task. Do not repeat it; find another way or explain in \
+                              your final answer what you could not do."
+                    .to_owned();
+                return (finish(step, StepOutcome::Denied, output), None);
+            }
             PolicyDecision::RequireApproval { reason } => {
-                // Paths in the prepared input are resolved, so "a.txt" and
-                // "./a.txt" are the same action.
-                let denial_key = format!("{}\n{}", action.tool, prepared.args);
-                if self.denied.contains(&denial_key) {
-                    self.record(audit(
-                        AuditEvent::Denied,
-                        "asked again after you denied it in this task".to_owned(),
-                    ))
-                    .await;
-                    step.decision = Some("already denied by you".to_owned());
-                    let output = "Not asked again: the user already denied this exact action \
-                                  in this task. Do not repeat it; find another way or explain in \
-                                  your final answer what you could not do."
-                        .to_owned();
-                    return (finish(step, StepOutcome::Denied, output), None);
-                }
                 self.task.status = TaskStatus::WaitingForApproval;
                 self.checkpoint().await;
                 if let Some(stop) = self.stop_requested() {
@@ -1032,7 +1050,7 @@ impl Run {
                 self.checkpoint().await;
                 let (event, text) = match outcome {
                     ApprovalOutcome::Approved => (AuditEvent::Approved, "approved by you"),
-                    ApprovalOutcome::Denied => (AuditEvent::Denied, "denied by you"),
+                    ApprovalOutcome::Denied => (AuditEvent::Denied, DENIED_BY_USER),
                     ApprovalOutcome::TimedOut => (AuditEvent::TimedOut, "not approved in time"),
                     ApprovalOutcome::Cancelled
                         if matches!(self.stop_requested(), Some(Stop::TimedOut)) =>
@@ -1053,6 +1071,7 @@ impl Run {
                     }
                     _ => {
                         if outcome == ApprovalOutcome::Denied {
+                            step.denied_action_fingerprint = Some(denial_key.clone());
                             self.denied.insert(denial_key);
                         }
                         let output = format!("The user did not allow this action ({text})");
@@ -1354,6 +1373,46 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+fn rebuild_denials(steps: &mut [TaskStep], env: &AgentEnvironment) -> HashSet<String> {
+    let mut denied = HashSet::new();
+    let mut context = None;
+    for step in steps.iter_mut().filter(|step| {
+        step.kind == StepKind::Action
+            && step.outcome == StepOutcome::Denied
+            && step.decision.as_deref() == Some(DENIED_BY_USER)
+    }) {
+        if step.denied_action_fingerprint.is_none() {
+            // Older journals contain only the model's input. Resolve it without
+            // executing the tool, and adopt the key only if the action still
+            // describes the same target and effect as the original request.
+            let (Some(tool), Some(input), Some(summary)) = (&step.tool, &step.input, &step.summary)
+            else {
+                continue;
+            };
+            let (Some(tool), Ok(input)) = (env.tools.get(tool), serde_json::from_str(input)) else {
+                continue;
+            };
+            let context = context.get_or_insert_with(|| {
+                let settings = (env.settings)();
+                ToolContext::new(
+                    settings.policy.scope().clone(),
+                    settings.tool_limits,
+                    Arc::clone(&env.processes),
+                )
+            });
+            if let Ok(call) = tool.prepare(&input, context)
+                && &call.action.summary == summary
+            {
+                step.denied_action_fingerprint = Some(denial_fingerprint(&call));
+            }
+        }
+        if let Some(key) = &step.denied_action_fingerprint {
+            denied.insert(key.clone());
+        }
+    }
+    denied
 }
 
 /// History for a resumed task, from its journal.

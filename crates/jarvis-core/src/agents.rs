@@ -533,10 +533,15 @@ impl JarvisCore {
 
     /// Deletes finished tasks with known results (their audit entries stay).
     pub async fn clear_finished_agent_tasks(&self) -> Result<usize, CoreError> {
-        let removed = self.agents().manager.delete_finished().await?;
+        Ok(self.clear_finished_agent_task_ids().await?.len())
+    }
+
+    /// Returns the IDs of the finished journals removed by this cleanup.
+    pub async fn clear_finished_agent_task_ids(&self) -> Result<Vec<Uuid>, CoreError> {
+        let removed = self.agents().manager.delete_finished_ids().await?;
         self.events.info(
             EventCategory::Agents,
-            format!("{removed} finished agent task(s) deleted"),
+            format!("{} finished agent task(s) deleted", removed.len()),
         );
         Ok(removed)
     }

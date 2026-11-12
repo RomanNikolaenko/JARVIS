@@ -19,6 +19,7 @@ import {
   CLEAR_CONFIRMATION,
   EPISODE_PAGE,
   MEMORY_HISTORY_TIMEOUT_MS,
+  MEMORY_READ_TIMEOUT_MS,
   MEMORY_SEARCH_TIMEOUT_MS,
   MemoryStore,
   snippetParts,
@@ -267,7 +268,8 @@ describe('MemoryStore', () => {
     await reading;
     expect(store.facts()).toEqual([saved]);
     expect(store.facts()[0].content).toBe('updated');
-    expect(store.error()?.message).toBe('Refresh unavailable');
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('Refresh unavailable'));
+    expect(store.error()).toBeNull();
   });
 
   it('retains a confirmed project update even if refreshing the list fails', async () => {
@@ -279,7 +281,8 @@ describe('MemoryStore', () => {
     await reading;
     expect(store.projects()).toEqual([saved]);
     expect(store.projectNames().get('p')).toBe('Updated');
-    expect(store.error()?.message).toBe('Projects unavailable');
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('Projects unavailable'));
+    expect(store.error()).toBeNull();
   });
 
   it('does not restore a deleted project from an old list when refresh fails', async () => {
@@ -291,7 +294,8 @@ describe('MemoryStore', () => {
     pending.resolve([project('p')]);
     await reading;
     expect(store.projects()).toEqual([]);
-    expect(store.error()?.message).toBe('Projects unavailable');
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('Projects unavailable'));
+    expect(store.error()).toBeNull();
   });
 
   it('does not publish lists after the store is destroyed', async () => {
@@ -303,6 +307,426 @@ describe('MemoryStore', () => {
     await reading;
     expect(store.facts().map((entry) => entry.id)).toEqual(['a']);
   });
+
+  it.each(['status', 'facts', 'projects', 'suggestions'] as const)(
+    'bounds a hung %s read and ignores its late result after an explicit reload',
+    async (kind) => {
+      const oldStatus = deferred<MemoryStatus>();
+      const oldFacts = deferred<Fact[]>();
+      const oldProjects = deferred<Project[]>();
+      const oldSuggestions = deferred<FactSuggestion[]>();
+      const freshStatus = { ...STATUS, sizeBytes: 8192 };
+      api.getMemoryStatus.mockResolvedValue(freshStatus);
+      api.facts = [fact('fresh')];
+      api.projects = [project('fresh')];
+      api.suggestions = [suggestion('fresh')];
+      let read: Promise<void>;
+      vi.useFakeTimers();
+      try {
+        if (kind === 'status') {
+          api.getMemoryStatus.mockReturnValueOnce(oldStatus.promise);
+          read = store.refreshStatus();
+        } else if (kind === 'facts') {
+          api.listFacts.mockReturnValueOnce(oldFacts.promise);
+          read = store.loadFacts();
+        } else if (kind === 'projects') {
+          api.listProjects.mockReturnValueOnce(oldProjects.promise);
+          read = store.loadProjects();
+        } else {
+          api.listFactSuggestions.mockReturnValueOnce(oldSuggestions.promise);
+          read = store.loadSuggestions();
+        }
+        await vi.advanceTimersByTimeAsync(MEMORY_READ_TIMEOUT_MS);
+        await read;
+        expect(store.error()?.code).toBe('timeout');
+        expect(store.busy()).toBe(false);
+        await store.loadAll();
+        oldStatus.resolve(STATUS);
+        oldFacts.resolve([fact('old')]);
+        oldProjects.resolve([project('old')]);
+        oldSuggestions.resolve([suggestion('old')]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(store.status()).toBe(freshStatus);
+        expect(store.facts().map((entry) => entry.id)).toEqual(['fresh']);
+        expect(store.projects().map((entry) => entry.id)).toEqual(['fresh']);
+        expect(store.suggestions().map((entry) => entry.id)).toEqual(['fresh']);
+        expect(store.error()).toBeNull();
+        expect(store.busy()).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('does not let an older status read replace a newer status or error', async () => {
+    const old = deferred<MemoryStatus>();
+    const fresh = { ...STATUS, sizeBytes: 8192 };
+    api.getMemoryStatus.mockReturnValueOnce(old.promise).mockResolvedValueOnce(fresh);
+    const first = store.refreshStatus();
+    await store.refreshStatus();
+    old.resolve(STATUS);
+    await first;
+    expect(store.status()).toBe(fresh);
+    expect(store.error()).toBeNull();
+  });
+
+  it.each(['status', 'facts', 'projects', 'suggestions'] as const)(
+    'settles a pending %s read on destruction without applying a late response',
+    async (kind) => {
+      const oldStatus = deferred<MemoryStatus>();
+      const oldFacts = deferred<Fact[]>();
+      const oldProjects = deferred<Project[]>();
+      const oldSuggestions = deferred<FactSuggestion[]>();
+      let read: Promise<void>;
+      if (kind === 'status') {
+        api.getMemoryStatus.mockReturnValueOnce(oldStatus.promise);
+        read = store.refreshStatus();
+      } else if (kind === 'facts') {
+        api.listFacts.mockReturnValueOnce(oldFacts.promise);
+        read = store.loadFacts();
+      } else if (kind === 'projects') {
+        api.listProjects.mockReturnValueOnce(oldProjects.promise);
+        read = store.loadProjects();
+      } else {
+        api.listFactSuggestions.mockReturnValueOnce(oldSuggestions.promise);
+        read = store.loadSuggestions();
+      }
+      const previous = {
+        status: store.status(),
+        facts: store.facts(),
+        projects: store.projects(),
+        suggestions: store.suggestions(),
+      };
+      TestBed.resetTestingModule();
+      await read;
+      oldStatus.resolve({ ...STATUS, sizeBytes: 9999 });
+      oldFacts.resolve([fact('late')]);
+      oldProjects.resolve([project('late')]);
+      oldSuggestions.resolve([suggestion('late')]);
+      await Promise.resolve();
+      expect(store.status()).toBe(previous.status);
+      expect(store.facts()).toBe(previous.facts);
+      expect(store.projects()).toBe(previous.projects);
+      expect(store.suggestions()).toBe(previous.suggestions);
+      expect(store.error()).toBeNull();
+      expect(store.busy()).toBe(false);
+    }
+  );
+
+  it('returns a confirmed fact before a stalled background refresh without blocking controls or retrying the write', async () => {
+    const facts = deferred<Fact[]>();
+    const projects = deferred<Project[]>();
+    api.listFacts.mockReturnValueOnce(facts.promise);
+    api.listProjects.mockReturnValueOnce(projects.promise);
+    const save = vi.spyOn(api, 'saveFact');
+    vi.useFakeTimers();
+    try {
+      const saved = await store.saveFact({
+        id: null,
+        content: 'Saved already',
+        projectId: null,
+        pinned: false,
+        sourceConversationId: null,
+      });
+      expect(saved?.content).toBe('Saved already');
+      expect(store.facts()).toContainEqual(saved);
+      expect(store.busy()).toBe(false);
+      expect(store.error()).toBeNull();
+      await vi.advanceTimersByTimeAsync(MEMORY_READ_TIMEOUT_MS);
+      expect(store.refreshError()?.code).toBe('timeout');
+      expect(store.error()).toBeNull();
+      expect(store.busy()).toBe(false);
+      expect(save).toHaveBeenCalledOnce();
+      await store.loadAll();
+      facts.resolve([fact('obsolete')]);
+      projects.reject(new Error('Late background failure'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.facts()).toContainEqual(saved);
+      expect(store.refreshError()).toBeNull();
+      expect(store.error()).toBeNull();
+      expect(save).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns a confirmed project before a stalled background refresh', async () => {
+    const projects = deferred<Project[]>();
+    api.listProjects.mockReturnValueOnce(projects.promise);
+    const saved = await store.saveProject({ id: null, name: 'Saved project', description: '', instructions: '' });
+    expect(saved?.name).toBe('Saved project');
+    expect(store.projects()).toEqual([saved]);
+    expect(store.busy()).toBe(false);
+    expect(api.saveProject).toHaveBeenCalledOnce();
+    projects.reject(new Error('Read unavailable'));
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('Read unavailable'));
+    expect(store.error()).toBeNull();
+    expect(store.projects()).toEqual([saved]);
+  });
+
+  it('keeps a background refresh failure when its sibling read succeeds', async () => {
+    const facts = deferred<Fact[]>();
+    api.listFacts.mockReturnValueOnce(facts.promise);
+    api.listProjects.mockRejectedValueOnce(new Error('Projects refresh failed'));
+    const saved = await store.saveFact({
+      id: 'a',
+      content: 'Updated',
+      projectId: null,
+      pinned: false,
+      sourceConversationId: null,
+    });
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('Projects refresh failed'));
+    facts.resolve([saved!]);
+    await Promise.resolve();
+    expect(store.refreshError()?.message).toBe('Projects refresh failed');
+    expect(store.error()).toBeNull();
+  });
+
+  it('does not let an obsolete background refresh mask a newer mutation error', async () => {
+    const old = deferred<Fact[]>();
+    api.listFacts.mockReturnValueOnce(old.promise);
+    await store.saveFact({ id: 'a', content: 'Confirmed', projectId: null, pinned: false, sourceConversationId: null });
+    vi.spyOn(api, 'saveFact').mockRejectedValueOnce({ code: 'io', message: 'New write failed' });
+    expect(
+      await store.saveFact({ id: null, content: 'Not confirmed', projectId: null, pinned: false, sourceConversationId: null })
+    ).toBeNull();
+    old.reject(new Error('Old refresh failed'));
+    await vi.waitFor(() => expect(store.refreshError()?.message).toBe('Old refresh failed'));
+    expect(store.error()?.message).toBe('New write failed');
+  });
+
+  it('ignores a background refresh error from an older batch', async () => {
+    const old = deferred<Fact[]>();
+    api.listFacts.mockReturnValueOnce(old.promise);
+    await store.saveFact({ id: 'a', content: 'Confirmed', projectId: null, pinned: false, sourceConversationId: null });
+    await store.saveProject({ id: 'p', name: 'Newer project', description: '', instructions: '' });
+    old.reject(new Error('Obsolete batch failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.refreshError()).toBeNull();
+    expect(store.error()).toBeNull();
+    expect(store.projects()[0].name).toBe('Newer project');
+  });
+
+  it.each(['fact', 'project'] as const)('does not return a saved %s or start a refresh after store destruction', async (kind) => {
+    const factWrite = deferred<Fact>();
+    const projectWrite = deferred<Project>();
+    vi.spyOn(api, 'saveFact').mockReturnValueOnce(factWrite.promise);
+    api.saveProject.mockReturnValueOnce(projectWrite.promise);
+    api.listFacts.mockClear();
+    api.listProjects.mockClear();
+    const saving =
+      kind === 'fact'
+        ? store.saveFact({ id: null, content: 'Saved late', projectId: null, pinned: false, sourceConversationId: null })
+        : store.saveProject({ id: null, name: 'Saved late', description: '', instructions: '' });
+    const previousFacts = store.facts();
+    const previousProjects = store.projects();
+    TestBed.resetTestingModule();
+    factWrite.resolve(fact('late'));
+    projectWrite.resolve(project('late'));
+    expect(await saving).toBeNull();
+    expect(store.facts()).toBe(previousFacts);
+    expect(store.projects()).toBe(previousProjects);
+    expect(api.listFacts).not.toHaveBeenCalled();
+    expect(api.listProjects).not.toHaveBeenCalled();
+    expect(store.busy()).toBe(false);
+  });
+
+  it('reports fact deletion only after a confirmed success and preserves a failed deletion error', async () => {
+    expect(await store.deleteFact('missing')).toBe(false);
+    expect(store.facts().map((entry) => entry.id)).toEqual(['a']);
+    expect(store.error()).toMatchObject({ code: 'notFound', message: 'the fact does not exist' });
+    expect(await store.deleteFact('a')).toBe(true);
+    expect(store.facts()).toEqual([]);
+    expect(store.error()).toBeNull();
+  });
+
+  it('does not dispatch memory writes while a data transfer is active', async () => {
+    const transfer = deferred<TransferReport | null>();
+    api.exportMemory.mockReturnValueOnce(transfer.promise);
+    const exporting = store.exportMemory();
+    const saveFact = vi.spyOn(api, 'saveFact');
+    const deleteFact = vi.spyOn(api, 'deleteFact');
+    expect(
+      await store.saveFact({ id: null, content: 'Do not overlap', projectId: null, pinned: false, sourceConversationId: null })
+    ).toBeNull();
+    expect(await store.saveProject({ id: null, name: 'Do not overlap', description: '', instructions: '' })).toBeNull();
+    expect(await store.deleteFact('a')).toBe(false);
+    await store.deleteProject('p');
+    expect(saveFact).not.toHaveBeenCalled();
+    expect(api.saveProject).not.toHaveBeenCalled();
+    expect(deleteFact).not.toHaveBeenCalled();
+    expect(api.deleteProject).not.toHaveBeenCalled();
+    transfer.resolve(null);
+    await exporting;
+  });
+
+  it('clears acknowledged memory immediately and fences reads from before or during deletion when reloading fails', async () => {
+    const oldFacts = deferred<Fact[]>();
+    const oldProjects = deferred<Project[]>();
+    const oldSuggestions = deferred<FactSuggestion[]>();
+    const oldStatus = deferred<MemoryStatus>();
+    const cleared = deferred<void>();
+    store.projects.set([project('before-clear')]);
+    api.listFacts.mockReturnValueOnce(oldFacts.promise).mockRejectedValueOnce(new Error('Post-clear facts unavailable'));
+    api.listProjects.mockReturnValueOnce(oldProjects.promise).mockRejectedValueOnce(new Error('Post-clear projects unavailable'));
+    api.listFactSuggestions
+      .mockReturnValueOnce(oldSuggestions.promise)
+      .mockRejectedValueOnce(new Error('Post-clear suggestions unavailable'));
+    api.getMemoryStatus.mockReturnValueOnce(oldStatus.promise).mockRejectedValueOnce(new Error('Post-clear status unavailable'));
+    vi.spyOn(api, 'listEpisodes').mockResolvedValueOnce([]);
+    const clear = vi.spyOn(api, 'clearMemory').mockReturnValueOnce(cleared.promise);
+    const saved = await store.saveFact({
+      id: 'a',
+      content: 'Confirmed before clear',
+      pinned: false,
+      projectId: null,
+      sourceConversationId: null,
+    });
+    const suggestions = store.loadSuggestions();
+    const clearing = store.clearAll();
+    expect(store.facts()).toContainEqual(saved);
+    expect(store.projects().map((entry) => entry.id)).toEqual(['before-clear']);
+    expect(store.suggestions()).toHaveLength(1);
+    expect(store.status()).toBe(STATUS);
+    // A screen can request status while the native clear is already pending.
+    const status = store.refreshStatus();
+    cleared.resolve();
+    await clearing;
+    expect(store.facts()).toEqual([]);
+    expect(store.projects()).toEqual([]);
+    expect(store.suggestions()).toEqual([]);
+    expect(store.pendingSuggestions()).toBe(0);
+    expect(store.status()).toBeNull();
+    expect(store.dataError()).toBeNull();
+    expect(store.error()?.message).toContain('Post-clear');
+    oldFacts.resolve([fact('deleted')]);
+    oldProjects.resolve([project('deleted')]);
+    oldSuggestions.resolve([suggestion('deleted')]);
+    oldStatus.resolve(STATUS);
+    await Promise.all([suggestions, status]);
+    await Promise.resolve();
+    expect(store.facts()).toEqual([]);
+    expect(store.projects()).toEqual([]);
+    expect(store.suggestions()).toEqual([]);
+    expect(store.pendingSuggestions()).toBe(0);
+    expect(store.status()).toBeNull();
+    expect(store.refreshError()).toBeNull();
+    expect(clear).toHaveBeenCalledOnce();
+    expect(store.busy()).toBe(false);
+  });
+
+  it('does not restore pre-import background lists after loading the imported memory', async () => {
+    const oldFacts = deferred<Fact[]>();
+    const oldProjects = deferred<Project[]>();
+    const oldSuggestions = deferred<FactSuggestion[]>();
+    const report = deferred<TransferReport | null>();
+    api.listFacts.mockReturnValueOnce(oldFacts.promise);
+    api.listProjects.mockReturnValueOnce(oldProjects.promise);
+    api.listFactSuggestions.mockReturnValueOnce(oldSuggestions.promise);
+    await store.saveFact({ id: 'a', content: 'Before import', pinned: false, projectId: null, sourceConversationId: null });
+    const suggestions = store.loadSuggestions();
+    api.importMemory.mockReturnValueOnce(report.promise);
+    const importing = store.importMemory();
+    expect(store.facts()[0].content).toBe('Before import');
+    api.facts = [fact('imported')];
+    api.projects = [project('imported')];
+    api.suggestions = [suggestion('imported')];
+    report.resolve(REPORT);
+    await importing;
+    oldFacts.resolve([fact('old')]);
+    oldProjects.resolve([project('old')]);
+    oldSuggestions.resolve([suggestion('old')]);
+    await suggestions;
+    await Promise.resolve();
+    expect(store.facts().map((entry) => entry.id)).toEqual(['imported']);
+    expect(store.projects().map((entry) => entry.id)).toEqual(['imported']);
+    expect(store.suggestions().map((entry) => entry.id)).toEqual(['imported']);
+    expect(store.pendingSuggestions()).toBe(1);
+    expect(store.refreshError()).toBeNull();
+    expect(store.dataError()).toBeNull();
+    expect(api.importMemory).toHaveBeenCalledOnce();
+  });
+
+  it('retains cached memory when clearing is refused without reviving an older background list', async () => {
+    const old = deferred<Fact[]>();
+    api.listFacts.mockReturnValueOnce(old.promise);
+    const saved = await store.saveFact({
+      id: 'a',
+      content: 'Still exists',
+      pinned: false,
+      projectId: null,
+      sourceConversationId: null,
+    });
+    vi.spyOn(api, 'clearMemory').mockRejectedValueOnce(new Error('Clear refused'));
+    await store.clearAll();
+    expect(store.facts()).toEqual([saved]);
+    expect(store.dataError()?.message).toBe('Clear refused');
+    old.resolve([fact('obsolete')]);
+    await Promise.resolve();
+    expect(store.facts()).toEqual([saved]);
+    expect(store.status()).toBe(STATUS);
+  });
+
+  it.each(['failure', 'timeout'] as const)(
+    'removes project facts on delete acknowledgement despite a facts-refresh %s',
+    async (outcome) => {
+      const projects = [project('deleted'), project('kept')];
+      const kept = { ...fact('kept'), projectId: 'kept' };
+      const unscoped = fact('unscoped');
+      api.projects = projects;
+      store.projects.set(projects);
+      store.facts.set([{ ...fact('deleted'), projectId: 'deleted' }, kept, unscoped]);
+      const pending = deferred<Fact[]>();
+      if (outcome === 'failure') api.listFacts.mockRejectedValueOnce(new Error('Facts refresh unavailable'));
+      else api.listFacts.mockReturnValueOnce(pending.promise);
+      vi.useFakeTimers();
+      try {
+        await store.deleteProject('deleted');
+        expect(store.projects().map((entry) => entry.id)).toEqual(['kept']);
+        expect(store.facts()).toEqual([kept, unscoped]);
+        expect(store.busy()).toBe(false);
+        if (outcome === 'timeout') await vi.advanceTimersByTimeAsync(MEMORY_READ_TIMEOUT_MS);
+        else await vi.advanceTimersByTimeAsync(0);
+        expect(store.refreshError()?.message).toContain(outcome === 'timeout' ? 'did not respond' : 'Facts refresh unavailable');
+        expect(store.facts()).toEqual([kept, unscoped]);
+        expect(api.deleteProject).toHaveBeenCalledExactlyOnceWith('deleted');
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.each(['export', 'import', 'clear'] as const)(
+    'does not publish a late native %s acknowledgement after disposal',
+    async (kind) => {
+      const report = deferred<TransferReport | null>();
+      const clear = deferred<void>();
+      api.exportMemory.mockReturnValueOnce(report.promise);
+      api.importMemory.mockReturnValueOnce(report.promise);
+      vi.spyOn(api, 'clearMemory').mockReturnValueOnce(clear.promise);
+      const facts = store.facts();
+      const projects = store.projects();
+      const suggestions = store.suggestions();
+      const status = store.status();
+      const pending = kind === 'export' ? store.exportMemory() : kind === 'import' ? store.importMemory() : store.clearAll();
+      api.listFacts.mockClear();
+      api.listProjects.mockClear();
+      TestBed.resetTestingModule();
+      report.resolve(REPORT);
+      clear.resolve();
+      await pending;
+      expect(store.facts()).toBe(facts);
+      expect(store.projects()).toBe(projects);
+      expect(store.suggestions()).toBe(suggestions);
+      expect(store.status()).toBe(status);
+      expect(store.lastTransfer()).toBeNull();
+      expect(store.dataError()).toBeNull();
+      expect(api.listFacts).not.toHaveBeenCalled();
+      expect(api.listProjects).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['success', 'failure'])('ignores stale search %s while a newer query is pending', async (outcome) => {
     const old = deferred<[]>();

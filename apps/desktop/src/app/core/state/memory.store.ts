@@ -23,6 +23,7 @@ export const EPISODE_PAGE = 100;
 export const MAX_FACT_LENGTH = 2000;
 export const MEMORY_SEARCH_TIMEOUT_MS = 30_000;
 export const MEMORY_HISTORY_TIMEOUT_MS = 30_000;
+export const MEMORY_READ_TIMEOUT_MS = 30_000;
 export const SUGGESTION_SUBSCRIPTION_TIMEOUT_MS = 30_000;
 
 /** Splits a search snippet into plain and highlighted parts (U+0002 … U+0003). */
@@ -57,6 +58,8 @@ export class MemoryStore {
   private readonly destroyRef = inject(DestroyRef);
   private pending = 0;
   private readonly listEpochs = { facts: 0, projects: 0 };
+  private statusEpoch = 0;
+  private refreshEpoch = 0;
   private episodeEpoch = 0;
   private episodeRequest: { more: boolean; promise: Promise<void> } | null = null;
   private clearingHistory: Promise<void> | null = null;
@@ -77,6 +80,8 @@ export class MemoryStore {
   readonly searching = signal(false);
   readonly searchError = signal<IpcError | null>(null);
   readonly error = signal<IpcError | null>(null);
+  /** A confirmed write succeeded, but a following list refresh failed. */
+  readonly refreshError = signal<IpcError | null>(null);
   readonly busy = signal(false);
   readonly lastTransfer = signal<{ kind: 'export' | 'import'; report: TransferReport } | null>(null);
   readonly dataOperation = signal<DataOperation | null>(null);
@@ -91,6 +96,9 @@ export class MemoryStore {
   readonly projectNames = computed(() => new Map(this.projects().map((p) => [p.id, p.name] as const)));
 
   async loadAll(): Promise<void> {
+    if (this.destroyRef.destroyed) return;
+    ++this.refreshEpoch;
+    this.refreshError.set(null);
     await Promise.all([this.refreshStatus(), this.loadFacts(), this.loadProjects(), this.loadEpisodes(), this.loadSuggestions()]);
   }
 
@@ -135,10 +143,16 @@ export class MemoryStore {
    * neither clears the screen's error nor disables its controls.
    */
   async loadSuggestions(): Promise<void> {
+    if (this.destroyRef.destroyed) return;
     const epoch = ++this.suggestionEpoch;
     const current = () => epoch === this.suggestionEpoch && !this.destroyRef.destroyed;
     try {
-      const list = await this.api.listFactSuggestions();
+      const list = await withRequestDeadline(
+        () => this.api.listFactSuggestions(),
+        MEMORY_READ_TIMEOUT_MS,
+        'Fact suggestions',
+        this.destroyRef
+      );
       if (!current()) return;
       this.suggestions.set(list);
       this.pendingSuggestions.set(list.length);
@@ -175,7 +189,18 @@ export class MemoryStore {
   }
 
   refreshStatus(): Promise<void> {
-    return this.run(async () => this.status.set(await this.api.getMemoryStatus()));
+    if (this.destroyRef.destroyed) return Promise.resolve();
+    const epoch = ++this.statusEpoch;
+    const current = () => epoch === this.statusEpoch && !this.destroyRef.destroyed;
+    return this.run(async () => {
+      const status = await withRequestDeadline(
+        () => this.api.getMemoryStatus(),
+        MEMORY_READ_TIMEOUT_MS,
+        'Memory status',
+        this.destroyRef
+      );
+      if (current()) this.status.set(status);
+    }, current);
   }
 
   loadFacts(): Promise<void> {
@@ -194,13 +219,62 @@ export class MemoryStore {
     );
   }
 
-  private readList<T>(key: keyof typeof this.listEpochs, read: () => Promise<T>, apply: (value: T) => void): Promise<void> {
+  private readList<T>(
+    key: keyof typeof this.listEpochs,
+    read: () => Promise<T>,
+    apply: (value: T) => void,
+    backgroundRefresh?: number
+  ): Promise<void> {
+    if (this.destroyRef.destroyed) return Promise.resolve();
     const epoch = ++this.listEpochs[key];
     const current = () => epoch === this.listEpochs[key] && !this.destroyRef.destroyed;
+    const boundedRead = () =>
+      withRequestDeadline(read, MEMORY_READ_TIMEOUT_MS, key === 'facts' ? 'Facts' : 'Projects', this.destroyRef);
+    if (backgroundRefresh !== undefined) {
+      // Read failure cannot turn an acknowledged mutation into a failed save.
+      return boundedRead()
+        .then((value) => {
+          if (current()) apply(value);
+        })
+        .catch((error: unknown) => {
+          if (current() && backgroundRefresh === this.refreshEpoch) this.refreshError.set(IpcError.from(error));
+        });
+    }
     return this.run(async () => {
-      const value = await read();
+      const value = await boundedRead();
       if (current()) apply(value);
     }, current);
+  }
+
+  private refreshAfterWrite(keys: readonly (keyof typeof this.listEpochs)[]): void {
+    const refresh = ++this.refreshEpoch;
+    this.refreshError.set(null);
+    for (const key of keys) {
+      if (key === 'facts') {
+        void this.readList(
+          'facts',
+          () => this.api.listFacts(),
+          (facts) => this.facts.set(facts),
+          refresh
+        );
+      } else {
+        void this.readList(
+          'projects',
+          () => this.api.listProjects(),
+          (projects) => this.projects.set(projects),
+          refresh
+        );
+      }
+    }
+  }
+
+  private invalidateMemoryReads(): void {
+    ++this.listEpochs.facts;
+    ++this.listEpochs.projects;
+    ++this.statusEpoch;
+    ++this.suggestionEpoch;
+    ++this.refreshEpoch;
+    this.refreshError.set(null);
   }
 
   /** First page, or the next one with `more`. */
@@ -247,27 +321,32 @@ export class MemoryStore {
   }
 
   async saveFact(input: FactInput): Promise<Fact | null> {
+    if (this.destroyRef.destroyed || this.dataOperation()) return null;
     let saved: Fact | null = null;
     await this.run(async () => {
-      saved = await this.api.saveFact(input);
+      const fact = await this.api.saveFact(input);
       if (this.destroyRef.destroyed) return;
+      saved = fact;
       this.listEpochs.facts++;
-      const fact = saved;
       this.facts.update((list) => [fact, ...list.filter((entry) => entry.id !== fact.id)]);
       this.clearSearch();
-      await Promise.all([this.loadFacts(), this.loadProjects()]);
+      this.refreshAfterWrite(['facts', 'projects']);
     });
-    return saved;
+    return this.destroyRef.destroyed ? null : saved;
   }
 
-  deleteFact(id: string): Promise<void> {
-    return this.run(async () => {
+  async deleteFact(id: string): Promise<boolean> {
+    if (this.destroyRef.destroyed || this.dataOperation()) return false;
+    let deleted = false;
+    await this.run(async () => {
       await this.api.deleteFact(id);
       if (this.destroyRef.destroyed) return;
       this.listEpochs.facts++;
       this.facts.update((list) => list.filter((f) => f.id !== id));
       this.clearSearch();
+      deleted = true;
     });
+    return !this.destroyRef.destroyed && deleted;
   }
 
   togglePinned(fact: Fact): Promise<Fact | null> {
@@ -281,28 +360,31 @@ export class MemoryStore {
   }
 
   async saveProject(input: ProjectInput): Promise<Project | null> {
+    if (this.destroyRef.destroyed || this.dataOperation()) return null;
     let saved: Project | null = null;
     await this.run(async () => {
-      saved = await this.api.saveProject(input);
+      const project = await this.api.saveProject(input);
       if (this.destroyRef.destroyed) return;
+      saved = project;
       this.listEpochs.projects++;
-      const project = saved;
       this.projects.update((list) => [project, ...list.filter((entry) => entry.id !== project.id)]);
       this.clearSearch();
-      await this.loadProjects();
+      this.refreshAfterWrite(['projects']);
     });
-    return saved;
+    return this.destroyRef.destroyed ? null : saved;
   }
 
   deleteProject(id: string): Promise<void> {
+    if (this.destroyRef.destroyed || this.dataOperation()) return Promise.resolve();
     return this.run(async () => {
       await this.api.deleteProject(id);
       if (this.destroyRef.destroyed) return;
       this.listEpochs.projects++;
       this.listEpochs.facts++;
       this.projects.update((list) => list.filter((project) => project.id !== id));
+      this.facts.update((list) => list.filter((fact) => fact.projectId !== id));
       this.clearSearch();
-      await Promise.all([this.loadProjects(), this.loadFacts()]);
+      this.refreshAfterWrite(['projects', 'facts']);
     });
   }
 
@@ -370,6 +452,7 @@ export class MemoryStore {
     return this.runDataOperation('export', async () => {
       this.lastTransfer.set(null);
       const report = await this.api.exportMemory();
+      if (this.destroyRef.destroyed) return;
       if (report) {
         this.lastTransfer.set({ kind: 'export', report });
       }
@@ -380,6 +463,7 @@ export class MemoryStore {
     return this.runDataOperation('import', async () => {
       this.lastTransfer.set(null);
       const report = await this.api.importMemory();
+      if (this.destroyRef.destroyed) return;
       if (report) {
         this.lastTransfer.set({ kind: 'import', report });
         this.invalidateEpisodes();
@@ -392,6 +476,13 @@ export class MemoryStore {
   clearAll(): Promise<void> {
     return this.runDataOperation('clear', async () => {
       await this.api.clearMemory(CLEAR_CONFIRMATION);
+      if (this.destroyRef.destroyed) return;
+      this.invalidateMemoryReads();
+      this.status.set(null);
+      this.facts.set([]);
+      this.projects.set([]);
+      this.suggestions.set([]);
+      this.pendingSuggestions.set(0);
       this.invalidateEpisodes();
       this.episodes.set([]);
       this.episodesComplete.set(true);
@@ -403,12 +494,12 @@ export class MemoryStore {
 
   /** Creates the recovery code to show; `null` (and `dataError`) on failure. */
   async prepareEncryption(): Promise<string | null> {
-    if (this.busy()) return null;
+    if (this.destroyRef.destroyed || this.busy()) return null;
     this.dataError.set(null);
     try {
       return (await this.api.prepareMemoryEncryption()).code;
     } catch (error) {
-      this.dataError.set(IpcError.from(error));
+      if (!this.destroyRef.destroyed) this.dataError.set(IpcError.from(error));
       // A missing keychain turns the status into "unsupported".
       void this.refreshStatus();
       return null;
@@ -428,13 +519,13 @@ export class MemoryStore {
 
   /** Opens locked memory with its recovery code and loads it. */
   async unlock(code: string): Promise<boolean> {
-    if (this.unlocking()) return false;
+    if (this.destroyRef.destroyed || this.unlocking()) return false;
     this.unlocking.set(true);
     this.unlockError.set(null);
     try {
       await this.api.unlockMemory(code);
     } catch (error) {
-      this.unlockError.set(IpcError.from(error));
+      if (!this.destroyRef.destroyed) this.unlockError.set(IpcError.from(error));
       return false;
     } finally {
       this.unlocking.set(false);
@@ -446,19 +537,25 @@ export class MemoryStore {
 
   /** One database transfer/clear/encrypt operation, including its dialog and refresh. */
   private runDataOperation(kind: DataOperation, action: () => Promise<void>): Promise<void> {
+    if (this.destroyRef.destroyed) return Promise.resolve();
     if (this.dataRequest) {
       return this.dataRequest.kind === kind ? this.dataRequest.promise : Promise.resolve();
     }
     // Match disabled UI controls even for callers outside the component.
     if (this.busy()) return Promise.resolve();
-    if (kind !== 'export') this.clearSearch();
+    if (kind !== 'export') {
+      this.invalidateMemoryReads();
+      this.clearSearch();
+    }
     this.dataOperation.set(kind);
     this.dataError.set(null);
     this.error.set(null);
     this.pending++;
     this.busy.set(true);
     const promise = action()
-      .catch((error: unknown) => this.dataError.set(IpcError.from(error)))
+      .catch((error: unknown) => {
+        if (!this.destroyRef.destroyed) this.dataError.set(IpcError.from(error));
+      })
       .finally(() => {
         this.dataRequest = null;
         this.dataOperation.set(null);

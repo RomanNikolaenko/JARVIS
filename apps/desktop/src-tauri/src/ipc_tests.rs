@@ -731,8 +731,17 @@ fn agent_commands_report_state_and_validate_input() {
         json!([])
     );
     assert_eq!(
-        invoke(&h.main, "clear_finished_agent_tasks", json!({})).expect("clear"),
-        json!(1)
+        invoke(
+            &h.main,
+            "clear_finished_agent_tasks",
+            json!({ "returnDeletedIds": true }),
+        )
+        .expect("clear and return IDs"),
+        json!([task["id"]])
+    );
+    assert_eq!(
+        invoke(&h.main, "clear_finished_agent_tasks", json!({})).expect("clear and return count"),
+        json!(0)
     );
 }
 

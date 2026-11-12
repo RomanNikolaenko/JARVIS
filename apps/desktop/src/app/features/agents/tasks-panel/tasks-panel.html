@@ -9,12 +9,12 @@
           [maxlength]="maxGoalLength"
           placeholder="e.g. Find the TODO comments in src and list them by file"
           [ngModel]="goal()"
-          (ngModelChange)="goal.set($event)"></textarea>
+          (ngModelChange)="onGoalChange($event)"></textarea>
       </label>
       <div class="options">
         <label class="field model">
           <span class="field-label">Model</span>
-          <select name="model" [ngModel]="modelKey()" (ngModelChange)="modelKey.set($event)">
+          <select name="model" [ngModel]="modelKey()" (ngModelChange)="onModelChange($event)">
             <option value="">Automatic</option>
             @if (selectionUnavailable()) {
               <option [value]="modelKey()" disabled>Selected model unavailable</option>
@@ -35,7 +35,7 @@
             max="50"
             [placeholder]="defaults()?.maxSteps ?? 12"
             [ngModel]="maxSteps()"
-            (ngModelChange)="maxSteps.set($event)" />
+            (ngModelChange)="onStepsChange($event)" />
         </label>
         <label class="field">
           <span class="field-label">Minutes</span>
@@ -46,7 +46,7 @@
             max="60"
             [placeholder]="(defaults()?.maxDurationSecs ?? 600) / 60"
             [ngModel]="maxMinutes()"
-            (ngModelChange)="maxMinutes.set($event)" />
+            (ngModelChange)="onMinutesChange($event)" />
         </label>
       </div>
       @if (selectionUnavailable()) {
@@ -73,9 +73,12 @@
         <h2>Tasks</h2>
         <small class="dim">Journals with unknown action results are retained for manual review.</small>
       </div>
-      <button type="button" class="ghost small" (click)="store.clearFinished()" [disabled]="!store.hasFinished() || store.busy()">
-        Clear finished
-      </button>
+      <div class="list-actions">
+        <button type="button" class="ghost small" (click)="refreshTasks()" [disabled]="store.busy()">Refresh tasks</button>
+        <button type="button" class="ghost small" (click)="clearFinished()" [disabled]="!store.hasFinished() || store.busy()">
+          Clear finished
+        </button>
+      </div>
     </div>
     @if (store.tasks().length === 0) {
       <p class="empty">No tasks yet.</p>
@@ -83,11 +86,7 @@
       <ul class="tasks">
         @for (item of store.tasks(); track item.id) {
           <li>
-            <button
-              type="button"
-              class="task-item"
-              [class.active]="store.selectedId() === item.id"
-              (click)="store.select(item.id)">
+            <button type="button" class="task-item" [class.active]="store.selectedId() === item.id" (click)="selectTask(item.id)">
               <span class="task-goal">{{ item.goal }}</span>
               <span class="task-meta">
                 <jv-status-badge [status]="statusTone(item.status)" [label]="statusLabel(item.status)" />
@@ -103,6 +102,7 @@
 
   <section class="detail" aria-live="polite">
     @if (task(); as task) {
+      @let selectionVersion = store.selectionVersion();
       <header class="detail-header">
         <div class="detail-title">
           <h2>{{ task.goal }}</h2>
@@ -116,19 +116,25 @@
         </div>
         <div class="controls">
           @if (task.status === 'running' || task.status === 'waitingForApproval') {
-            <button type="button" class="small" (click)="store.pause(task.id)">Pause</button>
+            <button type="button" class="small" [disabled]="store.isControlling('pause', task.id)" (click)="pause(task.id)">
+              Pause
+            </button>
           }
           @if (task.status === 'paused') {
             <button type="button" class="small primary" [disabled]="!canResume(task)" (click)="resume(task)">Resume</button>
           }
           @if (!finished()) {
-            <button type="button" class="small danger" (click)="store.cancel(task.id)">
+            <button
+              type="button"
+              class="small danger"
+              [disabled]="store.isControlling('cancel', task.id)"
+              (click)="cancel(task.id)">
               <jv-icon name="stop" [size]="13" />
               Cancel
             </button>
           }
           @if (canDeleteReviewed(task)) {
-            <button type="button" class="small danger" [disabled]="store.busy()" (click)="confirmDeleteId.set(task.id)">
+            <button type="button" class="small danger" [disabled]="store.busy()" (click)="confirmDelete(task, selectionVersion)">
               Delete reviewed journal
             </button>
           }
@@ -165,19 +171,17 @@
         }
       }
 
-      @if (confirmDeleteId() === task.id) {
+      @if (confirmingJournal() === task && canDeleteReviewed(task)) {
         <div class="notice warning" role="alert">
           <jv-icon name="warning" [size]="15" />
           <span>
             Delete only after you have checked the action's actual effects. This removes this journal only; its audit entries are
             retained.
           </span>
-          <button type="button" class="danger small" [disabled]="store.busy()" (click)="deleteReviewed(task.id)">
+          <button type="button" class="danger small" [disabled]="store.busy()" (click)="deleteReviewed(task, selectionVersion)">
             Delete journal
           </button>
-          <button type="button" class="ghost small" [disabled]="store.busy()" (click)="confirmDeleteId.set(null)">
-            Keep journal
-          </button>
+          <button type="button" class="ghost small" (click)="cancelDelete()">Keep journal</button>
         </div>
       }
 

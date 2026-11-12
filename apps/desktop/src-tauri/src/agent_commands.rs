@@ -6,6 +6,7 @@
 use jarvis_core::jarvis_agent::{AgentTask, TaskSummary};
 use jarvis_core::jarvis_security::{AuditEntry, AuditVerification, PendingApproval};
 use jarvis_core::{AgentStartRequest, AgentStatus, CoreError, ErrorPayload, Settings, ToolInfo};
+use serde::Serialize;
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
@@ -62,17 +63,35 @@ pub async fn resume_agent_task(state: State<'_, AppState>, id: Uuid) -> CommandR
     Ok(state.core().resume_agent_task(id).await?)
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ClearedAgentTasks {
+    Count(u32),
+    TaskIds(Vec<Uuid>),
+}
+
 /// Clears known finished tasks, or explicitly deletes one reviewed journal.
+/// Clients can request the exact removed IDs instead of the default count.
 #[tauri::command]
 pub async fn clear_finished_agent_tasks(
     state: State<'_, AppState>,
     reviewed_task_id: Option<Uuid>,
-) -> CommandResult<u32> {
-    let removed = match reviewed_task_id {
-        Some(id) => state.core().delete_reviewed_agent_task(id).await?,
-        None => state.core().clear_finished_agent_tasks().await?,
+    return_deleted_ids: Option<bool>,
+) -> CommandResult<ClearedAgentTasks> {
+    let ids = match reviewed_task_id {
+        Some(id) => {
+            let removed = state.core().delete_reviewed_agent_task(id).await?;
+            (removed > 0).then_some(id).into_iter().collect()
+        }
+        None => state.core().clear_finished_agent_task_ids().await?,
     };
-    Ok(u32::try_from(removed).unwrap_or(u32::MAX))
+    if return_deleted_ids.unwrap_or(false) {
+        Ok(ClearedAgentTasks::TaskIds(ids))
+    } else {
+        Ok(ClearedAgentTasks::Count(
+            u32::try_from(ids.len()).unwrap_or(u32::MAX),
+        ))
+    }
 }
 
 #[tauri::command]

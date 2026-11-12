@@ -48,6 +48,10 @@ export class MemoryPage {
     void this.store.loadAll();
   }
 
+  protected reloadMemory(): void {
+    if (!this.store.busy()) void this.store.loadAll();
+  }
+
   protected async unlock(event: Event): Promise<void> {
     event.preventDefault();
     const code = this.recoveryCode().trim();

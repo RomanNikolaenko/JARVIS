@@ -15,7 +15,9 @@
       <div class="controls">
         <label class="select">
           <span>Project</span>
-          <select [disabled]="store.busy() || store.loading() || store.readOnly()" (change)="onProject($event)">
+          <select
+            [disabled]="store.busy() || store.loading() || store.savingNote() || store.readOnly()"
+            (change)="onProject($event)">
             <option value="" [selected]="store.projectId() === null">None</option>
             @for (project of memory.projects(); track project.id) {
               <option [value]="project.id" [selected]="project.id === store.projectId()">
@@ -128,6 +130,52 @@
     }
     @if (store.cancelError(); as error) {
       <div class="notice error" role="alert">Could not confirm stopping: {{ error.message }} You can try Stop again.</div>
+    }
+    @if (store.canCheckSaved()) {
+      <section class="saved-check" aria-label="Check saved messages" [attr.aria-busy]="store.checkingSavedMessages()">
+        <div class="saved-check-actions">
+          <span>The interrupted request may still be running. You can check what has been saved.</span>
+          <button
+            type="button"
+            class="ghost small"
+            [disabled]="store.checkingSavedMessages()"
+            (click)="store.checkSavedMessages()">
+            {{ store.checkingSavedMessages() ? 'Checking…' : store.savedMessages() ? 'Check again' : 'Check saved messages' }}
+          </button>
+        </div>
+        @if (store.checkingSavedMessages()) {
+          <span class="dim" role="status">Loading saved messages…</span>
+        }
+        @if (store.savedMessagesError(); as error) {
+          <span class="error-text" role="alert">Could not check saved messages: {{ error.message }}</span>
+        }
+        @if (store.savedMessages(); as saved) {
+          <details class="saved-messages" open>
+            <summary>Saved messages · {{ saved.messages.length }}</summary>
+            <p class="dim">This is what was saved before this check. The request may still be running.</p>
+            @for (message of saved.messages; track message.id) {
+              <article class="saved-message">
+                <div class="meta">
+                  {{ message.role === 'user' ? 'You' : 'JARVIS' }}
+                  @if (message.model) {
+                    <span class="dim">· {{ message.model }}</span>
+                  }
+                  @if (message.status === 'cancelled') {
+                    <span class="state">stopped</span>
+                  }
+                </div>
+                @if (message.role === 'assistant') {
+                  <div class="jv-markdown" [innerHTML]="message.content | markdown"></div>
+                } @else {
+                  <p class="saved-user-text">{{ message.content }}</p>
+                }
+              </article>
+            } @empty {
+              <p>No saved messages yet. This does not confirm whether the request ran.</p>
+            }
+          </details>
+        }
+      </section>
     }
     @if (store.summary(); as summary) {
       <div class="summary">
@@ -247,11 +295,11 @@
                 (input)="onRememberInput($event)"></textarea>
               <div class="note-actions">
                 <span class="dim">Edit it down to the fact worth keeping.</span>
-                <button type="button" class="ghost small" (click)="rememberId.set(null)">Cancel</button>
+                <button type="button" class="ghost small" (click)="cancelRemember()">Cancel</button>
                 <button
                   type="button"
                   class="primary small"
-                  [disabled]="!rememberDraft().trim() || memory.busy()"
+                  [disabled]="!rememberDraft().trim() || memory.busy() || rememberSaving() || store.loading()"
                   (click)="saveRemember(entry)">
                   Save fact
                 </button>
@@ -328,7 +376,10 @@
     <jv-chat-agent-action
       [text]="draft()"
       [model]="agentModel()"
-      [disabled]="store.busy() || store.readOnly() || store.selectionUnavailable()"
+      [readContext]="readAgentContext"
+      [readRevision]="readAgentRevision"
+      [isCurrent]="currentAgentSubmission"
+      [disabled]="!store.acceptsInput()"
       (busyChange)="agentStarting.set($event)"
       (started)="onAgentStarted($event)" />
     <footer class="composer">

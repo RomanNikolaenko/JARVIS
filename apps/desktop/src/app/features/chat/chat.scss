@@ -224,6 +224,53 @@ button.link {
   padding: 8px 4px;
 }
 
+.saved-check {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--jv-border-strong);
+  border-radius: var(--jv-radius-sm);
+  font-size: 12.5px;
+}
+
+.saved-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.saved-messages {
+  max-height: min(35vh, 300px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+}
+
+.saved-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--jv-border);
+
+  .meta {
+    flex-wrap: wrap;
+  }
+}
+
+.saved-user-text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .message {
   gap: 6px;
   max-width: 82%;

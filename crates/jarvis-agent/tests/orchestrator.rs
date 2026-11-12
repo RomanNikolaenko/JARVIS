@@ -1130,7 +1130,7 @@ async fn interrupted_read_only_tools_remain_resumable_after_shutdown() {
 }
 
 #[tokio::test]
-async fn bulk_clear_retains_terminal_journals_with_unresolved_actions() {
+async fn bulk_clear_returns_only_ids_of_deleted_journals() {
     let h = harness();
     let model = ScriptedModel::new(&[
         r#"{"tool":"read_file","input":{"path":"a.txt"}}"#,
@@ -1138,6 +1138,10 @@ async fn bulk_clear_retains_terminal_journals_with_unresolved_actions() {
     ]);
     let start = h.manager.start(task("Read"), model).await.unwrap();
     let completed = finished(&h.manager, start.id).await;
+    let mut cancelled = completed.clone();
+    cancelled.id = Uuid::new_v4();
+    cancelled.status = TaskStatus::Cancelled;
+    h.store.save(&cancelled).await.unwrap();
     let mut retained = Vec::new();
     for outcome in [StepOutcome::Unknown, StepOutcome::InProgress] {
         let mut unresolved = completed.clone();
@@ -1153,11 +1157,17 @@ async fn bulk_clear_retains_terminal_journals_with_unresolved_actions() {
         h.store.save(&unresolved).await.unwrap();
         retained.push(unresolved);
     }
-    assert_eq!(h.manager.delete_finished().await.unwrap(), 1);
-    assert!(matches!(
-        h.manager.get(completed.id).await,
-        Err(AgentError::NotFound)
-    ));
+    let removed: BTreeSet<_> = h
+        .manager
+        .delete_finished_ids()
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(removed, BTreeSet::from([completed.id, cancelled.id]));
+    for id in removed {
+        assert!(matches!(h.manager.get(id).await, Err(AgentError::NotFound)));
+    }
     for unresolved in &retained {
         assert_eq!(h.manager.get(unresolved.id).await.unwrap(), *unresolved);
     }
@@ -1181,6 +1191,45 @@ async fn bulk_clear_retains_terminal_journals_with_unresolved_actions() {
     for unresolved in retained.iter().skip(1) {
         assert_eq!(h.manager.get(unresolved.id).await.unwrap(), *unresolved);
     }
+}
+
+#[tokio::test]
+async fn a_malformed_id_rolls_back_bulk_deletion() {
+    let h = harness();
+    let model = ScriptedModel::new(&[r#"{"final":"done"}"#]);
+    let start = h
+        .manager
+        .start(task("Complete a task"), model)
+        .await
+        .unwrap();
+    let done = finished(&h.manager, start.id).await;
+    h.db.call(|conn| {
+        conn.execute(
+            "INSERT INTO agent_tasks (id, goal, status, limits, plan, steps, created_at, updated_at)
+             VALUES ('malformed', 'Corrupt fixture', 'completed', '{}', '[]', '[]', 0, 0)",
+            [],
+        )?;
+        Ok::<_, jarvis_storage::StorageError>(())
+    })
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        h.manager.delete_finished_ids().await,
+        Err(AgentError::Storage(_))
+    ));
+    assert_eq!(h.manager.get(done.id).await.unwrap(), done);
+    let remaining =
+        h.db.call(|conn| {
+            Ok::<_, jarvis_storage::StorageError>(conn.query_row(
+                "SELECT count(*) FROM agent_tasks",
+                [],
+                |row| row.get::<_, u32>(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(remaining, 2);
 }
 
 #[tokio::test]
@@ -1360,6 +1409,7 @@ async fn a_saved_unknown_outcome_recovers_as_failed_and_can_be_reviewed() {
             input: Some(r#"{"path":"effect.txt","content":"once"}"#.to_owned()),
             summary: Some("Create effect.txt".to_owned()),
             decision: Some("approved by you".to_owned()),
+            denied_action_fingerprint: None,
             outcome: StepOutcome::Unknown,
             output: Some(diagnostic.to_owned()),
             started_at_ms: 1,
@@ -2034,6 +2084,70 @@ async fn adding_overwrite_to_a_denied_create_is_the_same_action() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_denial_is_restored_when_a_task_resumes_after_restart() {
+    for legacy_journal in [false, true] {
+        let h = harness();
+        let first = ScriptedModel::new(&[
+            r#"{"tool":"write_file","input":{"path":"note.txt","content":"private"}}"#,
+            "<block>",
+        ]);
+        let start = h
+            .manager
+            .start(task("Write a note"), first.clone())
+            .await
+            .unwrap();
+        let approval = wait_for_approval(&h.approvals, start.id).await;
+        assert!(h.approvals.resolve(approval.id, false));
+        wait_for_turns(&first, 2).await;
+        h.manager.shutdown().await;
+
+        let mut paused = h.store.get(start.id).await.unwrap();
+        assert_eq!(paused.status, TaskStatus::Paused);
+        let denied = paused
+            .steps
+            .iter_mut()
+            .find(|step| step.decision.as_deref() == Some("denied by you"))
+            .unwrap();
+        assert!(denied.denied_action_fingerprint.is_some());
+        if legacy_journal {
+            denied.denied_action_fingerprint = None;
+            h.store.save(&paused).await.unwrap();
+        } else {
+            let mut settings = h.settings.lock().unwrap();
+            let mut policy = settings.policy.config().clone();
+            policy.auto_approve_medium = true;
+            settings.policy = SecurityPolicy::new(policy);
+        }
+
+        let tool = ToolRegistry::builtin().get("write_file").unwrap();
+        let (reopened, _) = manager_with_tool(&h, tool);
+        assert_eq!(reopened.recover().await.unwrap(), 0);
+        let resumed = ScriptedModel::new(&[
+            r#"{"tool":"write_file","input":{"path":"./note.txt","content":"private","overwrite":true}}"#,
+            r#"{"final":"The note was not written"}"#,
+        ]);
+        reopened.resume(start.id, resumed.clone()).await.unwrap();
+        let done = finished(&reopened, start.id).await;
+        assert_eq!(done.status, TaskStatus::Completed);
+        assert!(!h.dir.path().join("note.txt").exists());
+        assert!(h.approvals.pending().is_empty());
+        let actions = actions(&done);
+        assert_eq!(actions.len(), 2);
+        assert!(actions[0].denied_action_fingerprint.is_some());
+        assert_eq!(actions[1].outcome, StepOutcome::Denied);
+        assert_eq!(
+            actions[1].decision.as_deref(),
+            Some("already denied by you")
+        );
+        assert!(
+            resumed
+                .last_message(1)
+                .contains("already denied this exact action")
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unanswered_approval_times_out_as_not_allowed() {
     let h = harness_with(2, Duration::from_millis(200), &[]);
@@ -2392,6 +2506,7 @@ async fn interrupted_tasks_are_recovered_as_paused_and_resume_with_their_journal
             input: Some(r#"{"path":"a.txt"}"#.to_owned()),
             summary: Some("Read a.txt".to_owned()),
             decision: Some("allowed (read-only)".to_owned()),
+            denied_action_fingerprint: None,
             outcome: StepOutcome::Succeeded,
             output: Some("alpha".to_owned()),
             started_at_ms: 1,

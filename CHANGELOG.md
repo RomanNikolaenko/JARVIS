@@ -57,6 +57,54 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Fixed
 
+- Journal cleanup has a 30-second acknowledgement deadline. Refresh tasks
+  checks the open journal by ID and preserves journals that survive bulk
+  cleanup. Confirmed bulk and reviewed deletions remove the exact deleted
+  journals immediately, even if the task list fails to reload.
+- An agent honors journaled denials after a restart and after a permission
+  change, so resuming a task keeps the user's decision on the same action.
+- Start, Pause, Resume and Cancel stop waiting for acknowledgement after
+  30 seconds. An uncertain result directs the user to check the task list or
+  journal.
+  Refresh tasks reloads the list, and a pending Pause or Resume leaves
+  Cancel available.
+- Approval decisions expire in the core even if the waiting task has yet to
+  resume. The dialog guards against stale clicks and focuses Deny for the next
+  request even while a previous decision is awaiting confirmation. After
+  30 seconds without a reply, the dialog reports uncertain delivery. Any retry
+  requires a new click or keypress.
+- Late agent creation acknowledgements keep the task in the list without
+  stealing a newer journal selection or returning to a closed chat. Run as
+  agent preserves changed conversations, drafts and model choices, including
+  changes made before the next render; pending user navigation takes priority.
+  The Agents form also keeps newer goal and limit edits. Unconfirmed task
+  creation is reported as uncertain and is never retried automatically.
+- Memory confirms saved facts and projects before refreshing their lists.
+  Refresh reads have a 30-second deadline and run without blocking the screen;
+  a separate error offers Reload memory without repeating the saved write.
+  Newer fields and replacement editors survive late save completion, and
+  further edits to a newly saved record keep its ID instead of creating a copy.
+- Failed fact deletion keeps its draft. Confirmed project/all-memory deletion
+  clears the corresponding cached records even if reloading the lists fails.
+- Pinned-note saves stop blocking the chat after 30 seconds without a reply.
+  An unresolved native write remains protected from overlapping saves, and late
+  acknowledgements cannot overwrite another note editor or navigate back to a
+  closed chat. The first message keeps an unsaved note; a new chat gets a fresh
+  note editor even before either chat has an ID.
+- Finishing a Remember action keeps newer edits and other open fact editors.
+  Stale actions cannot save an old message under a different conversation.
+- After a chat request loses its connection, **Check saved messages** shows
+  what was saved without sending the request again or clearing the next draft,
+  images or pinned-note edits. The preview keeps the interrupted local reply
+  visible; an empty saved result does not claim that the request finished.
+  Failed checks can be retried, and late results cannot appear in another chat.
+- A refused chat submission keeps its text and images for an explicit retry.
+  Acknowledged turns and requests with an uncertain transport/storage outcome
+  are not restored for resending. Edits and images added while waiting survive
+  the acknowledgement; voice requests use the same attachment handling.
+  Conversation creation and send acknowledgement now have 30-second frontend
+  deadlines, without interrupting an already admitted reply.
+
 - Agents on small local models read the files you name. The agent's
   instructions showed example paths, and a 3B model copied them into its
   calls ("src/probe.txt", "notes.txt") instead of the name in the task; the

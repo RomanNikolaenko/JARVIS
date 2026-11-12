@@ -26,7 +26,7 @@ import { MarkdownPipe } from '../../shared/markdown/markdown';
 import { levelPercent } from '../voice/voice';
 import { AttachMenu } from './attach-menu/attach-menu';
 import { ConversationList } from './conversation-list/conversation-list';
-import { ChatAgentAction } from './chat-agent-action';
+import { ChatAgentAction, type ChatAgentSubmission } from './chat-agent-action';
 
 /** Distance from the bottom (px) within which new content keeps the view pinned. */
 const STICKY_SCROLL_THRESHOLD = 80;
@@ -60,7 +60,13 @@ export class Chat {
   private readonly destroyRef = inject(DestroyRef);
   private readonly scroller = viewChild<ElementRef<HTMLElement>>('scroller');
   private stickToBottom = true;
-  private noteFor: string | null | undefined = undefined;
+  private noteContext: number | undefined;
+  private noteRevision = 0;
+  private draftRevision = 0;
+  private rememberSession = 0;
+  private rememberRevision = 0;
+  private rememberContext = 0;
+  private rememberEntry: ChatEntry | null = null;
 
   protected readonly automatic = AUTOMATIC;
   protected readonly maxLength = MAX_MESSAGE_LENGTH;
@@ -70,6 +76,22 @@ export class Chat {
   protected readonly draft = signal('');
   protected readonly agentStarting = signal(false);
   protected readonly agentModel = this.store.selection;
+  protected readonly readAgentContext = () => this.store.inputContext();
+  protected readonly readAgentRevision = () =>
+    this.draftRevision + this.noteRevision + this.rememberRevision + this.rememberSession;
+  protected readonly currentAgentSubmission = (submission: ChatAgentSubmission): boolean => {
+    const model = this.store.selection();
+    return (
+      !this.destroyRef.destroyed &&
+      this.router.currentNavigation() === null &&
+      this.store.acceptsInput() &&
+      submission.context === this.store.inputContext() &&
+      submission.revision === this.readAgentRevision() &&
+      submission.text === this.draft() &&
+      submission.model?.providerId === model?.providerId &&
+      submission.model?.model === model?.model
+    );
+  };
   protected readonly noteOpen = signal(false);
   protected readonly noteDraft = signal('');
   protected readonly noteSaved = signal(false);
@@ -77,6 +99,7 @@ export class Chat {
   protected readonly rememberId = signal<string | null>(null);
   protected readonly rememberDraft = signal('');
   protected readonly rememberedId = signal<string | null>(null);
+  protected readonly rememberSaving = signal(false);
   protected readonly keyOf = (option: ModelOption): string => optionKey(option.provider.id, option.model.id);
 
   protected readonly title = computed(() => {
@@ -131,16 +154,18 @@ export class Chat {
         }
       });
 
-    // Load the note when another conversation opens; keep unsaved edits
-    // while the open one is updated (e.g. its title after a reply).
+    // A first send or note save creates an id for the same editor session.
+    // Only a successful open or an explicit new chat replaces its draft.
     effect(() => {
       const conversation = this.store.conversation();
-      const id = conversation?.id ?? null;
-      if (id !== this.noteFor) {
-        const createdForNote = this.noteFor === null && id !== null && id === this.store.noteCreationId();
-        this.noteFor = id;
-        if (!createdForNote) this.noteDraft.set(conversation?.pinnedNote ?? '');
+      const context = this.store.editorContext();
+      if (context !== this.noteContext) {
+        this.noteContext = context;
+        ++this.noteRevision;
+        this.noteDraft.set(conversation?.pinnedNote ?? '');
         this.noteSaved.set(false);
+        this.cancelRemember();
+        this.rememberedId.set(null);
       }
     });
 
@@ -169,14 +194,25 @@ export class Chat {
   // ---- Pinned note (working memory) ----
 
   protected onNoteInput(event: Event): void {
+    ++this.noteRevision;
     this.noteDraft.set((event.target as HTMLTextAreaElement).value);
     this.noteSaved.set(false);
   }
 
   protected async saveNote(): Promise<void> {
+    if (this.destroyRef.destroyed || this.noteContext !== this.store.editorContext()) return;
     const draft = this.noteDraft();
+    const revision = this.noteRevision;
+    const context = this.store.inputContext();
+    const editor = this.store.editorContext();
     if (await this.store.setPinnedNote(draft.trim())) {
-      if (this.noteDraft() !== draft) return;
+      if (
+        this.destroyRef.destroyed ||
+        context !== this.store.inputContext() ||
+        editor !== this.store.editorContext() ||
+        revision !== this.noteRevision
+      )
+        return;
       this.noteSaved.set(true);
       const id = this.store.conversation()?.id;
       if (id) {
@@ -188,30 +224,76 @@ export class Chat {
   // ---- Remember (semantic memory) ----
 
   protected startRemember(entry: ChatEntry): void {
+    if (
+      this.destroyRef.destroyed ||
+      this.store.loading() ||
+      !this.canRemember() ||
+      entry.status === 'streaming' ||
+      !this.store.entries().includes(entry)
+    )
+      return;
+    ++this.rememberSession;
+    this.rememberContext = this.store.editorContext();
+    this.rememberEntry = entry;
     this.rememberDraft.set(withoutReasoning(entry.content).slice(0, MAX_FACT_LENGTH));
     this.rememberId.set(entry.id);
   }
 
   protected onRememberInput(event: Event): void {
+    ++this.rememberRevision;
     this.rememberDraft.set((event.target as HTMLTextAreaElement).value);
+  }
+
+  protected cancelRemember(): void {
+    ++this.rememberSession;
+    this.rememberEntry = null;
+    this.rememberId.set(null);
+    this.rememberDraft.set('');
   }
 
   protected async saveRemember(entry: ChatEntry): Promise<void> {
     const content = this.rememberDraft().trim();
-    if (!content) {
+    if (
+      !content ||
+      content.length > MAX_FACT_LENGTH ||
+      this.destroyRef.destroyed ||
+      this.rememberSaving() ||
+      this.store.loading() ||
+      !this.canRemember() ||
+      this.rememberId() !== entry.id ||
+      this.rememberEntry !== entry ||
+      this.rememberContext !== this.store.editorContext() ||
+      !this.store.entries().includes(entry)
+    ) {
       return;
     }
+    const session = this.rememberSession;
+    const revision = this.rememberRevision;
+    const context = this.store.inputContext();
+    const editor = this.store.editorContext();
     const conversation = this.store.conversation();
-    const fact = await this.memory.saveFact({
-      id: null,
-      content,
-      projectId: this.store.projectId(),
-      pinned: false,
-      sourceConversationId: conversation && !conversation.temporary ? conversation.id : null,
-    });
-    if (fact) {
-      this.rememberId.set(null);
-      this.rememberedId.set(entry.id);
+    this.rememberSaving.set(true);
+    try {
+      const fact = await this.memory.saveFact({
+        id: null,
+        content,
+        projectId: this.store.projectId(),
+        pinned: false,
+        sourceConversationId: conversation && !conversation.temporary ? conversation.id : null,
+      });
+      if (
+        fact &&
+        !this.destroyRef.destroyed &&
+        session === this.rememberSession &&
+        revision === this.rememberRevision &&
+        context === this.store.inputContext() &&
+        editor === this.store.editorContext()
+      ) {
+        this.cancelRemember();
+        this.rememberedId.set(entry.id);
+      }
+    } finally {
+      this.rememberSaving.set(false);
     }
   }
 
@@ -222,11 +304,15 @@ export class Chat {
   }
 
   protected onInput(event: Event): void {
+    ++this.draftRevision;
     this.draft.set((event.target as HTMLTextAreaElement).value);
   }
 
-  protected onAgentStarted(submitted: string): void {
-    if (this.draft() === submitted) this.draft.set('');
+  protected onAgentStarted(submission: ChatAgentSubmission): void {
+    if (this.currentAgentSubmission(submission)) {
+      ++this.draftRevision;
+      this.draft.set('');
+    }
   }
 
   protected onKeydown(event: KeyboardEvent): void {
@@ -240,20 +326,30 @@ export class Chat {
     if (!this.canSend()) {
       return;
     }
-    const attachments = this.vision.take();
+    const submission = this.vision.prepareSend();
     // An image alone is a question about the image.
-    const text = this.draft().trim() || (attachments.length ? 'What is in this image?' : '');
-    this.draft.set('');
+    const text = this.draft().trim() || (submission.attachments.length ? 'What is in this image?' : '');
+    const revision = this.draftRevision;
     this.stickToBottom = true;
     const isNew = !this.store.conversation();
     const context = this.store.inputContext();
-    void this.store.send(text, false, attachments).then(() => {
-      if (this.destroyRef.destroyed || context !== this.store.inputContext()) return;
-      const id = this.store.conversation()?.id;
-      if (isNew && id) {
-        void this.router.navigate([], { queryParams: { c: id }, replaceUrl: true });
-      }
-    });
+    void this.store
+      .send(text, false, submission.attachments, (result) => {
+        if (context !== this.store.inputContext() || result === 'notSent') return;
+        submission.consume();
+        if (this.destroyRef.destroyed) return;
+        if (revision === this.draftRevision) {
+          ++this.draftRevision;
+          this.draft.set('');
+        }
+      })
+      .then((result) => {
+        if (this.destroyRef.destroyed || context !== this.store.inputContext()) return;
+        const id = this.store.conversation()?.id;
+        if (result === 'accepted' && isNew && id) {
+          void this.router.navigate([], { queryParams: { c: id }, replaceUrl: true });
+        }
+      });
   }
 
   protected stop(): void {
@@ -288,11 +384,15 @@ export class Chat {
   protected onModelChange(event: Event): void {
     const key = (event.target as HTMLSelectElement).value;
     if (key === AUTOMATIC) {
+      ++this.draftRevision;
       this.store.select(null);
       return;
     }
     const option = this.store.modelOptions().find((o) => this.keyOf(o) === key);
-    if (option) this.store.select(option);
+    if (option) {
+      ++this.draftRevision;
+      this.store.select(option);
+    }
   }
 
   /** Tooltip describing how the context of a reply was built. */

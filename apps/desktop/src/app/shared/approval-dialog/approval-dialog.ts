@@ -1,20 +1,39 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DOCUMENT,
   DestroyRef,
   ElementRef,
+  afterRenderEffect,
   computed,
-  effect,
   inject,
   signal,
   viewChild,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import type { PendingApproval } from '@jarvis/shared-types';
 
 import { AgentsStore } from '../../core/state/agents.store';
 import { Icon } from '../icon/icon';
 
 const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' } as const;
+
+function sameApproval(a: PendingApproval | null, b: PendingApproval | null): boolean {
+  return (
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.id === b.id &&
+      a.taskId === b.taskId &&
+      a.tool === b.tool &&
+      a.risk === b.risk &&
+      a.summary === b.summary &&
+      a.reason === b.reason &&
+      a.details === b.details &&
+      a.requestedAtMs === b.requestedAtMs &&
+      a.expiresAtMs === b.expiresAtMs)
+  );
+}
 
 /**
  * Asks the user about an agent action the security policy holds. Shown on
@@ -25,13 +44,16 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
   selector: 'jv-approval-dialog',
   imports: [Icon, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { '(document:keydown)': 'trapTab($event)', '(document:focusin)': 'containFocus()' },
   template: `
     @if (current(); as approval) {
       <div class="backdrop">
         <section
+          #dialog
           class="dialog"
           [class]="'risk-' + approval.risk"
           role="alertdialog"
+          tabindex="-1"
           aria-modal="true"
           aria-labelledby="approval-title"
           aria-describedby="approval-summary">
@@ -72,13 +94,11 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
             @if (approval.taskId) {
               <a class="task-link" routerLink="/agents" [queryParams]="{ task: approval.taskId }">Open the task</a>
             }
-            <button #deny type="button" class="ghost" [disabled]="deciding()" (click)="decide(approval.id, false)">Deny</button>
-            <button type="button" class="primary" [disabled]="deciding()" (click)="decide(approval.id, true)">Allow once</button>
+            <button #deny type="button" class="ghost" [disabled]="deciding()" (click)="decide(approval, false)">Deny</button>
+            <button type="button" class="primary" [disabled]="deciding()" (click)="decide(approval, true)">Allow once</button>
           </footer>
           @if (decisionError(); as error) {
-            @if (error.id === approval.id) {
-              <p class="warning" role="alert">{{ error.message }}</p>
-            }
+            <p class="warning" role="alert">{{ error }}</p>
           }
         </section>
       </div>
@@ -217,32 +237,56 @@ const RISK_LABEL = { low: 'Low risk', medium: 'Medium risk', high: 'High risk' }
 })
 export class ApprovalDialog {
   private readonly store = inject(AgentsStore);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly document = inject(DOCUMENT);
   private readonly now = signal(Date.now());
+  private readonly dialog = viewChild<ElementRef<HTMLElement>>('dialog');
   private readonly denyButton = viewChild<ElementRef<HTMLButtonElement>>('deny');
-  protected readonly deciding = signal(false);
-  protected readonly decisionError = signal<{ id: string; message: string } | null>(null);
+  private readonly failure = signal<{ approval: PendingApproval; message: string } | null>(null);
+  private previousFocus: HTMLElement | null = null;
+  private decisionGeneration = 0;
 
-  protected readonly current = computed(() => this.store.approvals()[0] ?? null);
-  protected readonly count = computed(() => this.store.approvals().length);
+  private readonly queue = computed(() => this.store.approvals().filter((approval) => approval.expiresAtMs > this.now()));
+  protected readonly current = computed(() => this.queue()[0] ?? null, { equal: sameApproval });
+  protected readonly count = computed(() => this.queue().length);
+  protected readonly deciding = computed(() => {
+    const approval = this.current();
+    return approval !== null && this.store.decidingApprovalIds().includes(approval.id);
+  });
+  protected readonly decisionError = computed(() => {
+    const failure = this.failure();
+    return failure && sameApproval(failure.approval, this.current()) ? failure.message : null;
+  });
   protected readonly remaining = computed(() => {
     const approval = this.current();
     if (!approval) {
       return '';
     }
-    const seconds = Math.max(0, Math.round((approval.expiresAtMs - this.now()) / 1000));
+    const seconds = Math.ceil((approval.expiresAtMs - this.now()) / 1000);
     const minutes = Math.floor(seconds / 60);
     return minutes > 0 ? `${minutes} min ${seconds % 60} s` : `${seconds} s`;
   });
 
   constructor() {
     const timer = setInterval(() => this.now.set(Date.now()), 1000);
-    inject(DestroyRef).onDestroy(() => clearInterval(timer));
-    // Focus "Deny" whenever a new request is shown.
-    effect(() => {
-      const id = this.current()?.id;
-      const button = this.denyButton();
-      if (id && button) {
-        button.nativeElement.focus();
+    this.destroyRef.onDestroy(() => {
+      clearInterval(timer);
+      this.restoreFocus();
+    });
+    afterRenderEffect(() => {
+      const dialog = this.dialog()?.nativeElement;
+      if (!this.current() || !dialog) {
+        this.restoreFocus();
+        return;
+      }
+      const active = this.document.activeElement;
+      if (!this.previousFocus && active instanceof HTMLElement && !dialog.contains(active)) {
+        this.previousFocus = active;
+      }
+      if (!this.deciding()) {
+        this.denyButton()?.nativeElement.focus();
+      } else if (!(active instanceof HTMLElement) || !dialog.contains(active) || active.matches(':disabled')) {
+        dialog.focus();
       }
     });
   }
@@ -251,15 +295,54 @@ export class ApprovalDialog {
     return RISK_LABEL[risk];
   }
 
-  protected async decide(id: string, approved: boolean): Promise<void> {
-    if (this.deciding()) return;
-    this.deciding.set(true);
-    this.decisionError.set(null);
-    try {
-      const error = await this.store.resolve(id, approved);
-      if (error) this.decisionError.set({ id, message: error.message });
-    } finally {
-      this.deciding.set(false);
+  protected trapTab(event: KeyboardEvent): void {
+    if (event.key !== 'Tab' || !this.current()) return;
+    const dialog = this.dialog()?.nativeElement;
+    if (!dialog) return;
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('summary, a[href], button:not(:disabled)')];
+    const index = focusable.indexOf(this.document.activeElement as HTMLElement);
+    if (index === -1 || (event.shiftKey ? index === 0 : index === focusable.length - 1)) {
+      event.preventDefault();
+      const target = event.shiftKey ? focusable.at(-1) : focusable[0];
+      (target ?? dialog).focus();
     }
+  }
+
+  protected containFocus(): void {
+    const dialog = this.dialog()?.nativeElement;
+    if (this.destroyRef.destroyed || !this.current() || !dialog || dialog.contains(this.document.activeElement)) return;
+    const target = this.deciding() ? dialog : this.denyButton()?.nativeElement;
+    (target ?? dialog).focus();
+  }
+
+  protected async decide(approval: PendingApproval, approved: boolean): Promise<void> {
+    if (
+      this.destroyRef.destroyed ||
+      !sameApproval(approval, this.liveApproval()) ||
+      this.store.decidingApprovalIds().includes(approval.id)
+    )
+      return;
+    const generation = ++this.decisionGeneration;
+    this.failure.set(null);
+    const error = await this.store.resolve(approval.id, approved);
+    if (
+      error &&
+      !this.destroyRef.destroyed &&
+      generation === this.decisionGeneration &&
+      sameApproval(approval, this.liveApproval())
+    ) {
+      this.failure.set({ approval, message: error.message });
+    }
+  }
+
+  private liveApproval(): PendingApproval | null {
+    const now = Date.now();
+    return this.store.approvals().find((approval) => approval.expiresAtMs > now) ?? null;
+  }
+
+  private restoreFocus(): void {
+    const previous = this.previousFocus;
+    this.previousFocus = null;
+    if (previous?.isConnected) previous.focus();
   }
 }

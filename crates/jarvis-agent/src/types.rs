@@ -129,6 +129,10 @@ pub struct TaskStep {
     pub summary: Option<String>,
     /// How the call was authorized, e.g. "approved by you".
     pub decision: Option<String>,
+    /// Identity of the prepared call explicitly denied by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub denied_action_fingerprint: Option<String>,
     pub outcome: StepOutcome,
     /// Result, answer or error (truncated).
     pub output: Option<String>,

@@ -369,8 +369,8 @@ export class JarvisApi {
     return this.bridge.invoke('resume_agent_task', { id });
   }
 
-  clearFinishedAgentTasks(): Promise<number> {
-    return this.bridge.invoke('clear_finished_agent_tasks');
+  clearFinishedAgentTasks(): Promise<string[]> {
+    return this.bridge.invoke('clear_finished_agent_tasks', { returnDeletedIds: true });
   }
 
   /** Deletes one unresolved journal after the user reviewed its real-world effects. */

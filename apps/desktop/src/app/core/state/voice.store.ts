@@ -287,7 +287,20 @@ export class VoiceStore {
         if (!(await this.router.navigateByUrl('/chat'))) return;
       }
       if (!current() || !this.chat.acceptsInput()) return;
-      await this.chat.send(transcript.text, true, this.vision.take());
+      const submission = this.vision.prepareSend();
+      await this.chat.send(transcript.text, true, submission.attachments, (result) => {
+        if (result !== 'notSent') submission.consume();
+        if (!current()) return;
+        if (result === 'notSent') {
+          this.showNotice(
+            submission.attachments.length
+              ? 'Your spoken request was not sent. Your images are still attached.'
+              : 'Your spoken request was not sent.'
+          );
+        } else if (result === 'unknown') {
+          this.showNotice('Your spoken request may still be running. Check its result before repeating it.');
+        }
+      });
     } catch (error) {
       if (current()) this.showNotice(IpcError.from(error).message);
     } finally {

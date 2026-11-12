@@ -98,20 +98,113 @@ describe('ApprovalDialog', () => {
     expect(element.querySelector('[role="alertdialog"]')).toBeNull();
   });
 
-  it('does not show an old decision failure on the next request', async () => {
+  it('focuses Deny and accepts a new decision while the previous one waits', async () => {
     const { fixture, store, element } = await render();
-    store.approvals.set([approval('a1')]);
+    const second = approval('a2');
+    store.approvals.set([approval('a1'), second]);
     fixture.detectChanges();
     let reject!: (error: unknown) => void;
     api.resolveApproval.mockImplementationOnce(() => new Promise((_resolve, fail) => (reject = fail)));
+    const allow = button(element, 'Allow once');
+    allow.focus();
+    allow.click();
+    fixture.detectChanges();
+    expect(button(element, 'Deny').disabled).toBe(true);
+
+    store.approvals.set([second]);
+    fixture.detectChanges();
+    expect(button(element, 'Deny').disabled).toBe(false);
+    expect(document.activeElement).toBe(button(element, 'Deny'));
+
+    let complete!: (accepted: boolean) => void;
+    api.resolveApproval.mockImplementationOnce(() => new Promise((resolve) => (complete = resolve)));
     button(element, 'Deny').click();
-    store.approvals.set([approval('a2')]);
+    expect(api.resolveApproval.mock.calls).toEqual([
+      ['a1', true],
+      ['a2', false],
+    ]);
     reject(new IpcError('internal', 'Old decision failed'));
     await vi.waitFor(() => {
       fixture.detectChanges();
-      expect(button(element, 'Deny').disabled).toBe(false);
+      expect(store.decidingApprovalIds()).toEqual(['a2']);
     });
+    expect(button(element, 'Deny').disabled).toBe(true);
     expect(element.textContent).toContain('medium action a2');
     expect(element.querySelector('[role="alert"]')).toBeNull();
+    complete(true);
+    await vi.waitFor(() => expect(store.approvals()).toEqual([]));
+  });
+
+  it('rejects an old button click when the queue or displayed tool input has changed', async () => {
+    const { fixture, store, element } = await render();
+    const request = approval('a1');
+    store.approvals.set([request]);
+    fixture.detectChanges();
+    const allow = button(element, 'Allow once');
+
+    store.approvals.set([approval('a2')]);
+    allow.click();
+    store.approvals.set([{ ...request, details: '{"path":"different.txt"}' }]);
+    allow.click();
+
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it('blocks an expired decision even before the next countdown tick', async () => {
+    vi.useFakeTimers();
+    const { fixture, store, element } = await render();
+    try {
+      const expiresAtMs = Date.now() + 100;
+      store.approvals.set([{ ...approval('a1'), expiresAtMs }, approval('a2')]);
+      fixture.detectChanges();
+      expect(element.textContent).toContain('1 s');
+
+      vi.setSystemTime(expiresAtMs);
+      button(element, 'Allow once').click();
+      expect(api.resolveApproval).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1000);
+      fixture.detectChanges();
+      expect(element.textContent).toContain('medium action a2');
+      expect(document.activeElement).toBe(button(element, 'Deny'));
+    } finally {
+      fixture.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps keyboard focus inside and restores it after the request closes', async () => {
+    const { fixture, store, element } = await render();
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    try {
+      outside.focus();
+      const request = approval('a1');
+      store.approvals.set([request]);
+      fixture.detectChanges();
+      const allow = button(element, 'Allow once');
+      allow.focus();
+      store.approvals.set([{ ...request }]);
+      fixture.detectChanges();
+      expect(document.activeElement).toBe(allow);
+
+      const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+      allow.dispatchEvent(tab);
+      const summary = element.querySelector('summary');
+      expect(tab.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(summary);
+      const back = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+      summary?.dispatchEvent(back);
+      expect(back.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(allow);
+      outside.focus();
+      expect(document.activeElement).toBe(button(element, 'Deny'));
+
+      store.approvals.set([]);
+      fixture.detectChanges();
+      expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
   });
 });

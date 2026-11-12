@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import type { Fact, FactSuggestion } from '@jarvis/shared-types';
 
@@ -33,6 +33,10 @@ interface SuggestionDraft {
 })
 export class FactsPanel {
   protected readonly store = inject(MemoryStore);
+  private readonly destroyRef = inject(DestroyRef);
+  private editorRevision = 0;
+  protected readonly editorSession = signal(0);
+  protected readonly saving = signal(false);
   protected readonly maxLength = MAX_FACT_LENGTH;
   protected readonly formatDate = formatShortDate;
   protected readonly sourceLabel = (fact: Fact): string => SOURCE_LABELS[fact.source];
@@ -57,7 +61,7 @@ export class FactsPanel {
   });
   protected readonly canSave = computed(() => {
     const length = this.content().trim().length;
-    return length > 0 && length <= MAX_FACT_LENGTH && !this.store.busy();
+    return length > 0 && length <= MAX_FACT_LENGTH && !this.store.busy() && !this.saving();
   });
 
   protected projectName(id: string | null): string {
@@ -65,6 +69,8 @@ export class FactsPanel {
   }
 
   protected edit(fact: Fact): void {
+    if (this.destroyRef.destroyed || !this.store.facts().includes(fact)) return;
+    this.editorSession.update((session) => session + 1);
     this.editingId.set(fact.id);
     this.content.set(fact.content);
     this.projectId.set(fact.projectId);
@@ -72,34 +78,74 @@ export class FactsPanel {
   }
 
   protected reset(): void {
+    this.editorSession.update((session) => session + 1);
     this.editingId.set(null);
     this.content.set('');
     this.pinned.set(false);
   }
 
-  protected async save(): Promise<void> {
-    if (!this.canSave()) {
+  protected onContentInput(event: Event): void {
+    ++this.editorRevision;
+    this.content.set(this.valueOf(event));
+  }
+
+  protected onProjectChange(event: Event): void {
+    ++this.editorRevision;
+    this.projectId.set(this.valueOf(event) || null);
+  }
+
+  protected onPinnedChange(event: Event): void {
+    ++this.editorRevision;
+    this.pinned.set(this.checkedOf(event));
+  }
+
+  protected async save(session: number): Promise<void> {
+    if (this.destroyRef.destroyed || session !== this.editorSession() || !this.canSave()) {
       return;
     }
-    const existing = this.store.facts().find((f) => f.id === this.editingId());
-    const saved = await this.store.saveFact({
-      id: this.editingId(),
-      content: this.content().trim(),
-      projectId: this.projectId(),
-      pinned: this.pinned(),
-      sourceConversationId: existing?.sourceConversationId ?? null,
-    });
-    if (saved) {
-      this.reset();
+    const id = this.editingId();
+    const existing = this.store.facts().find((f) => f.id === id);
+    if (id !== null && !existing) return;
+    const revision = this.editorRevision;
+    this.saving.set(true);
+    try {
+      const saved = await this.store.saveFact({
+        id,
+        content: this.content().trim(),
+        projectId: this.projectId(),
+        pinned: this.pinned(),
+        sourceConversationId: existing?.sourceConversationId ?? null,
+      });
+      if (!saved || this.destroyRef.destroyed || session !== this.editorSession()) return;
+      if (revision === this.editorRevision) this.reset();
+      // Further edits belong to the fact just created, so saving them must
+      // update that fact instead of creating a second record.
+      else if (id === null) this.editingId.set(saved.id);
+    } finally {
+      this.saving.set(false);
     }
   }
 
   protected async remove(fact: Fact): Promise<void> {
+    if (this.destroyRef.destroyed || this.store.busy() || this.saving() || !this.store.facts().includes(fact)) return;
+    const session = this.editorSession();
+    const revision = this.editorRevision;
     this.confirmDeleteId.set(null);
-    await this.store.deleteFact(fact.id);
-    if (this.editingId() === fact.id) {
-      this.reset();
+    const removed = await this.store.deleteFact(fact.id);
+    if (removed && !this.destroyRef.destroyed && session === this.editorSession() && this.editingId() === fact.id) {
+      if (revision === this.editorRevision) this.reset();
+      else {
+        // The edited draft outlived its deleted record. Keep it available
+        // as a new fact instead of silently targeting a missing ID.
+        this.editingId.set(null);
+        this.editorSession.update((current) => current + 1);
+      }
     }
+  }
+
+  protected togglePinned(fact: Fact): void {
+    if (this.destroyRef.destroyed || this.store.busy() || this.saving() || !this.store.facts().includes(fact)) return;
+    void this.store.togglePinned(fact);
   }
 
   protected draftOf(suggestion: FactSuggestion): SuggestionDraft {

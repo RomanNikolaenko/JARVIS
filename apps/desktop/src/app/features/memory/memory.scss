@@ -54,6 +54,15 @@
   border-bottom: 1px solid var(--jv-border);
 }
 
+.refresh-error {
+  flex-wrap: wrap;
+
+  span {
+    flex: 1;
+    min-width: 180px;
+  }
+}
+
 .tab {
   margin-bottom: -1px;
   border: none;

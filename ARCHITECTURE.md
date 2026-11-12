@@ -450,10 +450,13 @@ current scope and limits, verifies that
 the registered tool and prepared action have not changed, and re-evaluates
 the current policy before execution. A revoked permission, changed target,
 increased risk or replaced plugin tool refuses the call and is audited;
-the model must propose a fresh action to obtain a new approval. An action
-the user denied (same tool, same input after paths are resolved) is not put
-to the user again in the same run: it is refused at once, journaled as
-"already denied by you" and audited as denied. `write_file` fixes
+the model must propose a fresh action to obtain a new approval. The journal
+saves a fingerprint of each action the user denies (tool and normalized
+input). The agent restores those denials when the task resumes after a
+restart. A matching action is refused, journaled as "already denied by you"
+and audited even if current settings would allow it. For older journals, the
+agent recovers the fingerprint when preparing the saved input produces the
+same action summary. `write_file` fixes
 `overwrite` to whether the file exists when the call is prepared, so a
 "Create" is one action with or without the flag and never replaces a file
 that appears before it runs. Protected paths: JARVIS's config, data and log
@@ -466,6 +469,10 @@ outcome, output, duration) is saved to `agent_tasks` after every step and
 pushed to the UI (`jarvis://agent-task`). Pending approvals are pushed as a
 list (`jarvis://approvals`); a new request also asks the OS to draw
 attention to the window.
+The approval broker consumes each request ID once and checks the monotonic
+deadline and task cancellation before accepting a decision. It withdraws the
+request when its waiter is dropped. A successful decision acknowledgement
+confirms delivery to the waiter. Tool execution has its own journal outcome.
 
 If a started non-idempotent tool returns an error, or cancellation, shutdown
 or a timeout interrupts it, its effects are recorded as `unknown`. The task
@@ -639,7 +646,7 @@ notification instead of blocking publishers.
 | `start_agent_task` | `request: AgentStartRequest` | `AgentTask` |
 | `list_agent_tasks` / `get_agent_task` | `limit?` / `id` | `TaskSummary[]` / `AgentTask` |
 | `pause_agent_task` / `resume_agent_task` / `cancel_agent_task` | `id` | `boolean` / – / `boolean` |
-| `clear_finished_agent_tasks` | – | count |
+| `clear_finished_agent_tasks` | optional `reviewedTaskId`, `returnDeletedIds` | count by default or deleted task IDs |
 | `list_pending_approvals` / `resolve_approval` | – / `id`, `approved` | `PendingApproval[]` / `boolean` |
 | `get_audit_log` / `verify_audit_log` | `limit?`, `beforeId?: UUID` / – | `AuditEntry[]` / `AuditVerification` |
 | `add_workspace_folder` | – (native folder dialog in Rust) | `Settings \| null` |
@@ -710,10 +717,44 @@ must be granted by a capability; anything not granted is denied. See
   assistant entry. Finished, disconnected or disposed turns cannot change a
   later turn. A failed core health probe ends frontend waiting and preserves
   partial text with an explicit unknown-outcome message; it neither resends nor
-  cancels the native request. Saved conversations can be reopened after recovery
-  to inspect the persisted result. Detection follows the visible-window health
+  cancels the native request. For an uncertain turn in a saved conversation,
+  **Check saved messages** reads a separate preview without reopening the chat,
+  clearing new images or replacing partial text, errors or unsaved notes.
+  The preview does not prove that the original request finished: persistence
+  follows the final stream event and may fail or have no reply to save.
+  Checks are explicit, coalesced, bounded by a 30-second frontend deadline and
+  invalidated by newer turns, conversation changes, deletion, connection loss
+  and destruction. A failed check preserves the last successful preview in the
+  same context; late results cannot update a newer check or conversation.
+  Detection follows the visible-window health
   poll, not a token inactivity timer. New chats and sends invalidate pending
   conversation-open reads so old history cannot replace a new turn.
+  Submission distinguishes accepted turns, confirmed refusals and unknown
+  outcomes. The composer keeps its text and captures until an acknowledgement
+  or stream event proves admission; confirmed refusals leave them available for
+  an explicit retry. A first stream event confirms admission even if the invoke
+  acknowledgement later fails. Transport failures and storage/internal errors
+  without an event remain unknown and do not return the submitted draft to a
+  send-ready state. IPC errors retain structured-core versus transport origin.
+  Creating a conversation and waiting for send acknowledgement each have a
+  30-second frontend deadline; they do not cancel native work. A timed-out
+  conversation creation cannot dispatch a message when it eventually returns.
+  A send timeout after an admission event leaves the active stream running.
+  Only the submitted text revision and capture objects are cleared, so newer
+  edits and images survive. Spoken requests use the same admission contract.
+  Pinned-note saves bound conversation creation and write acknowledgement to
+  30 seconds each. Timeout, context changes and disposal release frontend
+  waiting; an unresolved native write keeps its per-conversation mutation
+  reservation until it settles, preventing a later note, rename or deletion
+  from overtaking it. Late results cannot update another editor or confirm
+  newer edits. Conversation-list refresh happens after confirmation and does
+  not hold the note editor open. An editor session changes on an explicit new
+  chat, successful conversation open or deletion of the current conversation,
+  including new chats without an ID;
+  creating the first message or note keeps the same session and unsaved note.
+  Remember editors also track their session, text revision and source entry:
+  completing an earlier fact save cannot close a newer editor or associate a
+  stale message with the currently open conversation.
   Stop commands are coalesced per active turn and have a 30-second frontend
   deadline, an independent pending indicator and retryable error. Acknowledgement
   only confirms the command; final stream events determine the reply's status.
@@ -780,9 +821,11 @@ must be granted by a capability; anything not granted is denied. See
   approvals, programs, network, limits, cloud permission); *Audit log* with
   an integrity check. The **approval dialog** is part of the app shell, so a
   request reaches the user on every screen. Its task link selects the requesting
-  task; decision buttons lock while IPC is pending. A failed decision stays
-  visible in that request's dialog and can be retried. Live approval events
-  take precedence over a delayed initial queue snapshot.
+  task. The dialog focuses Deny for each new request and checks the displayed
+  action and its deadline before sending a decision. Only that request's buttons
+  lock during the 30-second IPC wait. If delivery is uncertain, the dialog
+  reports it for the current request. Any retry requires a new click or keypress.
+  Live approval events take precedence over a delayed initial queue snapshot.
 - **Chat** keeps a history of saved and temporary conversations (search,
   rename, delete), a project and a pinned note per conversation, shows how
   each reply's context was built and lets the user save a message as a fact.
@@ -790,13 +833,35 @@ must be granted by a capability; anything not granted is denied. See
   model (or automatic agent routing) and default task limits. The UI explains
   that tasks are saved separately, even from temporary chats. It does not send
   conversation history, pinned notes or project instructions. A failed start
-  preserves the draft; a successful start opens `/agents?task=<id>`. Existing
-  core permissions and approval dialogs apply unchanged.
+  preserves the draft. A confirmed start consumes it and opens
+  `/agents?task=<id>` only while its origin is still current: the component,
+  conversation, editor revisions and model must match, and a pending user navigation
+  takes precedence. Live origin checks also reject stale rendered actions.
+  Navigation errors retain a task link after normal draft consumption, without
+  leaking errors into a later origin. Existing core permissions and approval
+  dialogs apply unchanged. The Agents task form also retains goal and option
+  edits made while creation is pending, including edits away and back.
   Agent list and journal reads retain task events received while IPC is pending,
   including events with equal timestamps. Only the latest list/selection request
   can publish its response or error. A start response also preserves events
   already received for the created task. Full event payloads are retained only
   for the lifetime of in-flight reads, rather than in a permanent journal cache.
+  Confirmed tasks still enter the global list after their originating editor
+  changes. Automatic selection respects newer starts, explicit journal choices
+  and clearing the selection; a late list cannot undo a newer selection either.
+  Task creation, pause, resume and cancel have a 30-second frontend
+  acknowledgement deadline. When the outcome is uncertain, the UI preserves
+  the current draft and journal selection and directs the user to inspect
+  the task list or journal. The native command can still complete after the
+  deadline. Refresh tasks reloads the list, and any new command requires an
+  explicit user action. The UI coalesces duplicate controls for the same task
+  while a decision is pending and keeps Cancel available during Pause or Resume.
+  Journal deletion has the same acknowledgement deadline. Bulk cleanup returns
+  the IDs deleted by its SQLite statement when the UI requests them. Confirmed
+  deletions remove those IDs from the cache and filter out queued updates for
+  them before the list reloads. Refresh tasks also looks up the open journal
+  by ID to reconcile an unconfirmed cleanup. A newer selection stays open if
+  its journal still exists.
   Task list, journal, status, tools and pending-approval snapshot reads have a
   30-second frontend deadline, including recovery reads. Destruction settles
   waiting reads without applying late results; timeout allows retry without
@@ -927,9 +992,22 @@ must be granted by a capability; anything not granted is denied. See
   Fact and project lists track independent read generations. Superseded reads
   cannot replace newer lists or publish obsolete errors. Successful mutations
   invalidate earlier reads, apply the confirmed saved/deleted item immediately,
-  and invalidate search results before refreshing dependent lists. If that
-  refresh fails, the confirmed mutation remains visible with the read error.
-  List responses received after store destruction are ignored.
+  and invalidate search results before refreshing dependent lists. Confirmed
+  saves return before those background reads, which do not hold the screen's
+  busy state or replace mutation errors. A separate refresh error offers a
+  read-only reload; a failed refresh cannot turn an acknowledged save into a
+  failed write. Status, fact, project and suggestion reads each have a 30-second
+  frontend deadline. List responses received after store destruction are ignored.
+  Fact/project editors track sessions and revisions, preserving newer fields,
+  reopened forms and edits made away and back while a save is pending. A new
+  record's acknowledged ID is retained with newer edits so an explicit follow-up
+  save updates that record. A failed fact deletion keeps its editor; newer edits
+  to a fact deleted successfully remain available as a new fact.
+  Import and clear invalidate pre-operation reads; confirmed clear empties local
+  caches before reload, and confirmed project deletion removes its cached facts.
+  Failed or late reads cannot restore those removed records. Fact/project writes
+  refuse transfer overlap. Native writes have no frontend retry deadline here:
+  creating a record without a stable operation identity cannot be replayed safely.
   History pagination shares duplicate pending page reads. A first-page refresh
   supersedes an older next-page request; load-more waits for a pending refresh
   and sends no request once the end is known. Pages deduplicate episode IDs.

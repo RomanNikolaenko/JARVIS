@@ -1,9 +1,10 @@
 @if (editingId() !== null) {
+  @let session = editorSession();
   <jv-hud-panel [heading]="editingId() ? 'Edit project' : 'New project'">
     <div class="form">
       <label class="field">
         <span class="field-label">Name</span>
-        <input [attr.maxlength]="limits.name" [value]="name()" (input)="name.set(valueOf($event))" />
+        <input [attr.maxlength]="limits.name" [value]="name()" (input)="onField('name', $event)" />
       </label>
       <label class="field">
         <span class="field-label">Description</span>
@@ -11,7 +12,7 @@
           rows="2"
           [attr.maxlength]="limits.description"
           [value]="description()"
-          (input)="description.set(valueOf($event))"></textarea>
+          (input)="onField('description', $event)"></textarea>
       </label>
       <label class="field">
         <span class="field-label">Instructions for JARVIS in this project</span>
@@ -20,11 +21,11 @@
           placeholder="e.g. The project is a TypeScript monorepo; answer with code that follows its conventions."
           [attr.maxlength]="limits.instructions"
           [value]="instructions()"
-          (input)="instructions.set(valueOf($event))"></textarea>
+          (input)="onField('instructions', $event)"></textarea>
       </label>
       <div class="form-actions">
         <button type="button" class="ghost" (click)="cancel()">Cancel</button>
-        <button type="button" class="primary" [disabled]="!canSave()" (click)="save()">
+        <button type="button" class="primary" [disabled]="!canSave()" (click)="save(session)">
           <jv-icon name="check" [size]="15" />
           Save project
         </button>
@@ -63,7 +64,9 @@
         @if (confirmDeleteId() === project.id) {
           <div class="confirm">
             <span> Delete the project and its {{ project.factCount }} facts? Its chats are kept. </span>
-            <button type="button" class="danger small" (click)="remove(project)">Delete</button>
+            <button type="button" class="danger small" [disabled]="store.busy() || saving()" (click)="remove(project)">
+              Delete
+            </button>
             <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">Cancel</button>
           </div>
         } @else {

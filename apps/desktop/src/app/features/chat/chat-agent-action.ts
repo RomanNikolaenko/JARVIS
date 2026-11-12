@@ -1,10 +1,17 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, input, output, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import type { ModelRef } from '@jarvis/shared-types';
 
 import { IpcError } from '../../core/ipc/ipc-error';
 import { AgentsStore, MAX_GOAL_LENGTH } from '../../core/state/agents.store';
 import { Icon } from '../../shared/icon/icon';
+
+export interface ChatAgentSubmission {
+  readonly text: string;
+  readonly context: number;
+  readonly revision: number;
+  readonly model: ModelRef | null;
+}
 
 /** Explicitly starts a saved agent task from the composer, without chat history. */
 @Component({
@@ -55,10 +62,15 @@ export class ChatAgentAction {
   readonly text = input.required<string>();
   readonly model = input<ModelRef | null>(null);
   readonly disabled = input(false);
-  readonly started = output<string>();
+  /** Live getters also observe changes that have not rendered yet. */
+  readonly readContext = input<() => number>(() => 0);
+  readonly readRevision = input<() => number>(() => 0);
+  readonly isCurrent = input<(submission: ChatAgentSubmission) => boolean>(() => true);
+  readonly started = output<ChatAgentSubmission>();
   readonly busyChange = output<boolean>();
   private readonly agents = inject(AgentsStore);
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
   protected readonly maxLength = MAX_GOAL_LENGTH;
   protected readonly starting = signal(false);
   protected readonly error = signal<string | null>(null);
@@ -69,33 +81,67 @@ export class ChatAgentAction {
   });
 
   protected async start(): Promise<void> {
-    if (!this.canStart()) return;
-    const text = this.text();
+    if (this.destroyRef.destroyed || !this.canStart()) return;
     const model = this.model();
+    const submission: ChatAgentSubmission = Object.freeze({
+      text: this.text(),
+      context: this.readContext()(),
+      revision: this.readRevision()(),
+      model: model ? Object.freeze({ providerId: model.providerId, model: model.model }) : null,
+    });
+    const sameModel = () =>
+      submission.model?.providerId === this.model()?.providerId && submission.model?.model === this.model()?.model;
+    const current = () =>
+      !this.destroyRef.destroyed &&
+      submission.context === this.readContext()() &&
+      submission.revision === this.readRevision()() &&
+      submission.text === this.text() &&
+      sameModel() &&
+      this.isCurrent()(submission);
+    if (!current()) return;
     this.starting.set(true);
     this.busyChange.emit(true);
     this.error.set(null);
     this.createdId.set(null);
+    let navigationRevision: number | null = null;
     try {
-      const task = await this.agents.startTask({
-        goal: text.trim(),
-        providerId: model?.providerId ?? null,
-        model: model?.model ?? null,
-        maxSteps: null,
-        maxDurationSecs: null,
-      });
+      const task = await this.agents.startTask(
+        {
+          goal: submission.text.trim(),
+          providerId: submission.model?.providerId ?? null,
+          model: submission.model?.model ?? null,
+          maxSteps: null,
+          maxDurationSecs: null,
+        },
+        current
+      );
+      if (!current()) return;
       if (!task) {
         this.error.set(this.agents.error()?.message ?? 'Could not start the agent task.');
         return;
       }
       this.createdId.set(task.id);
-      this.started.emit(text);
+      this.started.emit(submission);
+      if (this.destroyRef.destroyed || submission.context !== this.readContext()()) return;
+      // The parent may consume the submitted draft synchronously. A failed
+      // navigation still belongs to that consumed revision, not a newer edit.
+      navigationRevision = this.readRevision()();
       await this.router.navigate(['/agents'], { queryParams: { task: task.id } });
     } catch (error) {
-      this.error.set(IpcError.from(error).message);
+      if (
+        navigationRevision === null
+          ? current()
+          : !this.destroyRef.destroyed &&
+            submission.context === this.readContext()() &&
+            navigationRevision === this.readRevision()() &&
+            sameModel()
+      )
+        this.error.set(IpcError.from(error).message);
     } finally {
-      this.starting.set(false);
-      this.busyChange.emit(false);
+      if (!this.destroyRef.destroyed) {
+        this.starting.set(false);
+        this.busyChange.emit(false);
+      }
     }
   }
 }

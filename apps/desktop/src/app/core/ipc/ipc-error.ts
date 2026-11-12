@@ -4,7 +4,9 @@ import type { ErrorCode, ErrorPayload } from '@jarvis/shared-types';
 export class IpcError extends Error {
   constructor(
     readonly code: ErrorCode,
-    message: string
+    message: string,
+    /** Preserve native refusals and guards that ran before dispatch. */
+    readonly origin: 'local' | 'core' | 'transport' | 'notDispatched' = 'local'
   ) {
     super(message);
     this.name = 'IpcError';
@@ -16,16 +18,16 @@ export class IpcError extends Error {
       return error;
     }
     if (isErrorPayload(error)) {
-      return new IpcError(error.code, error.message);
+      return new IpcError(error.code, error.message, 'core');
     }
     // Tauri reports argument deserialization and permission failures as strings.
     if (typeof error === 'string') {
-      return new IpcError('internal', error);
+      return new IpcError('internal', error, 'transport');
     }
     if (error instanceof Error) {
-      return new IpcError('internal', error.message);
+      return new IpcError('internal', error.message, 'transport');
     }
-    return new IpcError('internal', 'Unknown error');
+    return new IpcError('internal', 'Unknown error', 'transport');
   }
 }
 

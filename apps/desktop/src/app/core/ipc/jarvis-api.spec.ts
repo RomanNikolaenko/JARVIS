@@ -24,7 +24,7 @@ describe('JarvisApi', () => {
 
   it('reports unavailable outside the desktop shell', async () => {
     expect(api.connected).toBe(false);
-    await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable', origin: 'notDispatched' });
   });
 
   it('treats a leftover Tauri global without invoke as unavailable', async () => {
@@ -32,7 +32,27 @@ describe('JarvisApi', () => {
     clearMocks();
 
     expect(api.connected).toBe(false);
-    await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(api.getHealth()).rejects.toMatchObject({ code: 'unavailable', origin: 'notDispatched' });
+  });
+
+  it('reports a missing desktop channel as not dispatched before sending a chat request', async () => {
+    await expect(
+      Promise.resolve().then(() =>
+        api.sendMessage(
+          {
+            conversationId: 'chat',
+            content: 'Keep this message',
+            providerId: null,
+            model: null,
+            temperature: null,
+            maxOutputTokens: null,
+            speak: false,
+            attachments: ['capture'],
+          },
+          vi.fn()
+        )
+      )
+    ).rejects.toMatchObject({ code: 'unavailable', origin: 'notDispatched' });
   });
 
   it('subscribes to catalog invalidation without exposing model connection data', async () => {
@@ -72,12 +92,16 @@ describe('JarvisApi', () => {
     const calls: { cmd: string; args: unknown }[] = [];
     mockIPC((cmd, args) => {
       calls.push({ cmd, args });
+      if (cmd === 'clear_finished_agent_tasks' && args && 'returnDeletedIds' in args) {
+        return ['finished-t-1'];
+      }
       return cmd === 'get_audit_log' ? [] : true;
     });
 
     await api.resolveApproval('a-1', false);
     await api.getAuditLog(50, '12345678-1234-4234-8234-123456789012');
     await api.pauseAgentTask('t-1');
+    expect(await api.clearFinishedAgentTasks()).toEqual(['finished-t-1']);
     await api.deleteReviewedAgentTask('reviewed-t-1');
     await api.startAgentTask({
       goal: 'g',
@@ -91,6 +115,7 @@ describe('JarvisApi', () => {
       { cmd: 'resolve_approval', args: { id: 'a-1', approved: false } },
       { cmd: 'get_audit_log', args: { limit: 50, beforeId: '12345678-1234-4234-8234-123456789012' } },
       { cmd: 'pause_agent_task', args: { id: 't-1' } },
+      { cmd: 'clear_finished_agent_tasks', args: { returnDeletedIds: true } },
       { cmd: 'clear_finished_agent_tasks', args: { reviewedTaskId: 'reviewed-t-1' } },
       {
         cmd: 'start_agent_task',
@@ -134,5 +159,6 @@ describe('JarvisApi', () => {
     const error = await api.getSettings().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(IpcError);
     expect((error as IpcError).code).toBe('permissionDenied');
+    expect((error as IpcError).origin).toBe('core');
   });
 });

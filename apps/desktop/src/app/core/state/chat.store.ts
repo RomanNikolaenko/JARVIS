@@ -4,6 +4,7 @@ import type {
   ChatStreamEvent,
   ContextReport,
   Conversation,
+  ConversationDetail,
   ConversationPatch,
   ConversationSummary,
   ErrorCode,
@@ -30,6 +31,8 @@ export interface ChatEntry {
   readonly error?: string;
   /** Category of `error`, when the core reported one. */
   readonly errorCode?: ErrorCode;
+  /** The native turn may still be running; a saved snapshot cannot prove its outcome. */
+  readonly outcomeUnknown?: boolean;
   readonly elapsedMs?: number;
   /** How the core built the context of this reply. */
   readonly context?: ContextReport;
@@ -40,11 +43,15 @@ export interface ChatEntry {
 
 /** `connecting`: request sent, waiting for `started`; `streaming`: receiving text. */
 export type ChatPhase = 'idle' | 'connecting' | 'streaming';
+/** Whether the core admitted a turn; an unknown result must never be retried automatically. */
+export type ChatSendResult = 'accepted' | 'notSent' | 'unknown';
 
 export const MAX_MESSAGE_LENGTH = 32_000;
 export const CONVERSATION_LIST_TIMEOUT_MS = 30_000;
 export const CONVERSATION_OPEN_TIMEOUT_MS = 30_000;
 export const CHAT_CANCEL_TIMEOUT_MS = 30_000;
+export const CHAT_SEND_TIMEOUT_MS = 30_000;
+export const CHAT_NOTE_SAVE_TIMEOUT_MS = 30_000;
 
 function toEntry(message: StoredMessage): ChatEntry {
   return {
@@ -67,10 +74,19 @@ export class ChatStore {
   private readonly api = inject(JarvisApi);
   private readonly vision = inject(VisionStore);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly disposed = signal(false);
   private activeEntryId: string | null = null;
+  private activeSend: {
+    entryId: string;
+    dispatched: boolean;
+    settle: (result: ChatSendResult) => ChatSendResult;
+  } | null = null;
   private openRequest = 0;
   private openingId: string | null = null;
   private listRequest = 0;
+  private savedMessagesRequest = 0;
+  private savedMessagesInFlight: Promise<void> | null = null;
+  private noteSave: { cancel: () => void } | null = null;
   private readonly conversationWrites = new Set<string>();
   private readonly models = inject(ModelsStore);
   private readonly settings = inject(SettingsStore);
@@ -100,8 +116,11 @@ export class ChatStore {
   readonly loading = signal(false);
   readonly savingNote = signal(false);
   readonly inputContext = signal(0);
+  /** A committed switch of editors; creating the current conversation preserves its draft. */
+  readonly editorContext = signal(0);
   readonly acceptsInput = computed(
     () =>
+      !this.disposed() &&
       !this.destroyRef.destroyed &&
       !this.busy() &&
       !this.loading() &&
@@ -112,9 +131,31 @@ export class ChatStore {
   );
   readonly deletingIds = signal<readonly string[]>([]);
   readonly noteCreationId = signal<string | null>(null);
+  /** Separate from the local transcript, which may contain unsaved partial text. */
+  readonly savedMessages = signal<ConversationDetail | null>(null);
+  readonly checkingSavedMessages = signal(false);
+  readonly savedMessagesError = signal<IpcError | null>(null);
+  readonly canCheckSaved = computed(() => {
+    const conversation = this.conversation();
+    return (
+      !this.disposed() &&
+      !this.destroyRef.destroyed &&
+      !!conversation &&
+      !conversation.temporary &&
+      !this.busy() &&
+      !this.loading() &&
+      !this.savingNote() &&
+      !this.deletingIds().includes(conversation.id) &&
+      this.entries().some((entry) => entry.outcomeUnknown)
+    );
+  });
 
   constructor() {
     this.destroyRef.onDestroy(() => {
+      this.disposed.set(true);
+      this.invalidateNoteSave();
+      this.invalidateSavedMessages();
+      this.activeSend?.settle(this.activeSend.dispatched ? 'unknown' : 'notSent');
       this.activeEntryId = null;
       this.resetCancellation();
       ++this.openRequest;
@@ -124,11 +165,21 @@ export class ChatStore {
 
   /** The native turn may still be running; never automatically resend it. */
   connectionLost(error: IpcError): void {
+    if (this.destroyRef.destroyed) return;
+    this.invalidateNoteSave();
+    this.invalidateSavedMessages();
     const id = this.activeEntryId;
-    if (id === null || this.destroyRef.destroyed) return;
+    if (id === null) return;
+    const notSent = this.activeSend?.entryId === id && !this.activeSend.dispatched;
+    if (this.activeSend?.entryId === id) {
+      this.activeSend.settle(this.activeSend.dispatched ? 'unknown' : 'notSent');
+    }
     this.updateEntry(id, {
       status: 'failed',
-      error: `Connection lost: ${error.message} The reply may still be running. No message was resent.${this.conversation() && !this.temporary() ? ' Reopen this conversation after reconnecting to check its saved result.' : ''}`,
+      outcomeUnknown: !notSent,
+      error: notSent
+        ? `Connection lost: ${error.message} The message was not sent.`
+        : `Connection lost: ${error.message} The reply may still be running. No message was resent.${this.conversation() && !this.temporary() ? ' Use Check saved messages after reconnecting to inspect the saved conversation.' : ''}`,
     });
     this.activeEntryId = null;
     this.phase.set('idle');
@@ -194,6 +245,61 @@ export class ChatStore {
     this.conversationsLoading.set(false);
   }
 
+  private invalidateSavedMessages(): void {
+    ++this.savedMessagesRequest;
+    this.savedMessagesInFlight = null;
+    this.checkingSavedMessages.set(false);
+    this.savedMessages.set(null);
+    this.savedMessagesError.set(null);
+  }
+
+  private invalidateNoteSave(): void {
+    const pending = this.noteSave;
+    this.noteSave = null;
+    this.savingNote.set(false);
+    pending?.cancel();
+  }
+
+  /** Reads saved messages without replacing local text or repeating the uncertain turn. */
+  checkSavedMessages(): Promise<void> {
+    if (this.destroyRef.destroyed || !this.canCheckSaved()) return Promise.resolve();
+    if (this.savedMessagesInFlight) return this.savedMessagesInFlight;
+    const id = this.conversation()!.id;
+    const context = this.openRequest;
+    const request = ++this.savedMessagesRequest;
+    const current = () =>
+      request === this.savedMessagesRequest &&
+      context === this.openRequest &&
+      this.conversation()?.id === id &&
+      !this.destroyRef.destroyed;
+    this.checkingSavedMessages.set(true);
+    this.savedMessagesError.set(null);
+    const promise = withRequestDeadline(
+      () => this.api.getConversation(id),
+      CONVERSATION_OPEN_TIMEOUT_MS,
+      'Checking saved messages',
+      this.destroyRef
+    )
+      .then((detail) => {
+        if (!current()) return;
+        if (detail.conversation.id !== id || detail.conversation.temporary) {
+          throw new IpcError('internal', 'The saved messages do not belong to this conversation.');
+        }
+        this.savedMessages.set(detail);
+      })
+      .catch((error: unknown) => {
+        if (current()) this.savedMessagesError.set(IpcError.from(error));
+      })
+      .finally(() => {
+        if (request === this.savedMessagesRequest) {
+          this.checkingSavedMessages.set(false);
+          this.savedMessagesInFlight = null;
+        }
+      });
+    this.savedMessagesInFlight = promise;
+    return promise;
+  }
+
   async loadConversations(): Promise<void> {
     if (this.destroyRef.destroyed) return;
     const request = ++this.listRequest;
@@ -222,6 +328,8 @@ export class ChatStore {
     if (this.busy() || this.destroyRef.destroyed) {
       return;
     }
+    this.invalidateNoteSave();
+    this.invalidateSavedMessages();
     this.loading.set(true);
     this.inputContext.update((context) => context + 1);
     this.vision.clear();
@@ -240,6 +348,7 @@ export class ChatStore {
       this.conversation.set(detail.conversation);
       this.summary.set(detail.summary);
       this.entries.set(detail.messages.map(toEntry));
+      this.editorContext.update((context) => context + 1);
       this.error.set(null);
     } catch (error) {
       if (request === this.openRequest && !this.destroyRef.destroyed) this.error.set(IpcError.from(error));
@@ -256,6 +365,9 @@ export class ChatStore {
     if (this.busy() || this.destroyRef.destroyed) {
       return;
     }
+    this.invalidateNoteSave();
+    this.invalidateSavedMessages();
+    this.editorContext.update((context) => context + 1);
     ++this.openRequest;
     this.inputContext.update((context) => context + 1);
     this.vision.clear();
@@ -274,8 +386,21 @@ export class ChatStore {
    * Sends a message; `speak` reads the reply aloud (spoken requests) and
    * `attachments` are captures shown to a vision model.
    */
-  async send(text: string, speak = false, attachments: readonly CaptureInfo[] = []): Promise<void> {
-    if (this.deletingIds().includes(this.conversation()?.id ?? '')) return;
+  async send(
+    text: string,
+    speak = false,
+    attachments: readonly CaptureInfo[] = [],
+    onResult?: (result: ChatSendResult) => void
+  ): Promise<ChatSendResult> {
+    let result: ChatSendResult | null = null;
+    const settle = (next: ChatSendResult): ChatSendResult => {
+      if (result === null) {
+        result = next;
+        onResult?.(next);
+      }
+      return result;
+    };
+    if (this.deletingIds().includes(this.conversation()?.id ?? '')) return settle('notSent');
     const content = text.trim();
     if (
       !content ||
@@ -286,7 +411,7 @@ export class ChatStore {
       content.length > MAX_MESSAGE_LENGTH ||
       this.readOnly()
     ) {
-      return;
+      return settle('notSent');
     }
     this.clearSelectionError();
     if (this.selectionUnavailable()) {
@@ -295,11 +420,12 @@ export class ChatStore {
         'The selected model is unavailable. Choose another model or select Automatic before sending.'
       );
       this.error.set(this.selectionError);
-      return;
+      return settle('notSent');
     }
     // Snapshot the explicit choice before creating a conversation. Discovery
     // changes or a selection for the next turn must not reroute this message.
     const selection = this.selection();
+    this.invalidateSavedMessages();
     this.phase.set('connecting');
     this.resetCancellation();
     ++this.openRequest;
@@ -309,40 +435,82 @@ export class ChatStore {
     this.addEntry({ role: 'user', content, status: 'complete', images: attachments.length ? attachments : undefined });
     const assistantId = this.addEntry({ role: 'assistant', content: '', status: 'streaming' }).id;
     this.activeEntryId = assistantId;
+    const submission = { entryId: assistantId, dispatched: false, settle };
+    this.activeSend = submission;
     const current = () => this.activeEntryId === assistantId && !this.destroyRef.destroyed;
 
     try {
       let conversation = this.conversation();
       if (!conversation) {
-        conversation = await this.api.createConversation(this.draftProjectId(), this.temporaryDraft());
-        if (!current()) return;
+        conversation = await withRequestDeadline(
+          () => this.api.createConversation(this.draftProjectId(), this.temporaryDraft()),
+          CHAT_SEND_TIMEOUT_MS,
+          'Creating the conversation',
+          this.destroyRef
+        );
+        if (!current()) return settle('notSent');
         this.conversation.set(conversation);
       }
-      const requestId = await this.api.sendMessage(
-        {
-          conversationId: conversation.id,
-          content,
-          providerId: selection?.providerId ?? null,
-          model: selection?.model ?? null,
-          temperature: null,
-          maxOutputTokens: null,
-          speak,
-          attachments: attachments.map((a) => a.id),
+      const conversationId = conversation.id;
+      const requestId = await withRequestDeadline(
+        () => {
+          submission.dispatched = true;
+          return this.api.sendMessage(
+            {
+              conversationId,
+              content,
+              providerId: selection?.providerId ?? null,
+              model: selection?.model ?? null,
+              temperature: null,
+              maxOutputTokens: null,
+              speak,
+              attachments: attachments.map((a) => a.id),
+            },
+            (event) => {
+              // An event proves admission even if it finishes before invoke replies.
+              settle('accepted');
+              this.onEvent(assistantId, event);
+            }
+          );
         },
-        (event) => this.onEvent(assistantId, event)
+        CHAT_SEND_TIMEOUT_MS,
+        'Sending the message',
+        this.destroyRef
       );
-      if (!current()) return;
+      settle('accepted');
+      if (!current()) return settle('accepted');
       if (this.phase() !== 'idle' && this.activeRequestId() === null) {
         this.activeRequestId.set(requestId);
       }
       if (this.cancelRequested && this.phase() !== 'idle') {
         await this.cancel();
       }
+      return settle('accepted');
     } catch (error) {
-      if (!current()) return;
       const failure = IpcError.from(error);
-      this.updateEntry(assistantId, { status: 'failed', error: failure.message, errorCode: failure.code });
+      const outcome = settle(
+        !submission.dispatched ||
+          failure.origin === 'notDispatched' ||
+          (failure.origin === 'core' && failure.code !== 'io' && failure.code !== 'internal')
+          ? 'notSent'
+          : 'unknown'
+      );
+      // Once a stream proves admission, a lost invoke acknowledgement cannot end it.
+      if (outcome === 'accepted' || !current()) return outcome;
+      const message =
+        outcome === 'unknown'
+          ? `${failure.message} The request may still be running. No message was resent.${this.conversation() && !this.temporary() ? ' Use Check saved messages after reconnecting to inspect the saved conversation.' : ''}`
+          : failure.message;
+      this.updateEntry(assistantId, {
+        status: 'failed',
+        error: message,
+        errorCode: failure.code,
+        outcomeUnknown: outcome === 'unknown',
+      });
       this.finish();
+      return outcome;
+    } finally {
+      if (this.activeSend === submission) this.activeSend = null;
     }
   }
 
@@ -416,7 +584,7 @@ export class ChatStore {
 
   /** Moves the open (or next) chat into a project. */
   async setProject(projectId: string | null): Promise<void> {
-    if (this.loading() || this.destroyRef.destroyed) return;
+    if (this.loading() || this.savingNote() || this.busy() || this.destroyRef.destroyed) return;
     const conversation = this.conversation();
     if (!conversation) {
       this.draftProjectId.set(projectId);
@@ -437,32 +605,88 @@ export class ChatStore {
   /** Sets the pinned note (working memory); creates the chat if needed. */
   async setPinnedNote(note: string): Promise<boolean> {
     if (this.destroyRef.destroyed || this.loading() || this.savingNote() || this.busy() || this.readOnly()) return false;
+    const currentId = this.conversation()?.id;
+    if (currentId && this.conversationWrites.has(currentId)) {
+      this.error.set(
+        new IpcError(
+          'unavailable',
+          'Changes to this conversation are still awaiting confirmation. Wait before saving the note again.'
+        )
+      );
+      return false;
+    }
+    let cancel!: () => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(new IpcError('cancelled', 'The note save is no longer current.'));
+    });
+    const operation = { cancel };
+    this.noteSave = operation;
     this.savingNote.set(true);
     this.noteCreationId.set(null);
     const context = this.openRequest;
+    const current = () => this.noteSave === operation && context === this.openRequest && !this.destroyRef.destroyed;
+    const wait = <T>(request: () => Promise<T>, label: string) =>
+      withRequestDeadline(() => Promise.race([request(), cancelled]), CHAT_NOTE_SAVE_TIMEOUT_MS, label, this.destroyRef);
+    let noteDispatched = false;
     try {
       let conversation = this.conversation();
       if (!conversation) {
-        try {
-          conversation = await this.api.createConversation(this.draftProjectId(), this.temporaryDraft());
-          if (context !== this.openRequest || this.destroyRef.destroyed) return false;
-          this.noteCreationId.set(conversation.id);
-          this.conversation.set(conversation);
-        } catch (error) {
-          if (context === this.openRequest && !this.destroyRef.destroyed) this.error.set(IpcError.from(error));
-          return false;
-        }
+        conversation = await wait(
+          () => this.api.createConversation(this.draftProjectId(), this.temporaryDraft()),
+          'Creating the conversation for the note'
+        );
+        if (!current()) return false;
+        this.noteCreationId.set(conversation.id);
+        this.conversation.set(conversation);
       }
-      const saved = await this.update(conversation.id, {
-        title: null,
-        projectId: null,
-        clearProject: false,
-        pinnedNote: note,
-      });
-      if (saved) await this.loadConversations();
-      return saved && context === this.openRequest && !this.destroyRef.destroyed;
+      const id = conversation.id;
+      this.conversationWrites.add(id);
+      let native: Promise<Conversation>;
+      try {
+        noteDispatched = true;
+        native = this.api.updateConversation(id, {
+          title: null,
+          projectId: null,
+          clearProject: false,
+          pinnedNote: note,
+        });
+      } catch (error) {
+        this.conversationWrites.delete(id);
+        throw error;
+      }
+      // A frontend deadline does not cancel a native write. Keep its fence
+      // until acknowledgement so a retry cannot overtake the old mutation.
+      void native.then(
+        () => this.conversationWrites.delete(id),
+        () => this.conversationWrites.delete(id)
+      );
+      const updated = await wait(() => native, 'Saving the pinned note');
+      if (!current()) return false;
+      if (updated.id !== id) throw new IpcError('internal', 'The saved note does not belong to this conversation.');
+      this.invalidateConversationList();
+      if (this.conversation()?.id === id) this.conversation.set(updated);
+      this.conversations.update((list) => list.map((item) => (item.id === id ? updated : item)));
+      this.error.set(null);
+      void this.loadConversations();
+      return true;
+    } catch (error) {
+      if (current()) {
+        const failure = IpcError.from(error);
+        this.error.set(
+          failure.code === 'timeout' && failure.origin === 'local'
+            ? new IpcError(
+                'timeout',
+                `${failure.message} ${noteDispatched ? 'The save outcome is unknown.' : 'The conversation may have been created, but the note was not saved.'} No save was retried automatically.`
+              )
+            : failure
+        );
+      }
+      return false;
     } finally {
-      this.savingNote.set(false);
+      if (this.noteSave === operation) {
+        this.noteSave = null;
+        this.savingNote.set(false);
+      }
     }
   }
 
@@ -471,6 +695,10 @@ export class ChatStore {
       return false;
     this.conversationWrites.add(id);
     this.deletingIds.update((ids) => [...ids, id]);
+    if (this.conversation()?.id === id) {
+      this.invalidateNoteSave();
+      this.invalidateSavedMessages();
+    }
     const context = this.openRequest;
     try {
       await this.api.deleteConversation(id);
@@ -490,6 +718,7 @@ export class ChatStore {
           this.conversation.set(null);
           this.summary.set(null);
           this.entries.set([]);
+          this.editorContext.update((editor) => editor + 1);
         }
       }
       this.conversations.update((list) => list.filter((c) => c.id !== id));

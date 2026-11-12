@@ -53,6 +53,7 @@
   </jv-hud-panel>
 }
 
+@let session = editorSession();
 <jv-hud-panel [heading]="editingId() ? 'Edit fact' : 'New fact'">
   <div class="form">
     <label class="field">
@@ -62,12 +63,12 @@
         placeholder="e.g. I prefer short answers with code examples in TypeScript."
         [attr.maxlength]="maxLength"
         [value]="content()"
-        (input)="content.set(valueOf($event))"></textarea>
+        (input)="onContentInput($event)"></textarea>
     </label>
     <div class="toolbar">
       <label class="field">
         <span class="field-label">Applies to</span>
-        <select (change)="projectId.set(valueOf($event) || null)">
+        <select (change)="onProjectChange($event)">
           <option value="" [selected]="projectId() === null">All conversations</option>
           @for (project of store.projects(); track project.id) {
             <option [value]="project.id" [selected]="project.id === projectId()">Project: {{ project.name }}</option>
@@ -75,14 +76,14 @@
         </select>
       </label>
       <label class="check">
-        <input type="checkbox" [checked]="pinned()" (change)="pinned.set(checkedOf($event))" />
+        <input type="checkbox" [checked]="pinned()" (change)="onPinnedChange($event)" />
         <span>Always include (pinned)</span>
       </label>
       <span class="grow"></span>
       @if (editingId()) {
         <button type="button" class="ghost" (click)="reset()">Cancel</button>
       }
-      <button type="button" class="primary" [disabled]="!canSave()" (click)="save()">
+      <button type="button" class="primary" [disabled]="!canSave()" (click)="save(session)">
         <jv-icon name="check" [size]="15" />
         {{ editingId() ? 'Save changes' : 'Remember' }}
       </button>
@@ -129,7 +130,9 @@
         @if (confirmDeleteId() === fact.id) {
           <div class="confirm">
             <span>Forget this fact?</span>
-            <button type="button" class="danger small" (click)="remove(fact)">Forget</button>
+            <button type="button" class="danger small" [disabled]="store.busy() || saving()" (click)="remove(fact)">
+              Forget
+            </button>
             <button type="button" class="ghost small" (click)="confirmDeleteId.set(null)">Cancel</button>
           </div>
         } @else {
@@ -139,7 +142,8 @@
               class="ghost small"
               [title]="fact.pinned ? 'Unpin' : 'Pin: always include'"
               [attr.aria-label]="fact.pinned ? 'Unpin' : 'Pin'"
-              (click)="store.togglePinned(fact)">
+              [disabled]="store.busy() || saving()"
+              (click)="togglePinned(fact)">
               <jv-icon name="pin" [size]="13" />
             </button>
             <button type="button" class="ghost small" title="Edit" aria-label="Edit" (click)="edit(fact)">

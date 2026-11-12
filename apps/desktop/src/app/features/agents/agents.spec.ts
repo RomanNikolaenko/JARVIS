@@ -273,7 +273,9 @@ describe('AgentsPage', () => {
     task.error = 'The cancelled action may have partly happened. Check its effects manually.';
     task.steps[0].outcome = 'unknown';
     task.steps[0].output = 'The action was interrupted before its result was recorded.';
-    TestBed.inject(AgentsStore).selected.set(task);
+    const store = TestBed.inject(AgentsStore);
+    store.selectedId.set(task.id);
+    store.selected.set(task);
     fixture.detectChanges();
 
     expect(element.querySelector('.detail-meta')?.textContent).toContain('Cancelled');

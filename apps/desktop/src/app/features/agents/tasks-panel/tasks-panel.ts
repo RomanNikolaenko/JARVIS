@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import type { AgentTask, StepKind, StepOutcome, TaskStatus, TaskStep } from '@jarvis/shared-types';
@@ -54,6 +54,8 @@ export class TasksPanel {
   protected readonly store = inject(AgentsStore);
   private readonly models = inject(ModelsStore);
   private readonly settings = inject(SettingsStore);
+  private readonly destroyRef = inject(DestroyRef);
+  private draftRevision = 0;
 
   protected readonly maxGoalLength = MAX_GOAL_LENGTH;
   protected readonly formatShortDate = formatShortDate;
@@ -61,7 +63,8 @@ export class TasksPanel {
   protected readonly modelKey = signal('');
   protected readonly maxSteps = signal<number | null>(null);
   protected readonly maxMinutes = signal<number | null>(null);
-  protected readonly confirmDeleteId = signal<string | null>(null);
+  private readonly deleteConfirmation = signal<{ task: AgentTask; selectionVersion: number } | null>(null);
+  protected readonly starting = signal(false);
 
   protected readonly modelOptions = this.models.chatOptions;
   protected readonly selectedOption = computed(() =>
@@ -78,9 +81,22 @@ export class TasksPanel {
       this.goal().trim().length > 0 &&
       this.goal().length <= MAX_GOAL_LENGTH &&
       this.agentsEnabled() &&
+      !this.starting() &&
       !this.selectionUnavailable()
   );
   protected readonly task = this.store.selected;
+  protected readonly confirmingJournal = computed(() => {
+    const confirmation = this.deleteConfirmation();
+    if (
+      confirmation &&
+      confirmation.task === this.task() &&
+      confirmation.task.id === this.store.selectedId() &&
+      confirmation.selectionVersion === this.store.selectionVersion()
+    ) {
+      return confirmation.task;
+    }
+    return null;
+  });
   protected readonly finished = computed(() => {
     const task = this.task();
     return task ? isFinished(task.status) : true;
@@ -145,6 +161,20 @@ export class TasksPanel {
     return task.status === 'paused' && this.store.selectedId() === task.id && !this.store.busy() && !this.resumeBlock(task);
   }
 
+  protected pause(id: string): void {
+    const task = this.task();
+    if (task?.id === id && (task.status === 'running' || task.status === 'waitingForApproval')) {
+      void this.store.pause(id);
+    }
+  }
+
+  protected cancel(id: string): void {
+    const task = this.task();
+    if (task?.id === id && !isFinished(task.status)) {
+      void this.store.cancel(id);
+    }
+  }
+
   protected async resume(expected: AgentTask): Promise<void> {
     const current = this.task();
     if (
@@ -159,37 +189,96 @@ export class TasksPanel {
     await this.store.resume(current.id);
   }
 
+  protected refreshTasks(): void {
+    if (!this.store.busy()) void this.store.refreshTasks();
+  }
+
+  protected clearFinished(): void {
+    if (!this.destroyRef.destroyed && !this.store.busy() && this.store.hasFinished()) void this.store.clearFinished();
+  }
+
   protected refreshModels(): void {
     if (!this.modelsLoading()) void this.models.refresh(true);
   }
 
-  protected async deleteReviewed(id: string): Promise<void> {
-    if (this.confirmDeleteId() !== id || this.store.busy()) {
-      return;
-    }
-    this.confirmDeleteId.set(null);
-    await this.store.deleteReviewed(id);
+  protected selectTask(id: string): void {
+    this.cancelDelete();
+    void this.store.select(id);
+  }
+
+  protected confirmDelete(task: AgentTask, selectionVersion: number): void {
+    if (this.canConfirmDelete(task, selectionVersion)) this.deleteConfirmation.set({ task, selectionVersion });
+  }
+
+  protected cancelDelete(): void {
+    this.deleteConfirmation.set(null);
+  }
+
+  protected async deleteReviewed(task: AgentTask, selectionVersion: number): Promise<void> {
+    if (this.confirmingJournal() !== task || !this.canConfirmDelete(task, selectionVersion)) return;
+    this.cancelDelete();
+    await this.store.deleteReviewed(task.id);
+  }
+
+  private canConfirmDelete(task: AgentTask, selectionVersion: number): boolean {
+    return (
+      !this.destroyRef.destroyed &&
+      this.task() === task &&
+      this.store.selectedId() === task.id &&
+      this.store.selectionVersion() === selectionVersion &&
+      this.canDeleteReviewed(task) &&
+      !this.store.busy()
+    );
   }
 
   protected optionKey(providerId: string, modelId: string): string {
     return optionKey(providerId, modelId);
   }
 
+  protected onGoalChange(value: string): void {
+    ++this.draftRevision;
+    this.goal.set(value);
+  }
+
+  protected onModelChange(value: string): void {
+    ++this.draftRevision;
+    this.modelKey.set(value);
+  }
+
+  protected onStepsChange(value: number | null): void {
+    ++this.draftRevision;
+    this.maxSteps.set(value);
+  }
+
+  protected onMinutesChange(value: number | null): void {
+    ++this.draftRevision;
+    this.maxMinutes.set(value);
+  }
+
   protected async start(): Promise<void> {
-    if (!this.canStart() || this.store.busy()) {
+    if (this.destroyRef.destroyed || !this.canStart() || this.store.busy()) {
       return;
     }
     const option = this.selectedOption();
     const minutes = this.maxMinutes();
-    const task = await this.store.startTask({
+    const request = {
       goal: this.goal().trim(),
       providerId: option?.provider.id ?? null,
       model: option?.model.id ?? null,
       maxSteps: this.maxSteps(),
       maxDurationSecs: minutes ? Math.round(minutes * 60) : null,
-    });
-    if (task) {
-      this.goal.set('');
+    };
+    const revision = this.draftRevision;
+    const current = () => !this.destroyRef.destroyed && revision === this.draftRevision;
+    this.starting.set(true);
+    try {
+      const task = await this.store.startTask(request, current);
+      if (task && current()) {
+        ++this.draftRevision;
+        this.goal.set('');
+      }
+    } finally {
+      this.starting.set(false);
     }
   }
 }

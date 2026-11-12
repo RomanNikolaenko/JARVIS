@@ -47,6 +47,68 @@ describe('VisionStore', () => {
     expect(store.attachments()).toEqual([]);
   });
 
+  it('keeps submitted captures attached until admission is known', async () => {
+    await store.captureScreen(null);
+    const original = store.attachments()[0];
+    const submission = store.prepareSend();
+    expect(submission.attachments).toEqual([original]);
+    expect(store.attachments()).toEqual([original]);
+    expect(api['discardCapture']).not.toHaveBeenCalled();
+
+    await store.captureScreen('2');
+    submission.consume();
+    expect(store.attachments().map((image) => image.id)).toEqual(['c2']);
+    expect(api['discardCapture']).not.toHaveBeenCalled();
+    submission.consume();
+    expect(store.attachments().map((image) => image.id)).toEqual(['c2']);
+  });
+
+  it('does not consume a newer capture object or a capture still being prepared', async () => {
+    await store.captureScreen(null);
+    const submission = store.prepareSend();
+    const replacement = { ...submission.attachments[0] };
+    store.attachments.set([replacement]);
+    let finish!: (info: CaptureInfo) => void;
+    api['captureScreen'].mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = store.captureScreen(null);
+    submission.consume();
+    finish(capture('next'));
+    await pending;
+    expect(store.attachments()).toEqual([replacement, capture('next')]);
+    expect(api['discardCapture']).not.toHaveBeenCalled();
+  });
+
+  it('discards an older capture that finishes after preparing a submission', async () => {
+    await store.captureScreen(null);
+    let finish!: (info: CaptureInfo) => void;
+    api['captureScreen'].mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const pending = store.captureScreen(null);
+    const submission = store.prepareSend();
+    finish(capture('late'));
+    await pending;
+    expect(submission.attachments.map((image) => image.id)).toEqual(['c1']);
+    expect(store.attachments().map((image) => image.id)).toEqual(['c1']);
+    expect(api['discardCapture']).toHaveBeenCalledWith('late');
+  });
+
+  it('does not restore or remove captures from another conversation when admission arrives late', async () => {
+    await store.captureScreen(null);
+    const submission = store.prepareSend();
+    store.clear();
+    await store.captureScreen(null);
+    submission.consume();
+    expect(store.attachments().map((image) => image.id)).toEqual(['c2']);
+    expect(api['discardCapture']).toHaveBeenCalledExactlyOnceWith('c1');
+  });
+
   it('discards removed captures in the core', async () => {
     await store.captureScreen(null);
     await store.remove('c1');

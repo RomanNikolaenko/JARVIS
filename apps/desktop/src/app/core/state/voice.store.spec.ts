@@ -4,7 +4,7 @@ import type { CaptureInfo, VoiceState, VoiceTranscript } from '@jarvis/shared-ty
 
 import { IDLE_VOICE, voiceStatus } from '../../testing/voice.fixture';
 import { JarvisApi } from '../ipc/jarvis-api';
-import { ChatStore } from './chat.store';
+import { ChatStore, type ChatSendResult } from './chat.store';
 import { VisionStore } from './vision.store';
 import { VoiceStore } from './voice.store';
 
@@ -30,7 +30,8 @@ describe('VoiceStore', () => {
     inputContext: ReturnType<typeof vi.fn>;
     acceptsInput: ReturnType<typeof vi.fn>;
   };
-  let take: ReturnType<typeof vi.fn>;
+  let prepareSend: ReturnType<typeof vi.fn>;
+  let consume: ReturnType<typeof vi.fn>;
   let store: VoiceStore;
   let stops: ReturnType<typeof vi.fn>[];
 
@@ -63,17 +64,28 @@ describe('VoiceStore', () => {
     chat = {
       busy: vi.fn(() => false),
       cancel: vi.fn(async () => undefined),
-      send: vi.fn(async () => undefined),
+      send: vi.fn(
+        async (
+          _text: string,
+          _speak: boolean,
+          _attachments: readonly CaptureInfo[],
+          onResult: (result: ChatSendResult) => void
+        ) => {
+          onResult('accepted');
+          return 'accepted';
+        }
+      ),
       inputContext: vi.fn(() => 0),
       acceptsInput: vi.fn(() => !chat.busy()),
     };
-    take = vi.fn(() => [CAPTURE]);
+    consume = vi.fn();
+    prepareSend = vi.fn(() => ({ attachments: [CAPTURE], consume }));
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
-        { provide: VisionStore, useValue: { take } },
+        { provide: VisionStore, useValue: { prepareSend } },
       ],
     });
     store = TestBed.inject(VoiceStore);
@@ -101,8 +113,81 @@ describe('VoiceStore', () => {
   it('sends spoken requests to the chat and asks for a spoken reply', async () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     onTranscript(transcript('Яка погода?', 'wakeWord'));
-    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledWith('Яка погода?', true, [CAPTURE]));
+    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledWith('Яка погода?', true, [CAPTURE], expect.any(Function)));
     expect(navigate).toHaveBeenCalledWith('/chat');
+    expect(consume).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])('keeps captures when a spoken request is rejected (images: %s)', async (images) => {
+    vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    if (!images) prepareSend.mockReturnValueOnce({ attachments: [], consume });
+    chat.send.mockImplementationOnce(async (_text, _speak, _attachments, onResult: (result: ChatSendResult) => void) => {
+      onResult('notSent');
+      return 'notSent';
+    });
+    const result = transcript('request', 'wakeWord');
+    onTranscript(result);
+    await vi.waitFor(() => expect(store.notice()).toContain('Your spoken request was not sent.'));
+    expect(store.notice()?.includes('images are still attached')).toBe(images);
+    expect(consume).not.toHaveBeenCalled();
+    onTranscript(result);
+    await Promise.resolve();
+    expect(chat.send).toHaveBeenCalledOnce();
+  });
+
+  it('consumes captures as soon as a stream admits a request, before its acknowledgement', async () => {
+    vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    let admit!: (result: ChatSendResult) => void;
+    let acknowledge!: (result: ChatSendResult) => void;
+    chat.send.mockImplementationOnce(
+      (_text, _speak, _attachments, onResult: (result: ChatSendResult) => void) =>
+        new Promise<ChatSendResult>((resolve) => {
+          admit = onResult;
+          acknowledge = resolve;
+        })
+    );
+    onTranscript(transcript('request', 'wakeWord'));
+    await vi.waitFor(() => expect(admit).toBeDefined());
+    expect(consume).not.toHaveBeenCalled();
+    admit('accepted');
+    expect(consume).toHaveBeenCalledOnce();
+    expect(store.notice()).toBeNull();
+    acknowledge('accepted');
+    await Promise.resolve();
+    expect(chat.send).toHaveBeenCalledOnce();
+  });
+
+  it('consumes uncertain captures and warns against repeating an unknown request', async () => {
+    vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    chat.send.mockImplementationOnce(async (_text, _speak, _attachments, onResult: (result: ChatSendResult) => void) => {
+      onResult('unknown');
+      return 'unknown';
+    });
+    onTranscript(transcript('request', 'wakeWord'));
+    await vi.waitFor(() => expect(store.notice()).toContain('may still be running'));
+    expect(consume).toHaveBeenCalledOnce();
+    expect(chat.send).toHaveBeenCalledOnce();
+  });
+
+  it('keeps late send notices out of another conversation', async () => {
+    vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    let result!: (result: ChatSendResult) => void;
+    let finish!: (result: ChatSendResult) => void;
+    chat.send.mockImplementationOnce(
+      (_text, _speak, _attachments, onResult: (result: ChatSendResult) => void) =>
+        new Promise<ChatSendResult>((resolve) => {
+          result = onResult;
+          finish = resolve;
+        })
+    );
+    onTranscript(transcript('request', 'wakeWord'));
+    await vi.waitFor(() => expect(result).toBeDefined());
+    chat.inputContext.mockReturnValue(1);
+    result('unknown');
+    finish('unknown');
+    await Promise.resolve();
+    expect(store.notice()).toBeNull();
+    expect(consume).toHaveBeenCalledOnce();
   });
 
   it('cancels a reply that is still streaming before sending a new request', async () => {
@@ -146,7 +231,7 @@ describe('VoiceStore', () => {
     onTranscript(transcript('old request', 'pushToTalk'));
     await Promise.resolve();
     expect(chat.send).not.toHaveBeenCalled();
-    expect(take).not.toHaveBeenCalled();
+    expect(prepareSend).not.toHaveBeenCalled();
   });
 
   it('ignores a transcript after cancelling listening', async () => {
@@ -163,7 +248,7 @@ describe('VoiceStore', () => {
       onTranscript(transcript('next request', 'wakeWord'));
       await vi.advanceTimersByTimeAsync(5100);
       expect(chat.send).not.toHaveBeenCalled();
-      expect(take).not.toHaveBeenCalled();
+      expect(prepareSend).not.toHaveBeenCalled();
       expect(store.notice()).toContain('not ready');
     } finally {
       vi.useRealTimers();
@@ -178,7 +263,7 @@ describe('VoiceStore', () => {
     onTranscript(transcript('request', 'wakeWord'));
     await Promise.resolve();
     expect(chat.send).not.toHaveBeenCalled();
-    expect(take).not.toHaveBeenCalled();
+    expect(prepareSend).not.toHaveBeenCalled();
   });
 
   it('rejects unknown captures and consumes each known capture once', async () => {
@@ -198,7 +283,7 @@ describe('VoiceStore', () => {
     chat.inputContext.mockReturnValue(1);
     onTranscript(old);
     expect(chat.send).not.toHaveBeenCalled();
-    expect(take).not.toHaveBeenCalled();
+    expect(prepareSend).not.toHaveBeenCalled();
   });
 
   it('does not associate an old result with a newer microphone test', async () => {
@@ -263,7 +348,7 @@ describe('VoiceStore', () => {
         provideRouter([]),
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
-        { provide: VisionStore, useValue: { take } },
+        { provide: VisionStore, useValue: { prepareSend } },
       ],
     });
     store = TestBed.inject(VoiceStore);
@@ -283,7 +368,7 @@ describe('VoiceStore', () => {
         provideRouter([]),
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
-        { provide: VisionStore, useValue: { take } },
+        { provide: VisionStore, useValue: { prepareSend } },
       ],
     });
     store = TestBed.inject(VoiceStore);

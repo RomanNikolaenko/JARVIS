@@ -107,6 +107,22 @@ export class VisionStore {
     return taken;
   }
 
+  /** Keep a submitted draft until the core confirms admission or the result becomes unknown. */
+  prepareSend(): { attachments: readonly CaptureInfo[]; consume: () => void } {
+    ++this.attachmentEpoch;
+    const attachments = [...this.attachments()];
+    const submitted = new Set(attachments);
+    let consumed = false;
+    return {
+      attachments,
+      consume: () => {
+        if (consumed || this.destroyRef.destroyed) return;
+        consumed = true;
+        this.attachments.update((list) => list.filter((capture) => !submitted.has(capture)));
+      },
+    };
+  }
+
   private async add(capture: () => Promise<CaptureInfo | null>): Promise<void> {
     if (this.destroyRef.destroyed || this.capturing) return;
     if (this.full()) {

@@ -40,14 +40,21 @@ export class TauriBridge {
   }
 
   channel<T>(onMessage: (message: T) => void): Channel<T> {
-    return new Channel<T>(onMessage);
+    this.ensureAvailable();
+    try {
+      return new Channel<T>(onMessage);
+    } catch (error) {
+      const failure = IpcError.from(error);
+      throw new IpcError(failure.code, failure.message, 'notDispatched');
+    }
   }
 
   private ensureAvailable(): void {
     if (!this.available) {
       throw new IpcError(
         'unavailable',
-        'The JARVIS core is not reachable. Start the UI through the desktop app (pnpm run tauri dev).'
+        'The JARVIS core is not reachable. Start the UI through the desktop app (pnpm run tauri dev).',
+        'notDispatched'
       );
     }
   }

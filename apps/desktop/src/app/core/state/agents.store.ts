@@ -19,7 +19,16 @@ import { SettingsStore } from './settings.store';
 export const AUDIT_PAGE = 100;
 export const AUDIT_TIMEOUT_MS = 30_000;
 export const AGENT_READ_TIMEOUT_MS = 30_000;
+export const AGENT_COMMAND_TIMEOUT_MS = 30_000;
+export const APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 export const MAX_GOAL_LENGTH = 4000;
+
+type TaskControl = 'pause' | 'resume' | 'cancel';
+
+interface ApprovalDecision {
+  readonly promise: Promise<IpcError | null>;
+  readonly interrupt: (error: IpcError) => void;
+}
 
 const FINISHED: readonly TaskStatus[] = ['completed', 'unverified', 'failed', 'cancelled'];
 
@@ -29,6 +38,11 @@ export function isFinished(status: TaskStatus): boolean {
 
 export function hasUnresolvedAction(task: Pick<AgentTask, 'steps'>): boolean {
   return task.steps.some((step) => step.outcome === 'unknown' || step.outcome === 'inProgress');
+}
+
+function isMissingTask(error: unknown): boolean {
+  const failure = IpcError.from(error);
+  return failure.origin === 'core' && failure.code === 'notFound';
 }
 
 /** Mirrors `TaskSummary::from(&AgentTask)` in the Rust core. */
@@ -60,19 +74,29 @@ export class AgentsStore {
   private starting: Promise<void> | null = null;
   private disconnect: (() => void) | null = null;
   private pending = 0;
-  private selectionRequest = 0;
+  private readonly selectionRequest = signal(0);
+  private startRequest = 0;
   private listRequest = 0;
   private statusRequest = 0;
   private toolsRequest = 0;
+  private readonly approvalDecisions = new Map<string, ApprovalDecision>();
+  private readonly taskControls = signal<ReadonlyMap<string, Promise<void>>>(new Map());
+  private cleanupRequest: Promise<void> | null = null;
+  // Verified deletions beat queued events and snapshots dispatched before removal.
+  private readonly deletedTaskIds = new Set<string>();
   // Keep full event payloads only while an IPC snapshot is in flight.
   private readonly taskReads = new Set<Map<string, AgentTask>>();
+  // Creation acknowledgements belong in lists, but are not live journal events.
+  private readonly taskListReads = new Set<Map<string, AgentTask>>();
 
   readonly status = signal<AgentStatus | null>(null);
   readonly tools = signal<readonly ToolInfo[]>([]);
   readonly tasks = signal<readonly TaskSummary[]>([]);
   readonly selectedId = signal<string | null>(null);
   readonly selected = signal<AgentTask | null>(null);
+  readonly selectionVersion = this.selectionRequest.asReadonly();
   readonly approvals = signal<readonly PendingApproval[]>([]);
+  readonly decidingApprovalIds = signal<readonly string[]>([]);
   readonly audit = signal<readonly AuditEntry[]>([]);
   readonly auditComplete = signal(false);
   readonly auditLoading = signal(false);
@@ -86,8 +110,9 @@ export class AgentsStore {
   readonly subscriptionError = signal<IpcError | null>(null);
 
   constructor() {
-    inject(DestroyRef).onDestroy(() => {
+    this.destroyRef.onDestroy(() => {
       this.destroyed = true;
+      this.withdrawApprovals(new IpcError('cancelled', 'Permission decisions were interrupted.'));
       this.disconnect?.();
     });
   }
@@ -124,7 +149,7 @@ export class AgentsStore {
     this.starting = null;
     this.connecting.set(false);
     this.subscriptionError.set(error);
-    this.approvals.set([]);
+    this.withdrawApprovals(error);
   }
 
   private async subscribe(): Promise<void> {
@@ -180,8 +205,10 @@ export class AgentsStore {
       this.subscriptionError.set(null);
     } catch (error) {
       if (active) {
+        const failure = IpcError.from(error);
         this.recoveryNeeded = true;
-        this.subscriptionError.set(IpcError.from(error));
+        this.subscriptionError.set(failure);
+        this.withdrawApprovals(failure);
       }
       dispose();
     }
@@ -190,27 +217,23 @@ export class AgentsStore {
   /** Reconcile changes missed while listeners were disconnected. */
   private recoverTasks(isActive: () => boolean): Promise<void> {
     const listRequest = ++this.listRequest;
-    const selectionRequest = ++this.selectionRequest;
+    const selectionRequest = this.nextSelectionRequest();
     const id = this.selectedId();
+    const listUpdates = new Map<string, AgentTask>();
+    this.taskListReads.add(listUpdates);
     return this.observeTasks(async (updates) => {
-      const journal =
-        id === null
-          ? Promise.resolve(null)
-          : this.read(() => this.api.getAgentTask(id), 'Agent task').catch((error: unknown) => {
-              if (IpcError.from(error).code === 'notFound') return null;
-              throw error;
-            });
-      const [tasks, task] = await Promise.all([this.read(() => this.api.listAgentTasks(100), 'Agent tasks'), journal]);
-      if (!isActive()) return;
-      if (listRequest === this.listRequest) {
-        const merged = new Map(tasks.map((entry) => [entry.id, entry]));
-        for (const update of updates.values()) merged.set(update.id, summarize(update));
-        this.tasks.set([...merged.values()].sort((a, b) => b.updatedAtMs - a.updatedAtMs));
-      }
-      if (selectionRequest === this.selectionRequest && id !== null) {
-        const current = updates.get(id) ?? task;
-        this.selected.set(current);
-        if (!current) this.selectedId.set(null);
+      try {
+        const journal = id === null ? Promise.resolve(null) : this.readTaskJournal(id);
+        const [tasks, task] = await Promise.all([this.read(() => this.api.listAgentTasks(100), 'Agent tasks'), journal]);
+        if (!isActive()) return;
+        if (listRequest === this.listRequest) {
+          this.publishTaskList(tasks, listUpdates);
+        }
+        if (selectionRequest === this.selectionRequest() && id !== null) {
+          this.publishTaskJournal(id, task, updates);
+        }
+      } finally {
+        this.taskListReads.delete(listUpdates);
       }
     });
   }
@@ -240,27 +263,28 @@ export class AgentsStore {
   loadTasks(): Promise<void> {
     if (this.destroyed) return Promise.resolve();
     const request = ++this.listRequest;
-    return this.observeTasks((updates) =>
-      this.run(
-        async () => {
-          const tasks = await this.read(() => this.api.listAgentTasks(100), 'Agent tasks');
-          if (request !== this.listRequest || this.destroyed) return;
-          const merged = new Map(tasks.map((task) => [task.id, task]));
-          for (const task of updates.values()) merged.set(task.id, summarize(task));
-          this.tasks.set([...merged.values()].sort((a, b) => b.updatedAtMs - a.updatedAtMs));
-          const selected = this.selectedId();
-          if (selected === null && this.tasks().length) {
-            await this.select(this.tasks()[0].id);
-          }
-        },
-        () => request === this.listRequest
-      )
+    const selection = this.selectionRequest();
+    return this.observeTasks(
+      (updates) =>
+        this.run(
+          async () => {
+            const tasks = await this.read(() => this.api.listAgentTasks(100), 'Agent tasks');
+            if (request !== this.listRequest || this.destroyed) return;
+            this.publishTaskList(tasks, updates);
+            const selected = this.selectedId();
+            if (selection === this.selectionRequest() && selected === null && this.tasks().length) {
+              await this.select(this.tasks()[0].id);
+            }
+          },
+          () => request === this.listRequest
+        ),
+      true
     );
   }
 
   select(id: string | null): Promise<void> {
-    if (this.destroyed) return Promise.resolve();
-    const request = ++this.selectionRequest;
+    if (this.destroyed || (id !== null && this.deletedTaskIds.has(id))) return Promise.resolve();
+    const request = this.nextSelectionRequest();
     if (id !== this.selectedId()) this.selected.set(null);
     this.selectedId.set(id);
     if (id === null) {
@@ -271,79 +295,253 @@ export class AgentsStore {
       this.run(
         async () => {
           const task = await this.read(() => this.api.getAgentTask(id), 'Agent task');
-          if (request === this.selectionRequest && !this.destroyed) {
+          if (request === this.selectionRequest() && !this.destroyed) {
             this.selected.set(updates.get(id) ?? task);
           }
         },
-        () => request === this.selectionRequest && !updates.has(id)
+        () => request === this.selectionRequest() && !updates.has(id)
       )
     );
   }
 
-  async startTask(request: AgentStartRequest): Promise<AgentTask | null> {
+  async refreshTasks(): Promise<void> {
+    if (this.destroyed) return;
+    const id = this.selectedId();
+    const journal = id === null ? Promise.resolve() : this.refreshSelectedTask(id);
+    await Promise.all([this.loadTasks(), journal]);
+  }
+
+  private refreshSelectedTask(id: string): Promise<void> {
+    const selection = this.nextSelectionRequest();
+    const current = () => selection === this.selectionRequest() && !this.destroyed;
+    return this.observeTasks((updates) =>
+      this.run(
+        async () => {
+          const task = await this.readTaskJournal(id);
+          if (current()) this.publishTaskJournal(id, task, updates);
+        },
+        () => current() && !updates.has(id)
+      )
+    );
+  }
+
+  private nextSelectionRequest(): number {
+    this.selectionRequest.update((version) => version + 1);
+    return this.selectionRequest();
+  }
+
+  async startTask(request: AgentStartRequest, shouldSelect?: () => boolean): Promise<AgentTask | null> {
+    if (this.destroyed) return null;
+    const selection = this.selectionRequest();
+    const start = ++this.startRequest;
     let task: AgentTask | null = null;
     await this.observeTasks((updates) =>
       this.run(async () => {
-        const created = await this.api.startAgentTask(request);
-        task = updates.get(created.id) ?? created;
-        ++this.selectionRequest;
-        this.selectedId.set(task.id);
-        this.merge(task);
+        const created = await this.taskCommand(
+          () => this.api.startAgentTask(request),
+          'Task creation',
+          'Task creation could not be confirmed. The task may already be running or may start later. Use Refresh tasks in Agents to check before starting another task.'
+        );
+        if (this.destroyed || this.deletedTaskIds.has(created.id)) return;
+        const selected = selection !== this.selectionRequest() && this.selectedId() === created.id ? this.selected() : null;
+        task = selected?.id === created.id ? selected : (updates.get(created.id) ?? created);
+        // Creation is independent of the originating editor. Retain the
+        // confirmed task even if the user has moved to another journal.
+        this.merge(task, false);
+        if (start === this.startRequest && selection === this.selectionRequest() && (shouldSelect?.() ?? true)) {
+          this.nextSelectionRequest();
+          this.selectedId.set(task.id);
+          this.selected.set(task);
+        }
       })
     );
-    return task;
+    return this.destroyed ? null : task;
   }
 
   cancel(id: string): Promise<void> {
-    return this.run(async () => {
-      await this.api.cancelAgentTask(id);
-    });
+    return this.controlTask('cancel', id, () => this.api.cancelAgentTask(id));
   }
 
   pause(id: string): Promise<void> {
-    return this.run(async () => {
-      await this.api.pauseAgentTask(id);
-    });
+    return this.controlTask('pause', id, () => this.api.pauseAgentTask(id));
   }
 
   resume(id: string): Promise<void> {
-    return this.run(async () => {
-      await this.api.resumeAgentTask(id);
+    return this.controlTask('resume', id, () => this.api.resumeAgentTask(id));
+  }
+
+  isControlling(control: TaskControl, id: string): boolean {
+    return this.taskControls().has(`${control}:${id}`);
+  }
+
+  private controlTask(control: TaskControl, id: string, request: () => Promise<boolean | void>): Promise<void> {
+    if (this.destroyed) return Promise.resolve();
+    const key = `${control}:${id}`;
+    const pending = this.taskControls().get(key);
+    if (pending) return pending;
+    const label = { pause: 'Pause request', resume: 'Resume request', cancel: 'Cancel request' }[control];
+    const command = this.run(async () => {
+      const accepted = await this.taskCommand(
+        request,
+        label,
+        `The ${control} request could not be confirmed. The task may still change state. Check its journal before trying again.`
+      );
+      if (accepted === false) {
+        throw new IpcError('unavailable', `This task is no longer accepting ${control} requests. Check the task journal.`);
+      }
+    }).finally(() => {
+      this.taskControls.update((controls) => {
+        const next = new Map(controls);
+        next.delete(key);
+        return next;
+      });
     });
+    this.taskControls.update((controls) => new Map(controls).set(key, command));
+    return command;
+  }
+
+  private async taskCommand<T>(request: () => Promise<T>, label: string, uncertain: string): Promise<T> {
+    try {
+      return await withRequestDeadline(request, AGENT_COMMAND_TIMEOUT_MS, label, this.destroyRef);
+    } catch (error) {
+      const failure = IpcError.from(error);
+      if (
+        failure.origin === 'notDispatched' ||
+        (failure.origin === 'core' && failure.code !== 'io' && failure.code !== 'internal')
+      )
+        throw failure;
+      throw new IpcError(failure.code, `${failure.message} ${uncertain}`, failure.origin);
+    }
   }
 
   clearFinished(): Promise<void> {
-    return this.run(async () => {
-      await this.api.clearFinishedAgentTasks();
-      const selected = this.selected();
-      if (selected && isFinished(selected.status) && !hasUnresolvedAction(selected)) {
-        await this.select(null);
-      }
-      await this.loadTasks();
+    return this.cleanup(async () => {
+      const removed = await this.taskCommand(
+        () => this.api.clearFinishedAgentTasks(),
+        'Clear finished tasks',
+        'Journal cleanup could not be confirmed. Use Refresh tasks to check the result before clearing again.'
+      );
+      this.forgetTasks(removed);
+      await this.refreshTasks();
     });
   }
 
   deleteReviewed(id: string): Promise<void> {
-    return this.run(async () => {
-      await this.api.deleteReviewedAgentTask(id);
-      if (this.selectedId() === id) {
-        await this.select(null);
+    if (this.deletedTaskIds.has(id)) return Promise.resolve();
+    return this.cleanup(async () => {
+      try {
+        const removed = await this.taskCommand(
+          () => this.api.deleteReviewedAgentTask(id),
+          'Delete reviewed journal',
+          'Journal deletion could not be confirmed. Use Refresh tasks to check the result before deleting again.'
+        );
+        if (removed > 0) this.forgetTasks([id]);
+      } catch (error) {
+        if (!isMissingTask(error)) throw error;
+        this.forgetTasks([id]);
       }
-      await this.loadTasks();
+      await this.refreshTasks();
     });
   }
 
-  /** The user's decision. A stale request (already decided) is ignored. */
-  async resolve(id: string, approved: boolean): Promise<IpcError | null> {
+  private cleanup(action: () => Promise<void>): Promise<void> {
+    if (this.cleanupRequest) return this.cleanupRequest;
+    const request = this.run(action).finally(() => {
+      this.cleanupRequest = null;
+    });
+    this.cleanupRequest = request;
+    return request;
+  }
+
+  private forgetTasks(ids: readonly string[]): void {
+    if (!ids.length) return;
+    for (const id of ids) this.deletedTaskIds.add(id);
+    this.tasks.update((tasks) => tasks.filter((task) => !this.deletedTaskIds.has(task.id)));
+    const selected = this.selectedId();
+    if (selected !== null && this.deletedTaskIds.has(selected)) {
+      this.nextSelectionRequest();
+      this.selectedId.set(null);
+      this.selected.set(null);
+    }
+  }
+
+  /** One in-flight decision per UUID; no decision is retried automatically. */
+  resolve(id: string, approved: boolean): Promise<IpcError | null> {
+    if (this.destroyed) return Promise.resolve(new IpcError('cancelled', 'The permission request is no longer available.'));
+    const pending = this.approvalDecisions.get(id);
+    if (pending) return pending.promise;
+    const approval = this.approvals().find((entry) => entry.id === id);
+    if (!approval) return Promise.resolve(new IpcError('notFound', 'This permission request is no longer pending.'));
+    if (approval.expiresAtMs <= Date.now())
+      return Promise.resolve(new IpcError('unavailable', 'This permission request has expired.'));
+
+    let interrupt!: (error: IpcError) => void;
+    const interrupted = new Promise<IpcError>((resolve) => {
+      interrupt = resolve;
+    });
+    let complete!: (error: IpcError | null) => void;
+    const promise = new Promise<IpcError | null>((resolve) => {
+      complete = resolve;
+    });
+    const operation: ApprovalDecision = { interrupt, promise };
+    this.approvalDecisions.set(id, operation);
+    this.decidingApprovalIds.set([...this.approvalDecisions.keys()]);
+    void this.decideApproval(id, approved, operation, interrupted).then(complete);
+    return promise;
+  }
+
+  private async decideApproval(
+    id: string,
+    approved: boolean,
+    operation: ApprovalDecision,
+    interrupted: Promise<IpcError>
+  ): Promise<IpcError | null> {
+    const current = () => this.approvalDecisions.get(id) === operation;
     try {
-      await this.api.resolveApproval(id, approved);
+      const result = await withRequestDeadline(
+        () => Promise.race([interrupted, this.api.resolveApproval(id, approved)]),
+        APPROVAL_DECISION_TIMEOUT_MS,
+        'Permission decision',
+        this.destroyRef
+      );
+      if (result instanceof IpcError) return this.uncertainApprovalDecision(result, approved);
+      if (!current()) return this.uncertainApprovalDecision(await interrupted, approved);
+      // Both boolean responses mean this UUID is no longer awaiting a decision;
+      // neither response says that the tool action has completed.
       this.approvals.update((list) => list.filter((a) => a.id !== id));
       return null;
     } catch (error) {
-      // Keep failures local to the dialog; unrelated background refreshes
-      // must not erase the user's decision error.
-      return IpcError.from(error);
+      if (!current()) return this.uncertainApprovalDecision(await interrupted, approved);
+      const failure = IpcError.from(error);
+      if (
+        failure.origin === 'notDispatched' ||
+        (failure.origin === 'core' && failure.code !== 'io' && failure.code !== 'internal')
+      ) {
+        return failure;
+      }
+      return this.uncertainApprovalDecision(failure, approved);
+    } finally {
+      if (current()) {
+        this.approvalDecisions.delete(id);
+        this.decidingApprovalIds.set([...this.approvalDecisions.keys()]);
+      }
     }
+  }
+
+  private uncertainApprovalDecision(failure: IpcError, approved: boolean): IpcError {
+    return new IpcError(
+      failure.code,
+      `The decision could not be confirmed. ${approved ? 'The action may already be running. ' : ''}Check the task and current permission request before deciding again. ${failure.message}`,
+      failure.origin
+    );
+  }
+
+  private withdrawApprovals(error: IpcError): void {
+    const decisions = [...this.approvalDecisions.values()];
+    this.approvalDecisions.clear();
+    this.approvals.set([]);
+    this.decidingApprovalIds.set([]);
+    for (const decision of decisions) decision.interrupt(error);
   }
 
   loadAudit(more = false): Promise<void> {
@@ -419,25 +617,55 @@ export class AgentsStore {
   }
 
   /** Applies a pushed task to the list and the open task. */
-  private merge(task: AgentTask): void {
-    for (const updates of this.taskReads) updates.set(task.id, task);
+  private merge(task: AgentTask, liveEvent = true): void {
+    if (this.deletedTaskIds.has(task.id)) return;
+    if (liveEvent) {
+      for (const updates of this.taskReads) updates.set(task.id, task);
+    }
+    for (const updates of this.taskListReads) updates.set(task.id, task);
     const summary = summarize(task);
     this.tasks.update((list) => {
       const rest = list.filter((t) => t.id !== task.id);
       return [summary, ...rest].sort((a, b) => b.updatedAtMs - a.updatedAtMs);
     });
-    if (this.selectedId() === task.id) {
+    if (liveEvent && this.selectedId() === task.id) {
       this.selected.set(task);
     }
   }
 
-  private async observeTasks<T>(action: (updates: Map<string, AgentTask>) => Promise<T>): Promise<T> {
+  private publishTaskList(tasks: readonly TaskSummary[], updates: ReadonlyMap<string, AgentTask>): void {
+    const merged = new Map(tasks.map((task) => [task.id, task]));
+    for (const task of updates.values()) merged.set(task.id, summarize(task));
+    this.tasks.set(
+      [...merged.values()].filter((task) => !this.deletedTaskIds.has(task.id)).sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+    );
+  }
+
+  private async readTaskJournal(id: string): Promise<AgentTask | null> {
+    try {
+      return await this.read(() => this.api.getAgentTask(id), 'Agent task');
+    } catch (error) {
+      if (isMissingTask(error)) return null;
+      throw error;
+    }
+  }
+
+  private publishTaskJournal(id: string, task: AgentTask | null, updates: ReadonlyMap<string, AgentTask>): void {
+    // A capped list cannot establish deletion. An exact core not-found
+    // response also takes precedence over queued events for the deleted ID.
+    if (task === null) this.forgetTasks([id]);
+    else this.selected.set(updates.get(id) ?? task);
+  }
+
+  private async observeTasks<T>(action: (updates: Map<string, AgentTask>) => Promise<T>, list = false): Promise<T> {
     const updates = new Map<string, AgentTask>();
     this.taskReads.add(updates);
+    if (list) this.taskListReads.add(updates);
     try {
       return await action(updates);
     } finally {
       this.taskReads.delete(updates);
+      if (list) this.taskListReads.delete(updates);
     }
   }
 
