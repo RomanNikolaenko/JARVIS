@@ -71,6 +71,11 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Fixed
 
+- Work folders of Claude Code and Codex requests no longer pile up in the
+  temporary folder. A folder could stay behind when JARVIS closed while a
+  CLI was stopping or waiting for the next message (empty for Claude Code;
+  for Codex it could hold the conversation's images). Folders older than a
+  day are deleted when JARVIS starts.
 - Journal cleanup has a 30-second acknowledgement deadline. Refresh tasks
   checks the open journal by ID and preserves journals that survive bulk
   cleanup. Confirmed bulk and reviewed deletions remove the exact deleted

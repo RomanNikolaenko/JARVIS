@@ -34,8 +34,14 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   Code reports no tools, MCP servers or commands; Codex cannot run a command)
 - ✅ Images through Claude Code (PNG and JPEG as `stream-json` image blocks;
   live check 2026-11-12: Haiku named the colour of a test image)
-- ⬜ A live check of Claude Code inside the desktop app (chat, images, the
-  waiting process)
+- ✅ Live check of Claude Code inside the desktop app (2026-11-13, Claude
+  Code 2.1.316, chat IPC as the chat screen uses it): after the first
+  message one CLI start per message (the waiting process is reused); Haiku
+  2.7 s for the first message, then 0.9–1.0 s; Opus 2.6 s, then 1.2–1.3 s
+  (a first run gave 5–9 s, varying on the service's side); a photo answered
+  "Червоний" in 1.3 s; the waiting process stops when JARVIS closes. Found:
+  empty work folders left in the temporary folder when JARVIS closed during
+  a wait; folders older than a day are now deleted at start.
 - ✅ Verification against real servers (Phase 9): Ollama 0.40.11 and the
   llama.cpp server (the OpenAI-compatible protocol LM Studio speaks); the LM
   Studio app itself is not installed on the dev machine

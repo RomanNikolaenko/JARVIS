@@ -53,7 +53,8 @@ access to the computer, and must keep the cloud opt-in.
   conversation's images are written there for Codex `--image` and deleted with
   it), as an owned process tree (`jarvis_platform::spawn_owned`: kill-on-close
   job on Windows, process group on Unix), without JARVIS's local-model key
-  variables. Dropping the stream kills the tree; JSON lines are capped at
+  variables. Work folders older than a day (left when JARVIS closed while a
+  CLI was stopping) are deleted once per start. Dropping the stream kills the tree; JSON lines are capped at
   8 MiB and only the last 8 KiB of stderr is kept for error messages.
 - **Privacy:** the base URL is fixed (`https://chatgpt.com`,
   `https://claude.ai`) and validated, so the locality is always third-party
