@@ -126,6 +126,8 @@ async fn start(locality: DataLocality, voice: bool) -> Option<TestCore> {
     let mut settings = core.settings();
     settings.tools.workspace_folders = vec![workspace.to_string_lossy().into_owned()];
     settings.privacy.allow_cloud_providers = true;
+    settings.tools.enabled.push("write_file".into());
+    settings.tools.enabled.push("edit_file".into());
     core.update_settings(settings).await.unwrap();
     Some(TestCore {
         core,
@@ -504,4 +506,266 @@ async fn non_mentor_turns_are_unchanged() {
     let (system, user) = last_request(&test);
     assert!(!system.contains("<write"));
     assert_eq!(user, "Інша розмова");
+}
+
+// ----- typing -----
+
+use jarvis_core::jarvis_security::{PendingApproval, RiskLevel};
+
+/// Makes the teacher answer the next turn with `reply` and sends a phrase.
+async fn ask_to_write(test: &TestCore, conversation: Uuid, reply: &str) {
+    test.teacher.replies.lock().unwrap().push(reply.to_owned());
+    mentor_turn(
+        test,
+        conversation,
+        "Напиши сам",
+        Some(MentorTrigger::Phrase),
+    )
+    .await;
+}
+
+async fn approval(test: &TestCore) -> PendingApproval {
+    for _ in 0..400 {
+        if let Some(pending) = test.core.pending_approvals().into_iter().next() {
+            return pending;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("no approval was asked");
+}
+
+async fn until_not_typing(test: &TestCore) -> jarvis_core::MentorStatus {
+    let mut status = test.core.subscribe_mentor();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        status.wait_for(|s| s.phase != MentorPhase::Typing && s.pending_write.is_none()),
+    )
+    .await
+    .expect("typing ends")
+    .unwrap()
+    .clone()
+}
+
+/// Waits for typing to start and then to end.
+async fn typed(test: &TestCore) -> jarvis_core::MentorStatus {
+    let mut status = test.core.subscribe_mentor();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        status.wait_for(|s| s.phase == MentorPhase::Typing),
+    )
+    .await
+    .expect("typing starts")
+    .unwrap();
+    until_not_typing(test).await
+}
+
+/// Waits until JARVIS has started typing into `path`, returning what the
+/// file held then.
+async fn first_typed(path: &std::path::Path, before: &str) -> String {
+    for _ in 0..400 {
+        let now = std::fs::read_to_string(path).unwrap_or_default();
+        if now != before {
+            return now;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("nothing was typed");
+}
+
+fn lines(count: usize) -> String {
+    (1..=count)
+        .map(|i| format!("const line{i} = {i};\n"))
+        .collect()
+}
+
+fn create_block(path: &str, code: &str) -> String {
+    format!(
+        "Пишу.\n<write path=\"{path}\" mode=\"create\">\n<say>Перша частина.</say>\n<code>\n{code}</code>\n</write>"
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn approved_create_is_typed_in_steps() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let code = lines(9);
+    ask_to_write(&test, conversation, &create_block("src/cart.ts", &code)).await;
+    let pending = approval(&test).await;
+    assert_eq!(pending.risk, RiskLevel::Medium);
+    assert!(
+        pending.details.contains("const line9 = 9;"),
+        "the whole change is shown"
+    );
+    assert!(test.core.mentor_status().pending_write.is_some());
+    assert!(test.core.resolve_approval(pending.id, true));
+
+    let path = test.project.join("src/cart.ts");
+    let mut states = Vec::new();
+    for _ in 0..600 {
+        let now = std::fs::read_to_string(&path).unwrap_or_default();
+        if states.last() != Some(&now) {
+            states.push(now.clone());
+        }
+        if now == code {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(states.last(), Some(&code));
+    assert!(states.len() >= 3, "typed in steps: {states:?}");
+    let status = until_not_typing(&test).await;
+    assert_eq!(status.phase, MentorPhase::Listening);
+    assert!(status.last_error.is_none(), "{status:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replace_types_only_the_new_fragment() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let path = test.project.join("src/app.ts");
+    std::fs::write(&path, "// head\nexport const shop = 1;\n// tail\n").unwrap();
+    let reply = "<write path=\"src/app.ts\" mode=\"replace\">\n<find>\nexport const shop = 1;\n</find>\n<say>Нове значення.</say>\n<code>\nexport const shop = 2;\nexport const open = true;\n</code>\n</write>";
+    ask_to_write(&test, conversation, reply).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    let status = typed(&test).await;
+    assert!(status.last_error.is_none(), "{status:?}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "// head\nexport const shop = 2;\nexport const open = true;\n// tail\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refused_write_asks_nothing() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    std::fs::write(test.project.join("src/twice.ts"), "x = 1;\nx = 1;\n").unwrap();
+    for reply in [
+        "<write path=\"src/twice.ts\" mode=\"replace\"><find>x = 1;</find><say>a</say><code>\ny\n</code></write>",
+        "<write path=\"../outside.ts\" mode=\"create\"><say>a</say><code>\ny\n</code></write>",
+    ] {
+        ask_to_write(&test, conversation, reply).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            test.core.pending_approvals().is_empty(),
+            "asked for {reply}"
+        );
+        let status = test.core.mentor_status();
+        assert!(status.last_error.is_some(), "{status:?}");
+    }
+    assert!(!test.dir.path().join("work/outside.ts").exists());
+    // The mentor is told on its next turn.
+    let messages = saved(&test, conversation, 6).await;
+    assert!(
+        messages
+            .iter()
+            .any(|(_, text)| text.contains("not written")),
+        "{messages:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn denied_write_leaves_the_file() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    ask_to_write(&test, conversation, &create_block("src/no.ts", &lines(2))).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, false));
+    until_not_typing(&test).await;
+    assert!(!test.project.join("src/no.ts").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typing_stops_when_the_owner_edits_the_file() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    ask_to_write(
+        &test,
+        conversation,
+        &create_block("src/long.ts", &lines(40)),
+    )
+    .await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    let path = test.project.join("src/long.ts");
+    first_typed(&path, "").await;
+    std::fs::write(&path, "// typed by the user\n").unwrap();
+    let status = until_not_typing(&test).await;
+    assert!(
+        status
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("changed"),
+        "{status:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "// typed by the user\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_command_keeps_what_was_typed() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let code = lines(40);
+    ask_to_write(&test, conversation, &create_block("src/stop.ts", &code)).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    let path = test.project.join("src/stop.ts");
+    first_typed(&path, "").await;
+    test.core.mentor_stop_typing();
+    until_not_typing(&test).await;
+    let kept = std::fs::read_to_string(&path).unwrap();
+    assert!(!kept.is_empty() && kept != code, "{kept}");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        kept,
+        "no more typing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asks_to_save_before_typing() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    ask_to_write(&test, conversation, &create_block("src/say.ts", &lines(2))).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    typed(&test).await;
+    let spoken = test.fake.lock().synthesized.join(" ").to_lowercase();
+    assert!(
+        spoken.contains("збереж") || spoken.contains("save"),
+        "{spoken}"
+    );
+    assert!(spoken.contains("перша частина"), "{spoken}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn overwrite_is_marked_high_risk() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    ask_to_write(&test, conversation, &create_block("src/app.ts", &lines(2))).await;
+    let pending = approval(&test).await;
+    assert_eq!(pending.risk, RiskLevel::High);
+    assert!(test.core.resolve_approval(pending.id, false));
 }

@@ -8,6 +8,7 @@ pub mod commands;
 pub(crate) mod prompt;
 pub(crate) mod protocol;
 pub(crate) mod snapshot;
+mod typing;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -125,6 +126,8 @@ pub(crate) struct MentorState {
     replies: mpsc::UnboundedSender<FinishedReply>,
     /// Taken by the task that handles finished replies.
     replies_rx: Mutex<Option<mpsc::UnboundedReceiver<FinishedReply>>>,
+    /// Stops the typing in progress.
+    typing: Mutex<Option<CancellationToken>>,
 }
 
 impl Default for MentorState {
@@ -135,6 +138,7 @@ impl Default for MentorState {
             session: Mutex::default(),
             replies,
             replies_rx: Mutex::new(Some(replies_rx)),
+            typing: Mutex::default(),
         }
     }
 }
@@ -162,6 +166,10 @@ impl MentorState {
             conversation_id,
             text,
         });
+    }
+
+    pub(crate) fn typing(&self) -> MutexGuard<'_, Option<CancellationToken>> {
+        self.typing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn reply_sender(&self) -> mpsc::UnboundedSender<FinishedReply> {
@@ -402,12 +410,12 @@ impl JarvisCore {
         tokio::spawn(async move {
             while let Some(reply) = replies.recv().await {
                 let Some(core) = weak.upgrade() else { return };
-                core.mentor_handle_reply(reply).await;
+                core.mentor_handle_reply(&core, reply).await;
             }
         });
     }
 
-    async fn mentor_handle_reply(&self, reply: FinishedReply) {
+    async fn mentor_handle_reply(&self, core: &Arc<Self>, reply: FinishedReply) {
         let parsed = protocol::parse_reply(&reply.text);
         if let Some(plan) = parsed.plan {
             let patch = ConversationPatch {
@@ -421,6 +429,13 @@ impl JarvisCore {
             {
                 tracing::warn!("cannot save the mentor's plan: {err}");
             }
+        }
+        if let Some(write) = parsed.write {
+            // Typing takes a while; later replies are handled meanwhile.
+            let core = Arc::clone(core);
+            tokio::spawn(async move {
+                core.mentor_write(reply.conversation_id, write).await;
+            });
         }
     }
 
