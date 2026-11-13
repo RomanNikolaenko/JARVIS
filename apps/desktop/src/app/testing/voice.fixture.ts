@@ -5,6 +5,7 @@ export const IDLE_VOICE: VoiceState = {
   phase: 'idle',
   micOpen: false,
   wakeWordActive: false,
+  conversationActive: false,
   interruptListening: false,
   awaitingCommand: false,
   hearingSpeech: false,

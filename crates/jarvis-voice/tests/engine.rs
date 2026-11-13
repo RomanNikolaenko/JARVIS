@@ -623,3 +623,156 @@ async fn the_name_alone_over_a_reply_waits_for_the_command() {
     let transcript = next_transcript(&mut s.transcripts).await;
     assert_eq!(transcript.text, "відкрий нотатки");
 }
+
+// ----- conversation mode (mentor) -----
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conversation_mode_emits_every_phrase() {
+    let Some(mut s) = setup() else { return };
+    s.engine.apply_settings(
+        VoiceSettings {
+            end_silence_ms: 400,
+            ..VoiceSettings::default()
+        },
+        SpeechLanguage::Uk,
+    );
+    s.engine.start_conversation().expect("conversation");
+    wait_state(&mut s.state, "conversation listening", |st| {
+        st.mic_open && st.conversation_active && !st.wake_word_active
+    })
+    .await;
+
+    s.fake.reply("Починаємо застосунок на Angular");
+    s.fake.speak_into_mic(1.0).await;
+    let first = next_transcript(&mut s.transcripts).await;
+    assert_eq!(first.text, "Починаємо застосунок на Angular");
+    assert_eq!(first.source, TranscriptSource::Conversation);
+
+    s.fake.reply("що писати далі?");
+    s.fake.speak_into_mic(1.0).await;
+    let second = next_transcript(&mut s.transcripts).await;
+    assert_eq!(second.text, "що писати далі?");
+    assert_eq!(second.source, TranscriptSource::Conversation);
+    assert_ne!(first.capture_id, second.capture_id);
+    // Push-to-talk does not replace the conversation.
+    s.engine.listen().expect("listen");
+    assert!(s.engine.state().conversation_active && s.engine.state().mic_open);
+    assert_eq!(s.fake.lock().mic_opened, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conversation_mode_hands_talk_over_a_reply_to_the_mentor() {
+    // The fake speakers feed no echo to the playback meter, so any speech
+    // over a reply counts as the user (the echo gate has its own tests).
+    let Some(mut s) = setup() else { return };
+    s.engine.apply_settings(
+        VoiceSettings {
+            interrupt_by_voice: false,
+            end_silence_ms: 400,
+            ..VoiceSettings::default()
+        },
+        SpeechLanguage::Uk,
+    );
+    s.engine.start_conversation().expect("conversation");
+    wait_state(&mut s.state, "conversation listening", |st| {
+        st.conversation_active
+    })
+    .await;
+    s.fake.lock().hold_playback = true;
+    let speech = s.engine.speak_reply();
+    speech.push("Довге пояснення, яке можна перебити. ");
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == jarvis_voice::VoicePhase::Speaking
+    })
+    .await;
+    // The conversation listener keeps the microphone; no second one opens.
+    assert!(!s.engine.state().interrupt_listening);
+
+    s.fake.reply("Зачекай, а навіщо це?");
+    s.fake.speak_into_mic(1.0).await;
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.text, "Зачекай, а навіщо це?");
+    assert_eq!(transcript.source, TranscriptSource::Conversation);
+    assert!(s.fake.lock().cleared > 0, "the reply stopped");
+    assert!(s.engine.state().conversation_active && s.engine.state().mic_open);
+    assert_eq!(s.fake.lock().mic_opened, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_conversation_closes_the_microphone() {
+    let Some(mut s) = setup() else { return };
+    s.engine.start_conversation().expect("conversation");
+    wait_state(&mut s.state, "conversation listening", |st| {
+        st.mic_open && st.conversation_active
+    })
+    .await;
+    s.engine.stop_conversation();
+    wait_state(&mut s.state, "the microphone to close", |st| {
+        !st.mic_open && !st.conversation_active
+    })
+    .await;
+
+    // With wake word mode on, wake word listening comes back.
+    s.engine
+        .apply_settings(wake_word_settings(), SpeechLanguage::Uk);
+    wait_state(&mut s.state, "wake word mode", |st| st.wake_word_active).await;
+    s.engine.start_conversation().expect("conversation");
+    wait_state(
+        &mut s.state,
+        "conversation instead of the wake word",
+        |st| st.conversation_active && !st.wake_word_active && st.mic_open,
+    )
+    .await;
+    // A settings change does not end the conversation.
+    s.engine
+        .apply_settings(wake_word_settings(), SpeechLanguage::Uk);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(s.engine.state().conversation_active);
+    s.engine.stop_conversation();
+    wait_state(&mut s.state, "wake word mode again", |st| {
+        st.wake_word_active && !st.conversation_active && st.mic_open
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conversation_needs_speech_recognition() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fake = FakeBackend::default();
+    let engine = VoiceEngine::new(VoiceEngineOptions {
+        voice_dir: dir.path().to_path_buf(),
+        client: reqwest::Client::new(),
+        adapter: Arc::from(jarvis_platform::current_adapter()),
+        backend: Some(Arc::new(fake)),
+        launchers: None,
+        runtime: tokio::runtime::Handle::current(),
+    });
+    assert!(engine.start_conversation().is_err());
+    assert!(!engine.state().conversation_active);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn say_and_wait_resolves_after_playback() {
+    let Some(s) = setup() else { return };
+    s.fake.lock().hold_playback = true;
+    let engine = s.engine.clone();
+    let done = tokio::spawn(async move { engine.say_and_wait("Спершу імпорти.").await });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(!done.is_finished(), "still playing");
+    s.fake.lock().hold_playback = false;
+    tokio::time::timeout(Duration::from_secs(10), done)
+        .await
+        .expect("finished after playback")
+        .expect("task");
+
+    // Stopping the speech also ends the wait.
+    s.fake.lock().hold_playback = true;
+    let engine = s.engine.clone();
+    let done = tokio::spawn(async move { engine.say_and_wait("Довге пояснення.").await });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    s.engine.stop_speaking();
+    tokio::time::timeout(Duration::from_secs(10), done)
+        .await
+        .expect("finished after stop")
+        .expect("task");
+}

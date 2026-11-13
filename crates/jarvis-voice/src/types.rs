@@ -144,6 +144,9 @@ pub struct VoiceState {
     pub mic_open: bool,
     /// Wake word mode is on (the microphone stays open).
     pub wake_word_active: bool,
+    /// Conversation mode is on: the microphone stays open and every phrase
+    /// is a request, without the wake word.
+    pub conversation_active: bool,
     /// The microphone is open only to notice the user speaking over a
     /// spoken reply.
     pub interrupt_listening: bool,
@@ -166,6 +169,8 @@ pub enum TranscriptSource {
     WakeWord,
     /// The user spoke over JARVIS's spoken reply.
     BargeIn,
+    /// Conversation mode (the mentor): every phrase is a request.
+    Conversation,
 }
 
 /// Recognized speech meant as a request.

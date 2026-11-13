@@ -39,6 +39,9 @@ use crate::wake;
 const NO_SPEECH_TIMEOUT: Duration = Duration::from_secs(10);
 /// After a bare «Джарвіс», the next phrase within this time is the command.
 const COMMAND_WINDOW: Duration = Duration::from_secs(10);
+/// Phrases waiting for recognition in wake word and conversation modes;
+/// more are dropped while the recognizer is busy.
+const PHRASE_QUEUE: usize = 4;
 /// Long phrases are first checked for the wake word on their beginning only.
 const WAKE_PROBE_SAMPLES: usize = SAMPLE_RATE as usize * 3;
 const LEVEL_INTERVAL: Duration = Duration::from_millis(66);
@@ -104,6 +107,8 @@ enum ListenMode {
     /// While a reply to a voice request is spoken: notices the user
     /// talking over it.
     BargeIn,
+    /// Every phrase is a request (the mentor). Talking over a reply stops it.
+    Conversation,
 }
 
 #[derive(Debug)]
@@ -145,6 +150,8 @@ enum SpeechInput {
 pub struct SpeechStream {
     tx: mpsc::UnboundedSender<SpeechInput>,
     cancel: CancellationToken,
+    /// Cancelled when this speech has ended, played out or stopped.
+    done: CancellationToken,
 }
 
 impl std::fmt::Debug for SpeechInput {
@@ -169,6 +176,11 @@ impl SpeechStream {
     /// Stops speaking this reply.
     pub fn cancel(&self) {
         self.cancel.cancel();
+    }
+
+    /// Waits until this speech has played out or was stopped.
+    pub async fn finished(&self) {
+        self.done.cancelled().await;
     }
 }
 
@@ -605,7 +617,7 @@ impl VoiceEngine {
                     }
                     return Ok(());
                 }
-                Some(ListenMode::PushToTalk) => return Ok(()),
+                Some(ListenMode::PushToTalk | ListenMode::Conversation) => return Ok(()),
                 // The reply stopped; this request replaces the interruption
                 // listener.
                 Some(ListenMode::BargeIn) => {
@@ -635,6 +647,28 @@ impl VoiceEngine {
                 active.cancel.cancel();
             }
         }
+    }
+
+    /// Conversation mode: the microphone stays open and every phrase is
+    /// emitted as a [`TranscriptSource::Conversation`] request, without the
+    /// wake word. It replaces any other listening until
+    /// [`VoiceEngine::stop_conversation`].
+    pub fn start_conversation(&self) -> Result<()> {
+        self.speech_model()?;
+        if self.listening_mode() == Some(ListenMode::Conversation) {
+            return Ok(());
+        }
+        self.stop_listener();
+        self.start_listener(ListenMode::Conversation);
+        Ok(())
+    }
+
+    /// Ends conversation mode; wake word listening resumes when it is on.
+    pub fn stop_conversation(&self) {
+        if self.listening_mode() == Some(ListenMode::Conversation) {
+            self.stop_listener();
+        }
+        self.refresh_wake_word();
     }
 
     fn stop_listener(&self) {
@@ -669,6 +703,7 @@ impl VoiceEngine {
         self.update(|s| {
             s.last_error = None;
             s.wake_word_active = mode == ListenMode::WakeWord;
+            s.conversation_active = mode == ListenMode::Conversation;
             s.interrupt_listening = mode == ListenMode::BargeIn;
             if mode == ListenMode::PushToTalk {
                 s.phase = VoicePhase::Listening;
@@ -689,6 +724,7 @@ impl VoiceEngine {
                 s.hearing_speech = false;
                 s.awaiting_command = false;
                 s.wake_word_active = false;
+                s.conversation_active = false;
                 s.interrupt_listening = false;
                 s.input_device = None;
                 if matches!(s.phase, VoicePhase::Listening | VoicePhase::Transcribing) {
@@ -749,15 +785,18 @@ impl VoiceEngine {
         // happened: without a phrase the microphone closes.
         let mut interrupted_at: Option<Instant> = None;
         let reply = *lock(&self.inner.reply_playing);
-        // Wake word mode: phrases go to a worker so capture never stalls;
-        // when it is busy, new phrases are dropped.
-        let (phrases, phrases_rx) = mpsc::channel::<(String, Vec<f32>)>(2);
-        let worker = (mode == ListenMode::WakeWord).then(|| {
+        // Wake word and conversation modes: phrases go to a worker so
+        // capture never stalls; when it is busy, new phrases are dropped.
+        let continuous = matches!(mode, ListenMode::WakeWord | ListenMode::Conversation);
+        let (phrases, phrases_rx) = mpsc::channel::<(String, Vec<f32>)>(PHRASE_QUEUE);
+        let worker = continuous.then(|| {
             let engine = self.clone();
             let cancel = cancel.clone();
-            self.inner
-                .runtime
-                .spawn(async move { engine.run_wake_worker(phrases_rx, &cancel).await })
+            self.inner.runtime.spawn(async move {
+                engine
+                    .run_phrase_worker(phrases_rx, mode == ListenMode::Conversation, &cancel)
+                    .await;
+            })
         });
 
         let started = Instant::now();
@@ -803,6 +842,7 @@ impl VoiceEngine {
                         ListenMode::WakeWord => {
                             self.any_reply_playing() && self.config().settings.interrupt_by_voice
                         }
+                        ListenMode::Conversation => self.any_reply_playing(),
                         ListenMode::PushToTalk => false,
                     };
                     if !watching {
@@ -855,7 +895,7 @@ impl VoiceEngine {
                                     interrupted_at = Some(Instant::now());
                                 }
                                 heard = true;
-                                if mode == ListenMode::WakeWord {
+                                if continuous {
                                     capture_id = uuid::Uuid::new_v4().to_string();
                                 }
                                 self.update(|s| {
@@ -865,10 +905,10 @@ impl VoiceEngine {
                             }
                             SegmentEvent::Finished(phrase) => {
                                 self.update(|s| s.hearing_speech = false);
-                                if mode != ListenMode::WakeWord {
-                                    finished = Some(phrase);
-                                } else {
+                                if continuous {
                                     let _ = phrases.try_send((capture_id.clone(), phrase));
+                                } else {
+                                    finished = Some(phrase);
                                 }
                             }
                         }
@@ -936,9 +976,10 @@ impl VoiceEngine {
         Ok(())
     }
 
-    async fn run_wake_worker(
+    async fn run_phrase_worker(
         &self,
         mut phrases: mpsc::Receiver<(String, Vec<f32>)>,
+        conversation: bool,
         cancel: &CancellationToken,
     ) {
         loop {
@@ -949,7 +990,12 @@ impl VoiceEngine {
                     None => return,
                 },
             };
-            match self.handle_wake_phrase(&phrase, capture_id).await {
+            let handled = if conversation {
+                self.handle_conversation_phrase(&phrase, capture_id).await
+            } else {
+                self.handle_wake_phrase(&phrase, capture_id).await
+            };
+            match handled {
                 Ok(()) | Err(VoiceError::Cancelled) => {}
                 Err(err) => {
                     tracing::warn!("wake word recognition failed: {err}");
@@ -992,6 +1038,15 @@ impl VoiceEngine {
     fn command_done(&self) {
         *lock(&self.inner.command_deadline) = None;
         self.update(|s| s.awaiting_command = false);
+    }
+
+    /// Conversation mode: every phrase with words is a request.
+    async fn handle_conversation_phrase(&self, phrase: &[f32], capture_id: String) -> Result<()> {
+        let text = self.transcribe(phrase).await?;
+        if has_words(&text) {
+            self.emit(text, TranscriptSource::Conversation, capture_id);
+        }
+        Ok(())
     }
 
     async fn handle_wake_phrase(&self, phrase: &[f32], capture_id: String) -> Result<()> {
@@ -1078,9 +1133,12 @@ impl VoiceEngine {
         let cancel = self.inner.shutdown.child_token();
         *lock(&self.inner.speech) = Some((id, cancel.clone()));
         let (tx, rx) = mpsc::unbounded_channel();
+        let done = CancellationToken::new();
         let engine = self.clone();
         let token = cancel.clone();
+        let finished = done.clone();
         self.inner.runtime.spawn(async move {
+            let _finished = finished.drop_guard();
             let mut output = None;
             let result = engine
                 .run_speech(rx, &token, &mut output, interruptible.then_some(id))
@@ -1120,7 +1178,7 @@ impl VoiceEngine {
                 }
             }
         });
-        SpeechStream { tx, cancel }
+        SpeechStream { tx, cancel, done }
     }
 
     /// Speaks a complete text.
@@ -1128,6 +1186,15 @@ impl VoiceEngine {
         let stream = self.speak();
         stream.push(text);
         stream.finish();
+    }
+
+    /// Speaks a complete text and waits until it has played out or was
+    /// stopped. Any current speech stops first.
+    pub async fn say_and_wait(&self, text: &str) {
+        let stream = self.speak();
+        stream.push(text);
+        stream.finish();
+        stream.finished().await;
     }
 
     /// Whether `reply` is the interruptible reply playing now.

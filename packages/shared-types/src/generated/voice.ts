@@ -7,7 +7,7 @@ export type AudioDevice = {
  */
 id: string, name: string, isDefault: boolean, };
 
-export type TranscriptSource = "pushToTalk" | "wakeWord" | "bargeIn";
+export type TranscriptSource = "pushToTalk" | "wakeWord" | "bargeIn" | "conversation";
 
 /**
  * Language of speech recognition and synthesis.
@@ -104,6 +104,11 @@ captureId: string | null, phase: VoicePhase, micOpen: boolean,
  * Wake word mode is on (the microphone stays open).
  */
 wakeWordActive: boolean, 
+/**
+ * Conversation mode is on: the microphone stays open and every phrase
+ * is a request, without the wake word.
+ */
+conversationActive: boolean, 
 /**
  * The microphone is open only to notice the user speaking over a
  * spoken reply.
