@@ -48,6 +48,7 @@ describe('JarvisApi', () => {
             maxOutputTokens: null,
             speak: false,
             attachments: ['capture'],
+            mentor: null,
           },
           vi.fn()
         )

@@ -465,6 +465,7 @@ export class ChatStore {
               maxOutputTokens: null,
               speak,
               attachments: attachments.map((a) => a.id),
+              mentor: null,
             },
             (event) => {
               // An event proves admission even if it finishes before invoke replies.

@@ -40,6 +40,7 @@ use uuid::Uuid;
 use crate::chat::{ChatEventSink, ChatStreamEvent, PreparedChat, ResolvedModel, SinkClosed};
 use crate::config::{ConfigStore, Settings};
 use crate::error::CoreError;
+use crate::mentor::MentorTrigger;
 use crate::{JarvisCore, fact_suggestions, routing};
 
 pub const MAX_TURN_CHARS: usize = 32_000;
@@ -81,6 +82,10 @@ pub struct ChatTurnRequest {
     /// The model must support vision.
     #[serde(default)]
     pub attachments: Vec<String>,
+    /// A turn of the running mentor lesson in this conversation: it gets
+    /// the project's changes and the mentor's instructions.
+    #[serde(default)]
+    pub mentor: Option<MentorTrigger>,
 }
 
 /// State of the memory background work.
@@ -358,7 +363,8 @@ impl JarvisCore {
         sink: impl ChatEventSink,
     ) -> Result<Uuid, CoreError> {
         let content = request.content.trim().to_owned();
-        if content.is_empty() {
+        // A turn for saved files has no text; the mentor writes a note.
+        if content.is_empty() && request.mentor != Some(MentorTrigger::FilesSaved) {
             return Err(CoreError::Validation("The message is empty".to_owned()));
         }
         if content.chars().count() > MAX_TURN_CHARS {
@@ -408,22 +414,23 @@ impl JarvisCore {
         self.memory_state.touch();
 
         let attachments = self.attachments(&request.attachments)?;
+        // A mentor turn without a model choice uses the lesson's model.
+        let lesson_model =
+            (request.mentor.is_some() && request.provider_id.is_none() && request.model.is_none())
+                .then(|| self.mentor.model_for(conversation_id))
+                .flatten();
+        let (provider_choice, model_choice) = match lesson_model {
+            Some((provider, model)) => (Some(provider), Some(model)),
+            None => (request.provider_id.clone(), request.model.clone()),
+        };
         let model = if attachments.images.is_empty() {
             self.chat
-                .resolve_model(
-                    request.provider_id.as_ref(),
-                    request.model.as_deref(),
-                    &settings,
-                )
+                .resolve_model(provider_choice.as_ref(), model_choice.as_deref(), &settings)
                 .await?
         } else {
             let model = self
                 .chat
-                .resolve_vision_model(
-                    request.provider_id.as_ref(),
-                    request.model.as_deref(),
-                    &settings,
-                )
+                .resolve_vision_model(provider_choice.as_ref(), model_choice.as_deref(), &settings)
                 .await?;
             self.check_vision_model(&model, &settings)?;
             model
@@ -446,16 +453,51 @@ impl JarvisCore {
         } else {
             Retrieval::default()
         };
+        let mentor = match request.mentor {
+            Some(trigger) => {
+                self.mentor_turn_context(
+                    conversation_id,
+                    trigger,
+                    self.model_window(&model, &settings),
+                )
+                .await?
+            }
+            None => None,
+        };
+        let content = match mentor.as_ref().and_then(|m| m.note.clone()) {
+            Some(note) => note,
+            None => content,
+        };
+        if content.is_empty() {
+            return Err(CoreError::Validation(
+                "No lesson is running in this conversation".to_owned(),
+            ));
+        }
+        let mut prompt = system_prompt(&settings);
+        if mentor.is_some() {
+            prompt.push_str("\n\n");
+            prompt.push_str(crate::mentor::prompt::MENTOR_PROMPT);
+        }
         let mut assembled = self
             .memory
             .prepare_context(ContextRequest {
                 conversation_id,
                 user_message: content.clone(),
-                system_prompt: system_prompt(&settings),
+                system_prompt: prompt,
                 window,
                 retrieval,
             })
             .await?;
+        // The project travels with this request only; the phrase is saved.
+        if let Some(mentor) = &mentor
+            && let Some(current) = assembled
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|m| m.role == ChatRole::User)
+        {
+            current.content.push_str(&mentor.extra);
+        }
         if !attachments.images.is_empty()
             && let Some(current) = assembled
                 .messages
@@ -543,11 +585,17 @@ impl JarvisCore {
         let events = self.events.clone();
         let auto_summarize = settings.memory.auto_summarize;
         let timeout = Duration::from_secs(u64::from(settings.ai.request_timeout_secs));
+        let mentor_replies = mentor.is_some().then(|| self.mentor.reply_sender());
         tokio::spawn(async move {
             let mut reply_saved = false;
             if let Ok(outcome) = outcome.await
                 && let Some(status) = outcome.status()
             {
+                // The blocks of a complete mentor reply are acted on after
+                // it is saved.
+                let mentor_reply = mentor_replies
+                    .filter(|_| status == MessageStatus::Complete)
+                    .map(|replies| (replies, outcome.text.clone()));
                 let saved = memory
                     .append_message(
                         conversation_id,
@@ -562,7 +610,15 @@ impl JarvisCore {
                     )
                     .await;
                 match saved {
-                    Ok(_) => reply_saved = true,
+                    Ok(_) => {
+                        reply_saved = true;
+                        if let Some((replies, text)) = mentor_reply {
+                            let _ = replies.send(crate::mentor::FinishedReply {
+                                conversation_id,
+                                text,
+                            });
+                        }
+                    }
                     Err(err) => tracing::warn!("cannot save the reply: {err}"),
                 }
             }

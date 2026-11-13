@@ -5,17 +5,19 @@
 #![allow(dead_code)]
 
 pub mod commands;
+pub(crate) mod prompt;
 pub(crate) mod protocol;
 pub(crate) mod snapshot;
 
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jarvis_ai::{DataLocality, ProviderId};
 use jarvis_events::EventCategory;
+use jarvis_memory::ConversationPatch;
 use jarvis_security::FileScope;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -80,17 +82,59 @@ pub(crate) struct Session {
     pub(crate) cancel: CancellationToken,
 }
 
+/// Why a chat turn goes to the mentor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "core.ts")]
+pub enum MentorTrigger {
+    /// The user said (or typed) something.
+    Phrase,
+    /// The user saved project files; the turn has no text of its own.
+    FilesSaved,
+}
+
+/// What a mentor turn adds for the model and saves instead of the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnContext {
+    /// Appended to the user's message sent to the model (not saved).
+    pub(crate) extra: String,
+    /// Saved as the user's message of a turn without text.
+    pub(crate) note: Option<String>,
+}
+
+/// A finished reply of a mentor turn, for the blocks it carries.
+#[derive(Debug)]
+pub(crate) struct FinishedReply {
+    pub(crate) conversation_id: Uuid,
+    pub(crate) text: String,
+}
+
+/// Files listed for the mentor on the first turn.
+const TREE_ENTRIES: usize = 300;
+/// Share of the model's context window for changed files (percent).
+const CHANGES_BUDGET_PERCENT: usize = 30;
+/// Characters per token, roughly.
+const CHARS_PER_TOKEN: usize = 3;
+/// Window assumed when the model does not report one.
+const DEFAULT_WINDOW_TOKENS: u32 = 4_096;
+
 #[derive(Debug)]
 pub(crate) struct MentorState {
     status: watch::Sender<MentorStatus>,
     session: Mutex<Option<Session>>,
+    replies: mpsc::UnboundedSender<FinishedReply>,
+    /// Taken by the task that handles finished replies.
+    replies_rx: Mutex<Option<mpsc::UnboundedReceiver<FinishedReply>>>,
 }
 
 impl Default for MentorState {
     fn default() -> Self {
+        let (replies, replies_rx) = mpsc::unbounded_channel();
         Self {
             status: watch::Sender::new(MentorStatus::default()),
             session: Mutex::default(),
+            replies,
+            replies_rx: Mutex::new(Some(replies_rx)),
         }
     }
 }
@@ -110,6 +154,27 @@ impl MentorState {
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<MentorStatus> {
         self.status.subscribe()
+    }
+
+    /// Hands a saved reply of a mentor turn to the reply task.
+    pub(crate) fn reply_finished(&self, conversation_id: Uuid, text: String) {
+        let _ = self.replies.send(FinishedReply {
+            conversation_id,
+            text,
+        });
+    }
+
+    pub(crate) fn reply_sender(&self) -> mpsc::UnboundedSender<FinishedReply> {
+        self.replies.clone()
+    }
+
+    /// The model the running session for this conversation uses.
+    pub(crate) fn model_for(&self, conversation_id: Uuid) -> Option<(ProviderId, String)> {
+        let session = self.session();
+        let session = session
+            .as_ref()
+            .filter(|s| s.conversation_id == conversation_id)?;
+        Some((session.provider_id.clone()?, session.model.clone()?))
     }
 
     /// Ends the session, if any; returns whether one was running.
@@ -244,6 +309,119 @@ impl JarvisCore {
 
     pub fn subscribe_mentor(&self) -> watch::Receiver<MentorStatus> {
         self.mentor.subscribe()
+    }
+
+    /// The project context of a mentor turn in the running session's
+    /// conversation, or `None` for any other turn. The turn's changes become
+    /// the new baseline.
+    pub(crate) async fn mentor_turn_context(
+        &self,
+        conversation_id: Uuid,
+        trigger: MentorTrigger,
+        window_tokens: Option<u32>,
+    ) -> Result<Option<TurnContext>, CoreError> {
+        let (root, baseline, tree_sent) = {
+            let session = self.mentor.session();
+            match session.as_ref() {
+                Some(s) if s.conversation_id == conversation_id => {
+                    (s.root.clone(), s.baseline.clone(), s.tree_sent)
+                }
+                _ => return Ok(None),
+            }
+        };
+        let window = window_tokens.unwrap_or(DEFAULT_WINDOW_TOKENS) as usize;
+        let budget = window * CHARS_PER_TOKEN * CHANGES_BUDGET_PERCENT / 100;
+        let scan_root = root.clone();
+        let (now, changes, rendered, tree) = tokio::task::spawn_blocking(move || {
+            let now = ProjectSnapshot::scan(&scan_root)?;
+            let changes = now.changes_since(&baseline);
+            let rendered = (!changes.is_empty()).then(|| changes.render(&scan_root, budget));
+            let tree = (!tree_sent).then(|| now.tree(TREE_ENTRIES));
+            Ok::<_, std::io::Error>((now, changes, rendered, tree))
+        })
+        .await
+        .map_err(|err| CoreError::Internal(err.to_string()))?
+        .map_err(|err| {
+            CoreError::Validation(format!("The project folder cannot be read: {err}"))
+        })?;
+        {
+            let mut session = self.mentor.session();
+            if let Some(s) = session
+                .as_mut()
+                .filter(|s| s.conversation_id == conversation_id)
+            {
+                s.baseline = now;
+                s.tree_sent = true;
+            }
+        }
+
+        let mut extra = String::new();
+        if let Some(tree) = tree {
+            extra.push_str(&format!(
+                "\n\n<project_files>\nThe project folder ({}) has these files:\n{tree}</project_files>",
+                root.display()
+            ));
+        }
+        if let Some(rendered) = rendered {
+            extra.push_str("\n\n");
+            extra.push_str(&rendered);
+        }
+        let note = match trigger {
+            MentorTrigger::Phrase => None,
+            MentorTrigger::FilesSaved => {
+                extra.push_str("\n\n");
+                extra.push_str(prompt::FILES_SAVED_PROMPT);
+                let names: Vec<String> = changes
+                    .created
+                    .iter()
+                    .chain(&changes.changed)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .collect();
+                Some(if names.is_empty() {
+                    "[Saved files]".to_owned()
+                } else {
+                    format!("[Saved: {}]", names.join(", "))
+                })
+            }
+        };
+        Ok(Some(TurnContext { extra, note }))
+    }
+
+    /// Handles the blocks of finished mentor replies until the core stops.
+    pub(crate) fn spawn_mentor_tasks(core: &Arc<Self>) {
+        let Some(mut replies) = core
+            .mentor
+            .replies_rx
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        else {
+            return;
+        };
+        let weak = Arc::downgrade(core);
+        tokio::spawn(async move {
+            while let Some(reply) = replies.recv().await {
+                let Some(core) = weak.upgrade() else { return };
+                core.mentor_handle_reply(reply).await;
+            }
+        });
+    }
+
+    async fn mentor_handle_reply(&self, reply: FinishedReply) {
+        let parsed = protocol::parse_reply(&reply.text);
+        if let Some(plan) = parsed.plan {
+            let patch = ConversationPatch {
+                pinned_note: Some(plan),
+                ..ConversationPatch::default()
+            };
+            if let Err(err) = self
+                .memory
+                .update_conversation(reply.conversation_id, patch)
+                .await
+            {
+                tracing::warn!("cannot save the mentor's plan: {err}");
+            }
+        }
     }
 
     /// Ends the session of a deleted conversation.

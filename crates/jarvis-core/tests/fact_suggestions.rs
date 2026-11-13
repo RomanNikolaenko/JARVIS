@@ -226,6 +226,7 @@ async fn send(core: &JarvisCore, conversation_id: Uuid, text: &str) {
             max_output_tokens: None,
             speak: false,
             attachments: Vec::new(),
+            mentor: None,
         },
         move |event| tx.send(event).map_err(|_| SinkClosed),
     )
@@ -566,6 +567,7 @@ async fn a_failed_turn_lets_due_checks_run() {
                 max_output_tokens: None,
                 speak: false,
                 attachments: Vec::new(),
+                mentor: None,
             },
             |_| Ok(()),
         )

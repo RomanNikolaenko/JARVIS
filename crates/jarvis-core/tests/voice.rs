@@ -61,6 +61,7 @@ async fn turn(test: &TestCore, conversation: Uuid, text: &str, speak: bool) {
                 max_output_tokens: None,
                 speak,
                 attachments: Vec::new(),
+                mentor: None,
             },
             move |event| tx.send(event).map_err(|_| SinkClosed),
         )

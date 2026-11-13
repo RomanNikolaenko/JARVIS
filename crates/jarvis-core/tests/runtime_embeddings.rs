@@ -211,6 +211,7 @@ async fn memory_search_becomes_semantic_while_the_embedding_server_runs() {
             max_output_tokens: None,
             speak: false,
             attachments: Vec::new(),
+            mentor: None,
         },
         move |event| tx.send(event).map_err(|_| SinkClosed),
     )

@@ -309,3 +309,199 @@ async fn wait_mic(test: &TestCore, open: bool) {
     .expect("the microphone in time")
     .unwrap();
 }
+
+// ----- turns -----
+
+use jarvis_core::{ChatStreamEvent, ChatTurnRequest, MentorTrigger, SinkClosed};
+
+async fn mentor_turn(
+    test: &TestCore,
+    conversation: Uuid,
+    text: &str,
+    trigger: Option<MentorTrigger>,
+) {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    test.core
+        .send_message(
+            ChatTurnRequest {
+                conversation_id: conversation,
+                content: text.to_owned(),
+                provider_id: None,
+                model: None,
+                temperature: None,
+                max_output_tokens: None,
+                speak: false,
+                attachments: Vec::new(),
+                mentor: trigger,
+            },
+            move |event| tx.send(event).map_err(|_| SinkClosed),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = rx.recv().await {
+        if matches!(
+            event,
+            ChatStreamEvent::Finished { .. } | ChatStreamEvent::Failed { .. }
+        ) {
+            break;
+        }
+    }
+}
+
+/// The text of the last request the teacher saw: (system, last user).
+fn last_request(test: &TestCore) -> (String, String) {
+    let seen = test.teacher.seen.lock().unwrap();
+    let request = seen.last().expect("a request");
+    let system: Vec<&str> = request
+        .messages
+        .iter()
+        .filter(|m| m.role == jarvis_ai::ChatRole::System)
+        .map(|m| m.content.as_str())
+        .collect();
+    let user = request
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == jarvis_ai::ChatRole::User)
+        .expect("user message");
+    (system.join("\n"), user.content.clone())
+}
+
+async fn started(test: &TestCore) -> Uuid {
+    let conversation = test.core.create_conversation(None, false).await.unwrap();
+    test.core
+        .mentor_start(request(test, conversation.id, &test.project))
+        .await
+        .unwrap();
+    conversation.id
+}
+
+/// The saved messages of a conversation once its reply is stored.
+async fn saved(test: &TestCore, conversation: Uuid, count: usize) -> Vec<(String, String)> {
+    for _ in 0..200 {
+        let detail = test.core.memory().conversation(conversation).await.unwrap();
+        if detail.messages.len() >= count {
+            return detail
+                .messages
+                .iter()
+                .map(|m| (format!("{:?}", m.role), m.content.clone()))
+                .collect();
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the messages were not saved");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mentor_turn_adds_changes_but_saves_only_the_phrase() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    mentor_turn(
+        &test,
+        conversation,
+        "Починаємо магазин на Angular",
+        Some(MentorTrigger::Phrase),
+    )
+    .await;
+    let (system, user) = last_request(&test);
+    assert!(
+        system.contains("<write"),
+        "the mentor prompt teaches the write block"
+    );
+    assert!(system.contains("<plan>"));
+    assert!(user.starts_with("Починаємо магазин на Angular"), "{user}");
+    assert!(
+        user.contains("src/app.ts"),
+        "the first turn lists the files: {user}"
+    );
+
+    std::fs::write(test.project.join("src/app.ts"), "export const shop = 2;\n").unwrap();
+    mentor_turn(&test, conversation, "Що далі?", Some(MentorTrigger::Phrase)).await;
+    let (_, user) = last_request(&test);
+    assert!(
+        user.contains("<project_file path=\"src/app.ts\">"),
+        "{user}"
+    );
+    assert!(user.contains("export const shop = 2;"), "{user}");
+
+    // Nothing changed: no project block.
+    mentor_turn(
+        &test,
+        conversation,
+        "Поясни ще раз",
+        Some(MentorTrigger::Phrase),
+    )
+    .await;
+    let (_, user) = last_request(&test);
+    assert!(!user.contains("<project_file"), "{user}");
+
+    let messages = saved(&test, conversation, 6).await;
+    let users: Vec<&str> = messages
+        .iter()
+        .filter(|(role, _)| role == "User")
+        .map(|(_, text)| text.as_str())
+        .collect();
+    assert_eq!(
+        users,
+        ["Починаємо магазин на Angular", "Що далі?", "Поясни ще раз"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn files_saved_turn_is_stored_as_a_short_note() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    std::fs::write(test.project.join("src/cart.ts"), "export class Cart {}\n").unwrap();
+    mentor_turn(&test, conversation, "", Some(MentorTrigger::FilesSaved)).await;
+    let (_, user) = last_request(&test);
+    assert!(user.contains("export class Cart {}"), "{user}");
+    assert!(user.to_lowercase().contains("saved"), "{user}");
+    let messages = saved(&test, conversation, 2).await;
+    assert_eq!(messages[0].1, "[Saved: src/cart.ts]");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plan_block_becomes_the_pinned_note() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    test.teacher
+        .replies
+        .lock()
+        .unwrap()
+        .push("Почнемо.\n<plan>\nМета: магазин\n1. Кошик\n</plan>".to_owned());
+    mentor_turn(&test, conversation, "Почнемо", Some(MentorTrigger::Phrase)).await;
+    for _ in 0..200 {
+        let detail = test.core.memory().conversation(conversation).await.unwrap();
+        if !detail.conversation.pinned_note.is_empty() {
+            assert_eq!(detail.conversation.pinned_note, "Мета: магазин\n1. Кошик");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the plan was not pinned");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn non_mentor_turns_are_unchanged() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    std::fs::write(test.project.join("src/app.ts"), "changed\n").unwrap();
+    mentor_turn(&test, conversation, "Звичайне питання", None).await;
+    let (system, user) = last_request(&test);
+    assert!(!system.contains("<write"));
+    assert_eq!(user, "Звичайне питання");
+    // A mentor trigger for another conversation adds nothing either.
+    let other = test.core.create_conversation(None, false).await.unwrap();
+    mentor_turn(&test, other.id, "Інша розмова", Some(MentorTrigger::Phrase)).await;
+    let (system, user) = last_request(&test);
+    assert!(!system.contains("<write"));
+    assert_eq!(user, "Інша розмова");
+}

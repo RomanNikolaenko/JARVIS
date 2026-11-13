@@ -54,7 +54,7 @@ pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use memory_encryption::{MEMORY_KEY_SECRET, MemoryRecoveryCode};
 pub use mentor::commands::{MentorCommand, parse_command};
-pub use mentor::{MentorPhase, MentorStartRequest, MentorStatus};
+pub use mentor::{MentorPhase, MentorStartRequest, MentorStatus, MentorTrigger};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
 pub use updates::{AvailableUpdate, UpdatePhase, UpdateStatus};
@@ -421,6 +421,7 @@ impl JarvisCore {
         Self::spawn_memory_tasks(&core);
         Self::spawn_agent_events(&core);
         Self::spawn_voice_events(&core);
+        Self::spawn_mentor_tasks(&core);
         // Wake word mode the user enabled before opens the microphone again.
         voice::apply_settings(&core.voice, &core.config.current());
         // Plugins the user approved and left enabled.

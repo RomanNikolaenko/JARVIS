@@ -183,6 +183,7 @@ fn turn(conversation_id: Uuid, text: &str) -> ChatTurnRequest {
         max_output_tokens: None,
         speak: false,
         attachments: Vec::new(),
+        mentor: None,
     }
 }
 

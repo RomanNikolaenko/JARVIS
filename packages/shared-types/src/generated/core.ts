@@ -126,7 +126,12 @@ speak: boolean,
  * Ids of captured images to show the model (see `capture_screen`).
  * The model must support vision.
  */
-attachments: Array<string>, };
+attachments: Array<string>, 
+/**
+ * A turn of the running mentor lesson in this conversation: it gets
+ * the project's changes and the mentor's instructions.
+ */
+mentor: MentorTrigger | null, };
 
 export type ComponentHealth = { 
 /**
@@ -221,6 +226,11 @@ contextLimitTokens: number | null,
  * Days to keep the action history (0 keeps it forever).
  */
 episodeRetentionDays: number, };
+
+/**
+ * Why a chat turn goes to the mentor.
+ */
+export type MentorTrigger = "phrase" | "filesSaved";
 
 /**
  * Reference to a model of a specific provider.

@@ -217,6 +217,7 @@ fn turn(
         max_output_tokens: None,
         speak: false,
         attachments,
+        mentor: None,
     }
 }
 
