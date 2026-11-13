@@ -54,7 +54,9 @@ pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use memory_encryption::{MEMORY_KEY_SECRET, MemoryRecoveryCode};
 pub use mentor::commands::{MentorCommand, parse_command};
-pub use mentor::{MentorPhase, MentorStartRequest, MentorStatus, MentorTrigger};
+pub use mentor::{
+    MentorNudge, MentorPhase, MentorStartRequest, MentorStatus, MentorTiming, MentorTrigger,
+};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
 pub use updates::{AvailableUpdate, UpdatePhase, UpdateStatus};
@@ -134,6 +136,8 @@ pub struct CoreOptions {
     /// Quiet time after the last chat activity before conversations are
     /// looked at for facts to suggest.
     pub fact_suggestion_pause: Duration,
+    /// How the mentor watches for saved files.
+    pub mentor_timing: MentorTiming,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -159,7 +163,14 @@ impl CoreOptions {
             voice_backend: None,
             screen_capture: None,
             fact_suggestion_pause: Duration::from_secs(120),
+            mentor_timing: MentorTiming::default(),
         }
+    }
+
+    /// Speeds up the mentor's save watcher (tests).
+    pub fn with_mentor_timing(mut self, timing: MentorTiming) -> Self {
+        self.mentor_timing = timing;
+        self
     }
 
     /// Shortens the pause before fact suggestions (tests).
@@ -253,6 +264,7 @@ impl JarvisCore {
             voice_backend,
             screen_capture,
             fact_suggestion_pause,
+            mentor_timing,
         } = options;
 
         for dir in [&paths.config_dir, &paths.data_dir, &paths.log_dir] {
@@ -414,7 +426,7 @@ impl JarvisCore {
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
             ),
-            mentor: mentor::MentorState::default(),
+            mentor: mentor::MentorState::new(mentor_timing),
         });
         Self::watch_runtime_provider(&core);
         Self::autostart_runtime(&core);

@@ -1,16 +1,15 @@
 //! Mentor mode: JARVIS teaches the user by voice while they build a project
 //! (see docs/superpowers/specs/2026-11-13-mentor-mode-design.md).
 
-// The parts are wired into the session step by step (plan tasks 4-9).
-#![allow(dead_code)]
-
 pub mod commands;
 pub(crate) mod prompt;
 pub(crate) mod protocol;
+pub(crate) mod saves;
 pub(crate) mod snapshot;
 mod typing;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jarvis_ai::{DataLocality, ProviderId};
@@ -18,12 +17,13 @@ use jarvis_events::EventCategory;
 use jarvis_memory::ConversationPatch;
 use jarvis_security::FileScope;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{CoreError, JarvisCore};
+pub use saves::{MentorNudge, MentorTiming};
 use snapshot::ProjectSnapshot;
 
 /// What the mentor is doing.
@@ -77,6 +77,8 @@ pub(crate) struct Session {
     pub(crate) model: Option<String>,
     /// The project as the mentor last saw it.
     pub(crate) baseline: ProjectSnapshot,
+    /// The project as the save watcher last reported it.
+    pub(crate) watch_baseline: ProjectSnapshot,
     /// The first turn also gets the project's file tree.
     pub(crate) tree_sent: bool,
     /// Stops the session's background work.
@@ -128,10 +130,22 @@ pub(crate) struct MentorState {
     replies_rx: Mutex<Option<mpsc::UnboundedReceiver<FinishedReply>>>,
     /// Stops the typing in progress.
     typing: Mutex<Option<CancellationToken>>,
+    pub(crate) timing: MentorTiming,
+    pub(crate) nudges: broadcast::Sender<MentorNudge>,
+    /// The UI is answering, speaking or holding a phrase.
+    pub(crate) busy: AtomicBool,
+    /// Turns started by saving since the user last spoke.
+    pub(crate) in_a_row: AtomicU32,
 }
 
 impl Default for MentorState {
     fn default() -> Self {
+        Self::new(MentorTiming::default())
+    }
+}
+
+impl MentorState {
+    pub(crate) fn new(timing: MentorTiming) -> Self {
         let (replies, replies_rx) = mpsc::unbounded_channel();
         Self {
             status: watch::Sender::new(MentorStatus::default()),
@@ -139,6 +153,10 @@ impl Default for MentorState {
             replies,
             replies_rx: Mutex::new(Some(replies_rx)),
             typing: Mutex::default(),
+            timing,
+            nudges: broadcast::channel(16).0,
+            busy: AtomicBool::new(false),
+            in_a_row: AtomicU32::new(0),
         }
     }
 }
@@ -158,14 +176,6 @@ impl MentorState {
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<MentorStatus> {
         self.status.subscribe()
-    }
-
-    /// Hands a saved reply of a mentor turn to the reply task.
-    pub(crate) fn reply_finished(&self, conversation_id: Uuid, text: String) {
-        let _ = self.replies.send(FinishedReply {
-            conversation_id,
-            text,
-        });
     }
 
     pub(crate) fn typing(&self) -> MutexGuard<'_, Option<CancellationToken>> {
@@ -242,11 +252,14 @@ impl JarvisCore {
             .await?;
 
         let shown = root.display().to_string();
+        self.mentor.busy.store(false, Ordering::Relaxed);
+        self.mentor.in_a_row.store(0, Ordering::Relaxed);
         *self.mentor.session() = Some(Session {
             conversation_id: request.conversation_id,
             root,
             provider_id: Some(model.descriptor.id.clone()),
             model: Some(model.model.clone()),
+            watch_baseline: baseline.clone(),
             baseline,
             tree_sent: false,
             cancel: CancellationToken::new(),
@@ -358,9 +371,14 @@ impl JarvisCore {
                 .as_mut()
                 .filter(|s| s.conversation_id == conversation_id)
             {
+                // What the mentor sees now is not news for the save watcher.
+                s.watch_baseline = now.clone();
                 s.baseline = now;
                 s.tree_sent = true;
             }
+        }
+        if trigger == MentorTrigger::Phrase {
+            self.mentor_owner_spoke();
         }
 
         let mut extra = String::new();
@@ -411,6 +429,17 @@ impl JarvisCore {
             while let Some(reply) = replies.recv().await {
                 let Some(core) = weak.upgrade() else { return };
                 core.mentor_handle_reply(&core, reply).await;
+            }
+        });
+        // The save watcher: cheap while no lesson runs.
+        let weak = Arc::downgrade(core);
+        let poll = core.mentor.timing.poll;
+        tokio::spawn(async move {
+            let mut tracker = saves::Tracker::default();
+            loop {
+                tokio::time::sleep(poll).await;
+                let Some(core) = weak.upgrade() else { return };
+                core.mentor_watch_tick(&mut tracker).await;
             }
         });
     }

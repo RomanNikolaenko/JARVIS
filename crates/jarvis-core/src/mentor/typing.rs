@@ -145,7 +145,7 @@ impl JarvisCore {
             .ok_or_else(|| format!("the tool {tool_name} is missing"))?;
         let ctx = ToolContext::new(
             scope.clone(),
-            agent.tool_limits.clone(),
+            agent.tool_limits,
             Arc::clone(&self.agents.processes),
         );
         let prepared = tool.prepare(&input, &ctx).map_err(|err| err.to_string())?;
@@ -308,6 +308,7 @@ impl JarvisCore {
                 last = Some(content);
                 if let Some(session) = self.mentor.session().as_mut() {
                     session.baseline.mark_written(root, &relative);
+                    session.watch_baseline.mark_written(root, &relative);
                 }
                 tokio::select! {
                     () = cancel.cancelled() => return Ended::Stopped("stopped by the user".into()),

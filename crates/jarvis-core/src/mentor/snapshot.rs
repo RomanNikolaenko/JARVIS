@@ -100,10 +100,12 @@ impl ProjectSnapshot {
         Ok(snapshot)
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.files.len()
     }
 
+    #[cfg(test)]
     /// The project has more files than [`MAX_FILES`].
     pub(crate) fn truncated(&self) -> bool {
         self.truncated

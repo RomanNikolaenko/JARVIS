@@ -96,6 +96,14 @@ struct TestCore {
 /// and a project folder inside a workspace folder. `None` on platforms
 /// without voice packages.
 async fn start(locality: DataLocality, voice: bool) -> Option<TestCore> {
+    start_with(locality, voice, jarvis_core::MentorTiming::default()).await
+}
+
+async fn start_with(
+    locality: DataLocality,
+    voice: bool,
+    timing: jarvis_core::MentorTiming,
+) -> Option<TestCore> {
     let dir = tempfile::tempdir().unwrap();
     let paths = AppPaths {
         config_dir: dir.path().join("config"),
@@ -119,7 +127,8 @@ async fn start(locality: DataLocality, voice: bool) -> Option<TestCore> {
         CoreOptions::new(paths, "9.9.9")
             .with_provider_factory(None)
             .with_static_providers(vec![teacher.clone() as Arc<dyn AiProvider>])
-            .with_voice_backend(Arc::new(fake.clone())),
+            .with_voice_backend(Arc::new(fake.clone()))
+            .with_mentor_timing(timing),
     )
     .await
     .unwrap();
@@ -768,4 +777,167 @@ async fn overwrite_is_marked_high_risk() {
     let pending = approval(&test).await;
     assert_eq!(pending.risk, RiskLevel::High);
     assert!(test.core.resolve_approval(pending.id, false));
+}
+
+// ----- speaking up on save -----
+
+use jarvis_core::{MentorNudge, MentorTiming};
+
+const FAST: MentorTiming = MentorTiming {
+    poll: Duration::from_millis(50),
+    settle: Duration::from_millis(250),
+    cooldown: Duration::from_millis(900),
+};
+
+async fn start_fast() -> Option<TestCore> {
+    let test = start_with(DataLocality::OnDevice, true, FAST).await?;
+    Some(test)
+}
+
+async fn next_nudge(
+    nudges: &mut tokio::sync::broadcast::Receiver<MentorNudge>,
+    within: Duration,
+) -> Option<MentorNudge> {
+    tokio::time::timeout(within, nudges.recv())
+        .await
+        .ok()
+        .map(|n| n.unwrap())
+}
+
+fn touch(test: &TestCore, path: &str, text: &str) {
+    let path = test.project.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nudges_after_files_settle() {
+    let Some(test) = start_fast().await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let mut nudges = test.core.subscribe_mentor_nudges();
+    let saved_at = std::time::Instant::now();
+    touch(&test, "src/app.ts", "export const shop = 3;\n");
+    let nudge = next_nudge(&mut nudges, Duration::from_secs(5))
+        .await
+        .expect("a nudge");
+    assert!(
+        saved_at.elapsed() >= FAST.settle,
+        "waited for the files to settle"
+    );
+    assert_eq!(nudge.conversation_id, conversation);
+    assert_eq!(nudge.files, ["src/app.ts"]);
+    // Nothing new: no more nudges.
+    assert!(
+        next_nudge(&mut nudges, Duration::from_millis(1500))
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_nudge_while_busy_paused_or_typing() {
+    let Some(test) = start_fast().await else {
+        return;
+    };
+    started(&test).await;
+    let mut nudges = test.core.subscribe_mentor_nudges();
+    test.core.mentor_set_busy(true);
+    touch(&test, "src/a.ts", "a\n");
+    assert!(
+        next_nudge(&mut nudges, Duration::from_millis(800))
+            .await
+            .is_none()
+    );
+    test.core.mentor_set_busy(false);
+    let nudge = next_nudge(&mut nudges, Duration::from_secs(3))
+        .await
+        .expect("after the answer");
+    assert_eq!(nudge.files, ["src/a.ts"]);
+
+    test.core.mentor_pause();
+    touch(&test, "src/b.ts", "b\n");
+    assert!(
+        next_nudge(&mut nudges, Duration::from_millis(1500))
+            .await
+            .is_none()
+    );
+    test.core.mentor_resume().unwrap();
+    let nudge = next_nudge(&mut nudges, Duration::from_secs(3))
+        .await
+        .expect("after the pause");
+    assert_eq!(nudge.files, ["src/b.ts"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn at_most_one_nudge_per_cooldown() {
+    let Some(test) = start_fast().await else {
+        return;
+    };
+    started(&test).await;
+    let mut nudges = test.core.subscribe_mentor_nudges();
+    touch(&test, "src/one.ts", "1\n");
+    let first = next_nudge(&mut nudges, Duration::from_secs(3))
+        .await
+        .expect("first");
+    let at = std::time::Instant::now();
+    touch(&test, "src/two.ts", "2\n");
+    touch(&test, "src/three.ts", "3\n");
+    let second = next_nudge(&mut nudges, Duration::from_secs(3))
+        .await
+        .expect("second");
+    assert!(
+        at.elapsed() >= FAST.cooldown - FAST.settle,
+        "{:?}",
+        at.elapsed()
+    );
+    assert_eq!(first.files, ["src/one.ts"]);
+    assert_eq!(second.files, ["src/three.ts", "src/two.ts"], "gathered");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn three_nudges_without_a_phrase_then_quiet_until_the_owner_speaks() {
+    let Some(test) = start_fast().await else {
+        return;
+    };
+    started(&test).await;
+    let mut nudges = test.core.subscribe_mentor_nudges();
+    for i in 0..3 {
+        touch(&test, &format!("src/f{i}.ts"), "x\n");
+        next_nudge(&mut nudges, Duration::from_secs(4))
+            .await
+            .expect("nudge");
+    }
+    touch(&test, "src/f3.ts", "x\n");
+    assert!(
+        next_nudge(&mut nudges, Duration::from_secs(2))
+            .await
+            .is_none(),
+        "quiet"
+    );
+    test.core.mentor_owner_spoke();
+    let nudge = next_nudge(&mut nudges, Duration::from_secs(3))
+        .await
+        .expect("again");
+    assert_eq!(nudge.files, ["src/f3.ts"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn own_writes_never_nudge() {
+    let Some(test) = start_fast().await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let mut nudges = test.core.subscribe_mentor_nudges();
+    ask_to_write(&test, conversation, &create_block("src/made.ts", &lines(4))).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    typed(&test).await;
+    assert!(test.project.join("src/made.ts").exists());
+    assert!(
+        next_nudge(&mut nudges, Duration::from_millis(1500))
+            .await
+            .is_none()
+    );
 }
