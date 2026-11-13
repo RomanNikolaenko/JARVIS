@@ -53,6 +53,8 @@ pub use health::{ComponentHealth, HealthReport, HealthStatus};
 pub use jarvis_memory;
 pub use memory::{ChatTurnRequest, MAX_IMPORT_BYTES, MAX_TURN_CHARS};
 pub use memory_encryption::{MEMORY_KEY_SECRET, MemoryRecoveryCode};
+pub use mentor::commands::{MentorCommand, parse_command};
+pub use mentor::{MentorPhase, MentorStartRequest, MentorStatus};
 pub use routing::{ModelRef, ModelRouting, RouteResolution, TaskCategory};
 pub use ui_errors::UiErrorReport;
 pub use updates::{AvailableUpdate, UpdatePhase, UpdateStatus};
@@ -233,6 +235,7 @@ pub struct JarvisCore {
     captures: vision::CaptureStore,
     plugins: jarvis_plugins::PluginManager,
     ui_error_limiter: ui_errors::RateLimiter,
+    mentor: mentor::MentorState,
 }
 
 impl JarvisCore {
@@ -411,6 +414,7 @@ impl JarvisCore {
                 ui_errors::UI_ERRORS_PER_WINDOW,
                 ui_errors::UI_ERROR_WINDOW,
             ),
+            mentor: mentor::MentorState::default(),
         });
         Self::watch_runtime_provider(&core);
         Self::autostart_runtime(&core);
@@ -822,6 +826,7 @@ impl JarvisCore {
         self.agents.manager.shutdown().await;
         self.plugins.shutdown().await;
         self.chat.cancel_all();
+        self.mentor_stop();
         self.voice.shutdown().await;
         self.runtime.shutdown().await;
         // Last: the action history records the steps above.

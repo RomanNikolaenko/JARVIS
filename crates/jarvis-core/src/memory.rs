@@ -1065,6 +1065,7 @@ impl JarvisCore {
         }
         let temporary = self.memory.is_temporary(id);
         self.memory.delete_conversation(id).await?;
+        self.mentor_conversation_deleted(id);
         self.memory_state.forget(id);
         if !temporary {
             self.events
