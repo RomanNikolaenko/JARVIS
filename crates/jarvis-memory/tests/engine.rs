@@ -1158,3 +1158,65 @@ async fn a_temporary_engine_is_not_encrypted() {
     let memory = MemoryEngine::in_memory().unwrap();
     assert_eq!(memory.encryption(), MemoryEncryption::Off);
 }
+
+#[tokio::test]
+async fn mentor_session_round_trip() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    for temporary in [false, true] {
+        let conversation = memory.create_conversation(None, temporary).await.unwrap();
+        assert!(
+            memory
+                .mentor_session(conversation.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let folder = std::path::Path::new("D:/projects/shop");
+        memory
+            .set_mentor_session(conversation.id, folder)
+            .await
+            .unwrap();
+        let session = memory
+            .mentor_session(conversation.id)
+            .await
+            .unwrap()
+            .expect("session");
+        assert_eq!(session.conversation_id, conversation.id);
+        assert_eq!(session.project_folder, folder);
+        assert!(session.created_at_ms > 0);
+        // Setting it again moves the session to another folder.
+        let other = std::path::Path::new("D:/projects/blog");
+        memory
+            .set_mentor_session(conversation.id, other)
+            .await
+            .unwrap();
+        let session = memory
+            .mentor_session(conversation.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.project_folder, other);
+    }
+    let missing = memory
+        .set_mentor_session(Uuid::new_v4(), std::path::Path::new("D:/x"))
+        .await;
+    assert!(missing.is_err());
+}
+
+#[tokio::test]
+async fn mentor_session_goes_with_its_conversation() {
+    let memory = MemoryEngine::in_memory().unwrap();
+    let conversation = memory.create_conversation(None, false).await.unwrap();
+    memory
+        .set_mentor_session(conversation.id, std::path::Path::new("D:/projects/shop"))
+        .await
+        .unwrap();
+    memory.delete_conversation(conversation.id).await.unwrap();
+    assert!(
+        memory
+            .mentor_session(conversation.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

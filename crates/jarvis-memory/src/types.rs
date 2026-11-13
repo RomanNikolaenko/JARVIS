@@ -31,6 +31,19 @@ pub struct Conversation {
     pub updated_at_ms: i64,
 }
 
+/// A conversation in which JARVIS teaches the user while they build a
+/// project (mentor mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "memory.ts")]
+pub struct MentorSession {
+    pub conversation_id: Uuid,
+    /// The project's folder (a workspace folder or inside one).
+    #[ts(type = "string")]
+    pub project_folder: std::path::PathBuf,
+    pub created_at_ms: i64,
+}
+
 /// Changes to a conversation; `None` leaves a field unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

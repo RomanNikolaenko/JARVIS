@@ -9,8 +9,8 @@ use jarvis_ai::ProviderConfig;
 use jarvis_core::jarvis_agent::{AgentTask, TaskSummary};
 use jarvis_core::jarvis_memory::{
     AcceptFactSuggestion, Conversation, ConversationDetail, ConversationPatch, Episode,
-    EpisodeCursor, Fact, FactInput, FactSuggestion, MemoryStatus, Project, ProjectInput, SearchHit,
-    SearchQuery, TransferReport,
+    EpisodeCursor, Fact, FactInput, FactSuggestion, MemoryStatus, MentorSession, Project,
+    ProjectInput, SearchHit, SearchQuery, TransferReport,
 };
 use jarvis_core::jarvis_plugins::{McpServerRequest, PluginInfo, PluginReview, PluginToolUpdate};
 use jarvis_core::jarvis_security::{AuditEntry, AuditVerification, PendingApproval};
@@ -63,6 +63,7 @@ fn export_typescript_bindings() {
         Conversation,
         ConversationDetail,
         ConversationPatch,
+        MentorSession,
         Fact,
         FactInput,
         FactSuggestion,

@@ -14,7 +14,7 @@
 //! its key is locked until [`MemoryEngine::unlock`] gets the key.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -33,8 +33,8 @@ use crate::types::{
     Episode, EpisodeCursor, Fact, FactInput, FactSource, FactSuggestion, MAX_FACT_CHARS, MAX_FACTS,
     MAX_MESSAGE_CHARS, MAX_NOTE_CHARS, MAX_PROJECT_DESCRIPTION_CHARS,
     MAX_PROJECT_INSTRUCTIONS_CHARS, MAX_PROJECT_NAME_CHARS, MAX_PROJECTS, MAX_TITLE_CHARS,
-    MemoryCounts, MemoryEncryption, MemoryKind, MessageRole, MessageStatus, NewMessage, Project,
-    ProjectInput, SearchHit, SearchQuery, StoredMessage,
+    MemoryCounts, MemoryEncryption, MemoryKind, MentorSession, MessageRole, MessageStatus,
+    NewMessage, Project, ProjectInput, SearchHit, SearchQuery, StoredMessage,
 };
 use crate::vector::{self, Embedder, SimilarityCuts, VectorIndex, VectorKind};
 
@@ -119,6 +119,7 @@ struct TemporaryConversation {
     conversation: Conversation,
     messages: Vec<StoredMessage>,
     summary: Option<ConversationSummary>,
+    mentor: Option<MentorSession>,
 }
 
 #[derive(Debug)]
@@ -303,6 +304,7 @@ impl MemoryEngine {
                     conversation: conversation.clone(),
                     messages: Vec::new(),
                     summary: None,
+                    mentor: None,
                 },
             );
         } else {
@@ -449,6 +451,50 @@ impl MemoryEngine {
         }
         self.invalidate_vectors().await;
         Ok(())
+    }
+
+    /// Links a conversation to the project folder of its mentor session.
+    pub async fn set_mentor_session(
+        &self,
+        conversation_id: Uuid,
+        project_folder: &Path,
+    ) -> Result<()> {
+        let folder = project_folder
+            .to_str()
+            .ok_or_else(|| {
+                MemoryError::Invalid("the project folder path is not valid Unicode".into())
+            })?
+            .to_owned();
+        {
+            let mut temporary = self.temporary();
+            if let Some(entry) = temporary.get_mut(&conversation_id) {
+                let created_at_ms = entry
+                    .mentor
+                    .as_ref()
+                    .map_or_else(now_ms, |m| m.created_at_ms);
+                entry.mentor = Some(MentorSession {
+                    conversation_id,
+                    project_folder: project_folder.to_path_buf(),
+                    created_at_ms,
+                });
+                return Ok(());
+            }
+        }
+        self.conversation(conversation_id).await?;
+        let now = now_ms();
+        self.db()?
+            .call(move |conn| store::set_mentor_session(conn, conversation_id, &folder, now))
+            .await
+    }
+
+    /// The mentor session of a conversation, if it has one.
+    pub async fn mentor_session(&self, conversation_id: Uuid) -> Result<Option<MentorSession>> {
+        if let Some(entry) = self.temporary().get(&conversation_id) {
+            return Ok(entry.mentor.clone());
+        }
+        self.db()?
+            .call(move |conn| store::mentor_session(conn, conversation_id))
+            .await
     }
 
     /// Appends a message. Saved conversations update their title from the

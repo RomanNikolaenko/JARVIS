@@ -141,6 +141,16 @@ available: boolean, error: string | null,
  */
 savingEnabled: boolean, databasePath: string | null, sizeBytes: number, schemaVersion: number, counts: MemoryCounts, embedding: EmbeddingStatus, encryption: MemoryEncryption, };
 
+/**
+ * A conversation in which JARVIS teaches the user while they build a
+ * project (mentor mode).
+ */
+export type MentorSession = { conversationId: string, 
+/**
+ * The project's folder (a workspace folder or inside one).
+ */
+projectFolder: string, createdAtMs: number, };
+
 export type MessageRole = "user" | "assistant";
 
 export type MessageStatus = "complete" | "cancelled";

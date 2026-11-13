@@ -50,10 +50,15 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "fact_suggestions",
         sql: include_str!("../migrations/0005_fact_suggestions.sql"),
     },
+    Migration {
+        version: 6,
+        name: "mentor",
+        sql: include_str!("../migrations/0006_mentor.sql"),
+    },
 ];
 
 /// Schema version this build creates.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// What happened while opening a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +234,39 @@ mod tests {
     }
 
     #[test]
+    fn migration_6_upgrades_an_existing_database() {
+        let mut conn = Connection::open_in_memory().expect("database");
+        migrate(&mut conn, None, &MIGRATIONS[..5]).expect("version 5");
+        conn.execute_batch(
+            "INSERT INTO conversations (id, title, created_at, updated_at) VALUES ('c1', 'Lesson', 1, 2);",
+        )
+        .expect("existing conversation");
+        let report = migrate(&mut conn, None, MIGRATIONS).expect("upgrade");
+        assert_eq!(report.applied, vec![6]);
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM conversations WHERE id = 'c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("kept");
+        assert_eq!(title, "Lesson");
+        conn.execute(
+            "INSERT INTO mentor_sessions (conversation_id, project_folder, created_at) VALUES ('c1', 'D:/p', 3)",
+            [],
+        )
+        .expect("mentor session");
+        assert!(
+            conn.execute(
+                "INSERT INTO mentor_sessions (conversation_id, project_folder, created_at) VALUES ('missing', 'D:/p', 3)",
+                [],
+            )
+            .is_err(),
+            "a session needs its conversation"
+        );
+    }
+
+    #[test]
     fn agent_verification_upgrade_preserves_tasks_and_audit() {
         let mut conn = Connection::open_in_memory().expect("database");
         migrate(&mut conn, None, &MIGRATIONS[..3]).expect("version 3");
@@ -247,7 +285,7 @@ mod tests {
             migrate(&mut conn, None, MIGRATIONS)
                 .expect("upgrade")
                 .applied,
-            vec![4, 5]
+            vec![4, 5, 6]
         );
         let after: (String, String) = conn
             .query_row("SELECT steps, result FROM agent_tasks", [], |row| {
@@ -286,7 +324,7 @@ mod tests {
             ["00000000-0000-0000-0000-000000000001"],
         ).expect("old history");
         let report = migrate(&mut conn, Some(&path), MIGRATIONS).expect("upgrade");
-        assert_eq!(report.applied, vec![3, 4, 5]);
+        assert_eq!(report.applied, vec![3, 4, 5, 6]);
         assert!(report.backup.is_some());
         let summary: String = conn
             .query_row("SELECT summary FROM episodes", [], |row| row.get(0))
@@ -316,7 +354,7 @@ mod tests {
         )
         .expect("old conversation");
         let report = migrate(&mut conn, Some(&path), MIGRATIONS).expect("upgrade");
-        assert_eq!(report.applied, vec![5]);
+        assert_eq!(report.applied, vec![5, 6]);
         let (title, checked): (String, i64) = conn
             .query_row(
                 "SELECT title, facts_checked_until FROM conversations",

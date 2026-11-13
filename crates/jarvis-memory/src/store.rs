@@ -10,7 +10,7 @@ use crate::error::Result;
 use crate::text::{estimate_tokens, normalize_fact};
 use crate::types::{
     Conversation, ConversationSummary, Episode, EpisodeCursor, Fact, FactSource, FactSuggestion,
-    MemoryCounts, MessageRole, MessageStatus, NewMessage, Project, StoredMessage,
+    MemoryCounts, MentorSession, MessageRole, MessageStatus, NewMessage, Project, StoredMessage,
 };
 use crate::vector::VectorKind;
 
@@ -175,6 +175,39 @@ pub fn update_conversation(
         ],
     )?;
     Ok(changed > 0)
+}
+
+/// Links a conversation to its mentor project (replacing an earlier link).
+pub fn set_mentor_session(
+    conn: &Connection,
+    conversation_id: Uuid,
+    project_folder: &str,
+    now: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO mentor_sessions (conversation_id, project_folder, created_at)
+             VALUES (?1, ?2, ?3)
+         ON CONFLICT (conversation_id) DO UPDATE SET project_folder = excluded.project_folder",
+        params![conversation_id.to_string(), project_folder, now],
+    )?;
+    Ok(())
+}
+
+pub fn mentor_session(conn: &Connection, conversation_id: Uuid) -> Result<Option<MentorSession>> {
+    conn.query_row(
+        "SELECT conversation_id, project_folder, created_at FROM mentor_sessions
+         WHERE conversation_id = ?1",
+        [conversation_id.to_string()],
+        |row| {
+            Ok(MentorSession {
+                conversation_id: uuid_at(row, 0)?,
+                project_folder: std::path::PathBuf::from(row.get::<_, String>(1)?),
+                created_at_ms: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 pub fn delete_conversation(conn: &Connection, id: Uuid) -> Result<bool> {
