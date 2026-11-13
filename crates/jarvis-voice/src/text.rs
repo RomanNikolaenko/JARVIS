@@ -9,6 +9,8 @@ pub struct SentenceSplitter {
     buffer: String,
     in_code: bool,
     in_think: bool,
+    /// Inside a mentor `<plan>` or `<write>` block: its closing tag.
+    in_block: Option<&'static str>,
 }
 
 impl SentenceSplitter {
@@ -35,6 +37,7 @@ impl SentenceSplitter {
         self.take(&raw, &mut sentences);
         self.in_code = false;
         self.in_think = false;
+        self.in_block = None;
         sentences
     }
 
@@ -69,6 +72,20 @@ impl SentenceSplitter {
     fn take(&mut self, raw: &str, out: &mut Vec<String>) {
         for line in raw.split('\n') {
             let trimmed = line.trim();
+            if let Some(close) = self.in_block {
+                if trimmed.contains(close) {
+                    self.in_block = None;
+                }
+                continue;
+            }
+            if !self.in_code
+                && let Some(close) = block_close(trimmed)
+            {
+                if !trimmed.contains(close) {
+                    self.in_block = Some(close);
+                }
+                continue;
+            }
             if trimmed.starts_with("```") {
                 self.in_code = !self.in_code;
                 continue;
@@ -90,6 +107,18 @@ impl SentenceSplitter {
                 out.push(spoken);
             }
         }
+    }
+}
+
+/// The closing tag of a mentor block (plan or code to write) that `line`
+/// opens. These blocks are for JARVIS, not for reading aloud.
+fn block_close(line: &str) -> Option<&'static str> {
+    if line.starts_with("<plan>") {
+        Some("</plan>")
+    } else if line.starts_with("<write ") || line.starts_with("<write>") {
+        Some("</write>")
+    } else {
+        None
     }
 }
 
@@ -165,6 +194,38 @@ mod tests {
                 "зараз.".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn skips_plan_and_write_blocks() {
+        let reply = "Добре.
+<plan>
+1. крок
+</plan>
+<write path=\"a.ts\" mode=\"create\">
+<say>Імпорт. Потім клас.</say>
+<code>
+import x
+</code>
+</write>
+Далі.";
+        let mut s = SentenceSplitter::new();
+        let chars: Vec<char> = reply.chars().collect();
+        let mut spoken = Vec::new();
+        for piece in chars.chunks(5) {
+            spoken.extend(s.push(&piece.iter().collect::<String>()));
+        }
+        spoken.extend(s.finish());
+        assert_eq!(spoken, vec!["Добре.".to_owned(), "Далі.".to_owned()]);
+
+        // A one-line plan is skipped too, and speech goes on after it.
+        let mut s = SentenceSplitter::new();
+        let mut spoken = s.push(
+            "<plan>1. крок</plan>
+Готово. ",
+        );
+        spoken.extend(s.finish());
+        assert_eq!(spoken, vec!["Готово.".to_owned()]);
     }
 
     #[test]
