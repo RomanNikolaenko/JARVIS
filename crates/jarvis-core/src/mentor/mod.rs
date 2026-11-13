@@ -4,4 +4,6 @@
 // The parts are wired into the session step by step (plan tasks 4-9).
 #![allow(dead_code)]
 
+pub mod commands;
+pub(crate) mod protocol;
 pub(crate) mod snapshot;
