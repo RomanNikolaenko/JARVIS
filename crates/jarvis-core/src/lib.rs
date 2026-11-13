@@ -14,6 +14,7 @@ mod fact_suggestions;
 pub mod health;
 mod memory;
 mod memory_encryption;
+mod mentor;
 mod plugins;
 pub mod routing;
 mod ui_errors;
