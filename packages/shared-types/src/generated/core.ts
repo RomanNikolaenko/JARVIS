@@ -228,6 +228,45 @@ contextLimitTokens: number | null,
 episodeRetentionDays: number, };
 
 /**
+ * A whole phrase that is a command for JARVIS, not a message to the mentor.
+ */
+export type MentorCommand = "pause" | "resume" | "end" | "look" | "yes" | "no" | "stop";
+
+/**
+ * The user saved these files; the UI starts a mentor turn for them.
+ */
+export type MentorNudge = { conversationId: string, 
+/**
+ * Relative paths, `/` separators, sorted.
+ */
+files: Array<string>, };
+
+/**
+ * What the mentor is doing.
+ */
+export type MentorPhase = "off" | "listening" | "paused" | "typing";
+
+export type MentorStartRequest = { conversationId: string, 
+/**
+ * The project folder: a workspace folder or a folder inside one.
+ */
+projectFolder: string, 
+/**
+ * The model to teach with; without them the chat's model is used.
+ */
+providerId: ProviderId | null, model: string | null, };
+
+export type MentorStatus = { conversationId: string | null, projectFolder: string | null, phase: MentorPhase, 
+/**
+ * The change waiting for the user's approval, in one line.
+ */
+pendingWrite: string | null, 
+/**
+ * The file JARVIS is typing into.
+ */
+typingFile: string | null, lastError: string | null, };
+
+/**
  * Why a chat turn goes to the mentor.
  */
 export type MentorTrigger = "phrase" | "filesSaved";

@@ -127,6 +127,39 @@ describe('JarvisApi', () => {
     ]);
   });
 
+  it('passes mentor command arguments with the names expected by Rust', async () => {
+    const calls: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      return cmd === 'mentor_command' ? 'pause' : null;
+    });
+
+    await api.mentorStart({ conversationId: 'c-1', projectFolder: 'D:/work/shop', providerId: null, model: null });
+    await api.mentorStop();
+    await api.mentorPause();
+    await api.mentorResume();
+    await api.mentorStatus();
+    await api.mentorStopTyping();
+    await api.mentorReportBusy(true);
+    await api.mentorOwnerSpoke();
+    expect(await api.mentorCommand('Пауза.')).toBe('pause');
+
+    expect(calls).toEqual([
+      {
+        cmd: 'mentor_start',
+        args: { request: { conversationId: 'c-1', projectFolder: 'D:/work/shop', providerId: null, model: null } },
+      },
+      { cmd: 'mentor_stop', args: {} },
+      { cmd: 'mentor_pause', args: {} },
+      { cmd: 'mentor_resume', args: {} },
+      { cmd: 'mentor_status', args: {} },
+      { cmd: 'mentor_stop_typing', args: {} },
+      { cmd: 'mentor_report_busy', args: { busy: true } },
+      { cmd: 'mentor_owner_spoke', args: {} },
+      { cmd: 'mentor_command', args: { text: 'Пауза.' } },
+    ]);
+  });
+
   it('requests explicit catalog vision recovery with the curated ID', async () => {
     const calls: { cmd: string; args: unknown }[] = [];
     mockIPC((cmd, args) => {

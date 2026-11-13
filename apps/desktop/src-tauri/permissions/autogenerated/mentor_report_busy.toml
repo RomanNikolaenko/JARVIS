@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mentor-report-busy"
+description = "Enables the mentor_report_busy command without any pre-configured scope."
+commands.allow = ["mentor_report_busy"]
+
+[[permission]]
+identifier = "deny-mentor-report-busy"
+description = "Denies the mentor_report_busy command without any pre-configured scope."
+commands.deny = ["mentor_report_busy"]

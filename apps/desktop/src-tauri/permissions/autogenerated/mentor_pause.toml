@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mentor-pause"
+description = "Enables the mentor_pause command without any pre-configured scope."
+commands.allow = ["mentor_pause"]
+
+[[permission]]
+identifier = "deny-mentor-pause"
+description = "Denies the mentor_pause command without any pre-configured scope."
+commands.deny = ["mentor_pause"]

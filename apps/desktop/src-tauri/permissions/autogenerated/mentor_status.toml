@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mentor-status"
+description = "Enables the mentor_status command without any pre-configured scope."
+commands.allow = ["mentor_status"]
+
+[[permission]]
+identifier = "deny-mentor-status"
+description = "Denies the mentor_status command without any pre-configured scope."
+commands.deny = ["mentor_status"]

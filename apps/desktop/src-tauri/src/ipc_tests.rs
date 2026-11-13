@@ -173,6 +173,15 @@ fn every_command_is_denied_for_windows_without_a_capability() {
         "attach_photo",
         "discard_capture",
         "attach_projector",
+        "mentor_start",
+        "mentor_stop",
+        "mentor_pause",
+        "mentor_resume",
+        "mentor_status",
+        "mentor_stop_typing",
+        "mentor_report_busy",
+        "mentor_owner_spoke",
+        "mentor_command",
     ]);
     for cmd in all {
         let result = invoke(&h.other, cmd, json!({}));
@@ -264,6 +273,54 @@ fn recent_events_include_startup() {
     assert!(
         messages.iter().any(|m| m.contains("core ready")),
         "{messages:?}"
+    );
+}
+
+#[test]
+fn mentor_commands_over_ipc() {
+    let h = harness();
+    let status = invoke(&h.main, "mentor_status", json!({})).expect("status");
+    assert_eq!(status["phase"], "off");
+    assert_eq!(
+        invoke(&h.main, "mentor_command", json!({"text": "Пауза."})).expect("command"),
+        json!("pause")
+    );
+    assert_eq!(
+        invoke(&h.main, "mentor_command", json!({"text": "пауза в коді"})).expect("command"),
+        Value::Null
+    );
+    let conversation = invoke(
+        &h.main,
+        "create_conversation",
+        json!({"projectId": null, "temporary": false}),
+    )
+    .expect("conversation");
+    let outside = h.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("folder");
+    let err = invoke(
+        &h.main,
+        "mentor_start",
+        json!({"request": {
+            "conversationId": conversation["id"],
+            "projectFolder": outside,
+            "providerId": null,
+            "model": null
+        }}),
+    )
+    .expect_err("outside the workspace");
+    assert_eq!(err["code"], "validation", "{err}");
+    for cmd in [
+        "mentor_stop",
+        "mentor_pause",
+        "mentor_stop_typing",
+        "mentor_owner_spoke",
+    ] {
+        invoke(&h.main, cmd, json!({})).expect(cmd);
+    }
+    invoke(&h.main, "mentor_report_busy", json!({"busy": true})).expect("busy");
+    assert!(
+        invoke(&h.main, "mentor_resume", json!({})).is_err(),
+        "no lesson"
     );
 }
 

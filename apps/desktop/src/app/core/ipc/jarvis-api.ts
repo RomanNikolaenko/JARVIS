@@ -58,6 +58,10 @@ import type {
   VoiceState,
   VoiceStatus,
   VoiceTranscript,
+  MentorCommand,
+  MentorNudge,
+  MentorStartRequest,
+  MentorStatus,
 } from '@jarvis/shared-types';
 
 import { TauriBridge } from './tauri-bridge';
@@ -82,6 +86,10 @@ export const VOICE_STATE_EVENT = 'jarvis://voice-state';
 export const VOICE_TRANSCRIPT_EVENT = 'jarvis://voice-transcript';
 /** Pushed with the microphone level (0–1) while it is open. */
 export const VOICE_LEVEL_EVENT = 'jarvis://voice-level';
+/** Pushed with the mentor's status after every change. */
+export const MENTOR_STATE_EVENT = 'jarvis://mentor-state';
+/** Pushed when the user saved project files during a lesson. */
+export const MENTOR_NUDGE_EVENT = 'jarvis://mentor-nudge';
 
 /**
  * Typed facade over the IPC commands registered in
@@ -591,5 +599,52 @@ export class JarvisApi {
 
   onVoiceLevel(handler: (level: number) => void): Promise<UnlistenFn> {
     return this.bridge.listen<number>(VOICE_LEVEL_EVENT, handler);
+  }
+
+  /** Starts a lesson; the project folder must be in a workspace folder. */
+  mentorStart(request: MentorStartRequest): Promise<MentorStatus> {
+    return this.bridge.invoke('mentor_start', { request });
+  }
+
+  mentorStop(): Promise<void> {
+    return this.bridge.invoke('mentor_stop');
+  }
+
+  mentorPause(): Promise<void> {
+    return this.bridge.invoke('mentor_pause');
+  }
+
+  mentorResume(): Promise<MentorStatus> {
+    return this.bridge.invoke('mentor_resume');
+  }
+
+  mentorStatus(): Promise<MentorStatus> {
+    return this.bridge.invoke('mentor_status');
+  }
+
+  mentorStopTyping(): Promise<void> {
+    return this.bridge.invoke('mentor_stop_typing');
+  }
+
+  /** Answering, speaking or holding a phrase: no reaction to saves meanwhile. */
+  mentorReportBusy(busy: boolean): Promise<void> {
+    return this.bridge.invoke('mentor_report_busy', { busy });
+  }
+
+  mentorOwnerSpoke(): Promise<void> {
+    return this.bridge.invoke('mentor_owner_spoke');
+  }
+
+  /** The command a recognized phrase is, if the whole phrase is one. */
+  mentorCommand(text: string): Promise<MentorCommand | null> {
+    return this.bridge.invoke('mentor_command', { text });
+  }
+
+  onMentorState(handler: (status: MentorStatus) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<MentorStatus>(MENTOR_STATE_EVENT, handler);
+  }
+
+  onMentorNudge(handler: (nudge: MentorNudge) => void): Promise<UnlistenFn> {
+    return this.bridge.listen<MentorNudge>(MENTOR_NUDGE_EVENT, handler);
   }
 }

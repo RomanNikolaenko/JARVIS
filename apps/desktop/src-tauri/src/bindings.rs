@@ -18,8 +18,9 @@ use jarvis_core::jarvis_vision::{CaptureInfo, WindowInfo};
 use jarvis_core::jarvis_voice::{VoiceState, VoiceStatus, VoiceTranscript};
 use jarvis_core::{
     AgentStartRequest, AgentStatus, AppInfo, ChatStreamEvent, ChatTurnRequest, ErrorPayload,
-    HealthReport, MemoryRecoveryCode, ProviderModels, ProviderTestResult, RouteResolution,
-    Settings, ToolInfo, UiErrorReport, UpdateStatus, VisionStatus,
+    HealthReport, MemoryRecoveryCode, MentorCommand, MentorNudge, MentorPhase, MentorStartRequest,
+    MentorStatus, MentorTrigger, ProviderModels, ProviderTestResult, RouteResolution, Settings,
+    ToolInfo, UiErrorReport, UpdateStatus, VisionStatus,
 };
 use jarvis_events::SystemEvent;
 use jarvis_platform::{HardwareInfo, PlatformInfo, SystemMetrics};
@@ -64,6 +65,12 @@ fn export_typescript_bindings() {
         ConversationDetail,
         ConversationPatch,
         MentorSession,
+        MentorStatus,
+        MentorPhase,
+        MentorStartRequest,
+        MentorTrigger,
+        MentorNudge,
+        MentorCommand,
         Fact,
         FactInput,
         FactSuggestion,

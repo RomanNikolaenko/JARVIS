@@ -9,6 +9,7 @@ mod commands;
 mod dialogs;
 mod logging;
 mod memory_commands;
+mod mentor_commands;
 mod plugin_commands;
 mod runtime_commands;
 mod state;
@@ -57,6 +58,10 @@ pub const VOICE_STATE_EVENT: &str = "jarvis://voice-state";
 pub const VOICE_TRANSCRIPT_EVENT: &str = "jarvis://voice-transcript";
 /// Event with the microphone level (0–1) while it is open.
 pub const VOICE_LEVEL_EVENT: &str = "jarvis://voice-level";
+/// Event with the mentor's status after every change.
+pub const MENTOR_STATE_EVENT: &str = "jarvis://mentor-state";
+/// Event asking the UI for a mentor turn about saved files.
+pub const MENTOR_NUDGE_EVENT: &str = "jarvis://mentor-nudge";
 /// Payload: `PluginInfo[]` after any change of a plugin.
 pub const PLUGINS_EVENT: &str = "jarvis://plugins";
 
@@ -131,6 +136,15 @@ pub fn with_commands<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         agent_commands::get_audit_log,
         agent_commands::verify_audit_log,
         agent_commands::add_workspace_folder,
+        mentor_commands::mentor_start,
+        mentor_commands::mentor_stop,
+        mentor_commands::mentor_pause,
+        mentor_commands::mentor_resume,
+        mentor_commands::mentor_status,
+        mentor_commands::mentor_stop_typing,
+        mentor_commands::mentor_report_busy,
+        mentor_commands::mentor_owner_spoke,
+        mentor_commands::mentor_command,
         voice_commands::get_voice_status,
         voice_commands::install_voice_package,
         voice_commands::remove_voice_package,
@@ -220,6 +234,7 @@ fn setup<R: Runtime>(app: &mut App<R>) -> Result<(), Box<dyn Error>> {
         core.subscribe_approvals(),
     );
     spawn_voice_forwarders(app.handle().clone(), core.voice());
+    spawn_mentor_forwarders(app.handle().clone(), &core);
     spawn_plugin_forwarder(app.handle().clone(), core.plugins().clone());
     let updates = updates::UpdateService::new(&version);
     updates::spawn_status_forwarder(app.handle().clone(), &updates);
@@ -356,6 +371,34 @@ fn spawn_voice_forwarders<R: Runtime>(app: AppHandle<R>, voice: &VoiceEngine) {
             match levels.recv().await {
                 Ok(level) => {
                     let _ = app.emit_to(MAIN_WINDOW, VOICE_LEVEL_EVENT, level);
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// Forwards the mentor's status and its requests for turns about saves.
+fn spawn_mentor_forwarders<R: Runtime>(app: AppHandle<R>, core: &JarvisCore) {
+    let mut status = core.subscribe_mentor();
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while status.changed().await.is_ok() {
+            let current = status.borrow_and_update().clone();
+            if let Err(err) = handle.emit_to(MAIN_WINDOW, MENTOR_STATE_EVENT, &current) {
+                tracing::debug!("cannot forward the mentor status: {err}");
+            }
+        }
+    });
+    let mut nudges = core.subscribe_mentor_nudges();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match nudges.recv().await {
+                Ok(nudge) => {
+                    if let Err(err) = app.emit_to(MAIN_WINDOW, MENTOR_NUDGE_EVENT, &nudge) {
+                        tracing::debug!("cannot forward a mentor nudge: {err}");
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,

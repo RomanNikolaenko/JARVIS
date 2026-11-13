@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mentor-owner-spoke"
+description = "Enables the mentor_owner_spoke command without any pre-configured scope."
+commands.allow = ["mentor_owner_spoke"]
+
+[[permission]]
+identifier = "deny-mentor-owner-spoke"
+description = "Denies the mentor_owner_spoke command without any pre-configured scope."
+commands.deny = ["mentor_owner_spoke"]
