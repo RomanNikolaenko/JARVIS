@@ -536,6 +536,34 @@ capture button ─▶ ScreenCapture (xcap │ x11rb │ portal) ─▶ JPEG ≤ 
   images only with `privacy.shareCapturesWithCloud`. The embedded runtime
   passes a model's projector with `--mmproj`.
 
+### 4.3e Mentor mode (`jarvis-core::mentor`)
+
+See [ADR 0016](docs/decisions/0016-mentor-mode.md).
+
+```
+mentor_start ─▶ folder in a workspace folder? cloud model + allowCloudAgents?
+             ─▶ mentor_sessions (conversation → folder) ─▶ voice: Conversation mode
+phrase ─conversation transcript─▶ MentorStore (UI): command? ─▶ pause / end / look / yes / no / stop
+                                         └─ otherwise ─▶ send_message(mentor: phrase)
+send_message ─▶ snapshot diff ─▶ request = mentor prompt + phrase + file list (1st turn)
+                                + changed files (≤ 30 % of the window); saved = phrase
+reply saved ─▶ <plan> ─▶ pinned note      <write> ─▶ write_file/edit_file prepare
+            ─▶ policy ─▶ approval (always) ─▶ say part ─▶ type ≤ 3 lines / 150 ms ─▶ audit
+save watcher (1 s poll) ─▶ quiet 2 s, ≤ 1 / 20 s, ≤ 3 in a row ─▶ jarvis://mentor-nudge
+             ─▶ MentorStore ─▶ send_message(mentor: filesSaved)
+```
+
+- `mentor::snapshot` keeps sizes and modification times of the project's
+  text files; `mentor::protocol` parses `<plan>` and `<write>`;
+  `mentor::commands` matches spoken commands as whole phrases;
+  `mentor::typing` checks, asks for approval and types; `mentor::saves` is
+  the save watcher.
+- Typing stops when the file differs from JARVIS's last write (the user's
+  text is kept) and on `mentor_stop_typing`; refusals and stops become short
+  notes in the conversation.
+- Events: `jarvis://mentor-state` (`MentorStatus`), `jarvis://mentor-nudge`
+  (`MentorNudge`).
+
 ### 4.3d Plugins and MCP (`jarvis-plugins`, `jarvis-core::plugins`)
 
 See [ADR 0012](docs/decisions/0012-plugins-and-mcp.md).

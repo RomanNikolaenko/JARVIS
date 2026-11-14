@@ -21,5 +21,6 @@ earlier one instead of editing it.
 | [0013](0013-local-data-only.md) | All data stays on the user's computer; no cloud sync | Accepted |
 | [0014](0014-signed-updates.md) | Signed automatic updates from GitHub Releases | Accepted |
 | [0015](0015-subscription-cli-providers.md) | ChatGPT and Claude subscriptions through the vendors' CLIs | Accepted |
+| [0016](0016-mentor-mode.md) | Mentor mode: a voice teacher for building an app | Accepted |
 
 Template: copy an existing ADR, increment the number, keep it short.

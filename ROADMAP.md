@@ -164,6 +164,11 @@ Legend: ✅ done · 🟡 partially done · ⬜ not started
   Qwen3-VL 2B (found and fixed: a crash in synchronous IPC commands,
   microphone closing on a WASAPI glitch, 20 s recognition per phrase)
 - ⬜ Live check on Linux; wake word with a live voice
+- ✅ Mentor mode (ADR 0016, 2026-11-14): conversation listening without the
+  wake word, project context per turn, lesson plan in the pinned note,
+  speaking up after saves, confirmed slow typing into files; tested with
+  fake audio, a scripted model and real files
+- ⬜ Live check of mentor mode with a live voice and a real editor
 - ⬜ Cloud speech (optional), echo cancellation, a dedicated wake-word model
 - ⬜ Camera on Linux (WebKitGTK media capture is off in Tauri)
 

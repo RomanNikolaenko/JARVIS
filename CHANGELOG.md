@@ -6,6 +6,18 @@ All notable changes to JARVIS. Versions follow [Semantic Versioning](https://sem
 
 ### Added
 
+- Mentor mode: JARVIS teaches you while you build an app (Chat → "Start a
+  lesson", or «Джарвіс, починаємо урок»). Pick the project folder (it must be
+  a workspace folder); from then on the microphone listens without the wake
+  word and JARVIS explains what to write, how and why, one step at a time.
+  It sees the files you changed before every answer, comments by itself a
+  couple of seconds after you save (at most once per 20 s), looks at the
+  screen when you say «подивись на екран», and on «напиши сам» types the
+  code into the file slowly while explaining it, after you approve the
+  change (by voice for new files and edits, by click for overwriting). Say
+  «пауза», «стоп» or «закінчуємо урок» at any time. Writing needs
+  `write_file` and `edit_file` on in Settings → Tools; with a cloud model
+  it also needs "Let agents use cloud AI providers".
 - Images can be sent to Claude Code models (PNG and JPEG, like the other
   vision models). As with every cloud model, this needs "Send screenshots
   and photos to cloud AI providers" under Settings → Privacy.
