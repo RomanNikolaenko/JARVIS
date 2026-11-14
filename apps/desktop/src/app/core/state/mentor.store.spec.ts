@@ -133,7 +133,7 @@ describe('MentorStore', () => {
 
   it('sends held phrases even when the reply ends before the send returns', async () => {
     let finishSend: (value: string) => void = () => undefined;
-    chat.send.mockImplementationOnce(() => new Promise<string>((resolve) => (finishSend = resolve)));
+    chat.send.mockImplementationOnce(() => new Promise<string>((done) => (finishSend = done)));
     const first = store.handlePhrase(phrase('Перше'));
     await vi.waitFor(() => expect(chat.send).toHaveBeenCalledTimes(1));
     await store.handlePhrase(phrase('Друге'));
