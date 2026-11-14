@@ -114,8 +114,9 @@ pub(crate) struct FinishedReply {
 
 /// Files listed for the mentor on the first turn.
 const TREE_ENTRIES: usize = 300;
-/// Share of the model's context window for changed files (percent).
-const CHANGES_BUDGET_PERCENT: usize = 30;
+/// Share of the context window for the project's files (percent); the
+/// conversation and memory take most of the rest.
+const CHANGES_BUDGET_PERCENT: usize = 20;
 /// Characters per token, roughly.
 const CHARS_PER_TOKEN: usize = 3;
 /// Window assumed when the model does not report one.
@@ -136,6 +137,8 @@ pub(crate) struct MentorState {
     pub(crate) busy: AtomicBool,
     /// Turns started by saving since the user last spoke.
     pub(crate) in_a_row: AtomicU32,
+    /// A change is waiting for approval or being typed.
+    pub(crate) writing: AtomicBool,
 }
 
 impl Default for MentorState {
@@ -157,6 +160,7 @@ impl MentorState {
             nudges: broadcast::channel(16).0,
             busy: AtomicBool::new(false),
             in_a_row: AtomicU32::new(0),
+            writing: AtomicBool::new(false),
         }
     }
 }
@@ -246,10 +250,11 @@ impl JarvisCore {
                     CoreError::Validation(format!("The project folder cannot be read: {err}"))
                 })?
         };
-        self.voice.start_conversation()?;
+        // The link first: a failure must not leave the microphone open.
         self.memory
             .set_mentor_session(request.conversation_id, &root)
             .await?;
+        self.voice.start_conversation()?;
 
         let shown = root.display().to_string();
         self.mentor.busy.store(false, Ordering::Relaxed);
@@ -351,13 +356,15 @@ impl JarvisCore {
             }
         };
         let window = window_tokens.unwrap_or(DEFAULT_WINDOW_TOKENS) as usize;
-        let budget = window * CHARS_PER_TOKEN * CHANGES_BUDGET_PERCENT / 100;
+        let mut budget = window * CHARS_PER_TOKEN * CHANGES_BUDGET_PERCENT / 100;
         let scan_root = root.clone();
         let (now, changes, rendered, tree) = tokio::task::spawn_blocking(move || {
             let now = ProjectSnapshot::scan(&scan_root)?;
             let changes = now.changes_since(&baseline);
-            let rendered = (!changes.is_empty()).then(|| changes.render(&scan_root, budget));
             let tree = (!tree_sent).then(|| now.tree(TREE_ENTRIES));
+            // The file list shares the budget with the changed files.
+            budget = budget.saturating_sub(tree.as_ref().map_or(0, |t| t.chars().count()));
+            let rendered = (!changes.is_empty()).then(|| changes.render(&scan_root, budget));
             Ok::<_, std::io::Error>((now, changes, rendered, tree))
         })
         .await
@@ -372,7 +379,8 @@ impl JarvisCore {
                 .filter(|s| s.conversation_id == conversation_id)
             {
                 // What the mentor sees now is not news for the save watcher.
-                s.watch_baseline = now.clone();
+                // Marks of chunks typed meanwhile are kept.
+                s.watch_baseline = now.keeping_newer(&s.watch_baseline);
                 s.baseline = now;
                 s.tree_sent = true;
             }
@@ -431,6 +439,23 @@ impl JarvisCore {
                 core.mentor_handle_reply(&core, reply).await;
             }
         });
+        // A failing microphone ends the lesson instead of leaving the bar
+        // saying it listens.
+        let weak = Arc::downgrade(core);
+        let mut voice = core.voice.subscribe_state();
+        tokio::spawn(async move {
+            let mut was_active = false;
+            while voice.changed().await.is_ok() {
+                let state = voice.borrow_and_update().clone();
+                let ended = was_active && !state.conversation_active;
+                was_active = state.conversation_active;
+                if !ended {
+                    continue;
+                }
+                let Some(core) = weak.upgrade() else { return };
+                core.mentor_voice_changed(&state);
+            }
+        });
         // The save watcher: cheap while no lesson runs.
         let weak = Arc::downgrade(core);
         let poll = core.mentor.timing.poll;
@@ -466,6 +491,21 @@ impl JarvisCore {
                 core.mentor_write(reply.conversation_id, write).await;
             });
         }
+    }
+
+    fn mentor_voice_changed(&self, state: &jarvis_voice::VoiceState) {
+        let phase = self.mentor.status().phase;
+        let listening = matches!(phase, MentorPhase::Listening | MentorPhase::Typing);
+        if !listening || state.conversation_active {
+            return;
+        }
+        let Some(error) = &state.last_error else {
+            return;
+        };
+        let message = format!("The lesson ended: the microphone stopped ({error})");
+        self.mentor_stop();
+        self.mentor.update(|s| s.last_error = Some(message.clone()));
+        self.events.warning(EventCategory::Voice, message);
     }
 
     /// Ends the session of a deleted conversation.

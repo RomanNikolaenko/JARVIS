@@ -1189,9 +1189,11 @@ impl VoiceEngine {
     }
 
     /// Speaks a complete text and waits until it has played out or was
-    /// stopped. Any current speech stops first.
+    /// stopped. Any current speech stops first. It counts as a reply: a
+    /// listening microphone hears it through the echo gate, and talking
+    /// over it stops it.
     pub async fn say_and_wait(&self, text: &str) {
-        let stream = self.speak();
+        let stream = self.speak_reply();
         stream.push(text);
         stream.finish();
         stream.finished().await;

@@ -776,3 +776,41 @@ async fn say_and_wait_resolves_after_playback() {
         .expect("finished after stop")
         .expect("task");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn own_narration_in_conversation_mode_is_watched_like_a_reply() {
+    // Review finding 1: say_and_wait must count as JARVIS speaking, so the
+    // conversation listener treats speech over it as a barge-in (echo gate)
+    // instead of a plain phrase.
+    let Some(mut s) = setup() else { return };
+    s.engine.apply_settings(
+        VoiceSettings {
+            end_silence_ms: 400,
+            ..VoiceSettings::default()
+        },
+        SpeechLanguage::Uk,
+    );
+    s.engine.start_conversation().expect("conversation");
+    wait_state(&mut s.state, "conversation listening", |st| {
+        st.conversation_active
+    })
+    .await;
+    s.fake.lock().hold_playback = true;
+    let engine = s.engine.clone();
+    let narration =
+        tokio::spawn(async move { engine.say_and_wait("Спершу імпорти.").await });
+    wait_state(&mut s.state, "speaking", |st| {
+        st.phase == jarvis_voice::VoicePhase::Speaking
+    })
+    .await;
+    s.fake.reply("Зачекай");
+    s.fake.speak_into_mic(1.0).await;
+    let transcript = next_transcript(&mut s.transcripts).await;
+    assert_eq!(transcript.source, TranscriptSource::Conversation);
+    // Talking over the narration stopped it, like a reply.
+    tokio::time::timeout(Duration::from_secs(5), narration)
+        .await
+        .expect("the narration ended")
+        .expect("task");
+    assert!(s.fake.lock().cleared > 0, "the narration was cut");
+}

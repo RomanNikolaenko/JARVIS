@@ -151,6 +151,20 @@ impl ProjectSnapshot {
         text
     }
 
+    /// This snapshot, except files that `other` saw modified later (marks
+    /// of JARVIS's own writes made after this scan began).
+    pub(crate) fn keeping_newer(&self, other: &Self) -> Self {
+        let mut merged = self.clone();
+        for (path, entry) in &mut merged.files {
+            if let Some(newer) = other.files.get(path)
+                && newer.modified > entry.modified
+            {
+                *entry = *newer;
+            }
+        }
+        merged
+    }
+
     /// Records a file JARVIS itself wrote, so it does not count as the
     /// user's change.
     pub(crate) fn mark_written(&mut self, root: &Path, path: &Path) {
@@ -353,6 +367,31 @@ mod tests {
         assert!(rendered.contains("a.ts (not shown"), "{rendered}");
         assert!(rendered.contains("<project_file path=\"b.ts\">"));
         assert!(rendered.to_lowercase().contains("untrusted"));
+    }
+
+    #[test]
+    fn a_newer_mark_survives_an_older_scan() {
+        // Review finding 4: a scan taken before JARVIS typed a chunk must not
+        // drop the mark of that chunk.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(
+            root, "app.ts", "one
+",
+        );
+        touch(root, "app.ts", 60);
+        let older_scan = ProjectSnapshot::scan(root).unwrap();
+        let mut marked = older_scan.clone();
+        write(
+            root,
+            "app.ts",
+            "typed by JARVIS
+",
+        );
+        marked.mark_written(root, Path::new("app.ts"));
+        let merged = older_scan.keeping_newer(&marked);
+        let now = ProjectSnapshot::scan(root).unwrap();
+        assert!(now.changes_since(&merged).is_empty());
     }
 
     #[test]

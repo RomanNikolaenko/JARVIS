@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use jarvis_memory::{MessageRole, MessageStatus, NewMessage};
@@ -56,7 +57,7 @@ impl JarvisCore {
                 None => return,
             }
         };
-        let block = match block {
+        let mut block = match block {
             Ok(block) => block,
             Err(reason) => {
                 self.mentor_refuse(conversation_id, "the code", &reason)
@@ -65,7 +66,19 @@ impl JarvisCore {
             }
         };
         let shown = block.path.clone();
-        match self.mentor_prepare_write(&root, &block) {
+        // One change at a time: a second one would bring a second dialog
+        // and a second typing run.
+        if self.mentor.writing.swap(true, Ordering::AcqRel) {
+            self.mentor_refuse(
+                conversation_id,
+                &shown,
+                "another change is waiting for approval or being typed",
+            )
+            .await;
+            return;
+        }
+        let _writing = WritingSlot(&self.mentor.writing);
+        match self.mentor_prepare_write(&root, &mut block) {
             Ok(write) => {
                 self.mentor_approve_and_type(
                     conversation_id,
@@ -84,7 +97,7 @@ impl JarvisCore {
     fn mentor_prepare_write(
         &self,
         root: &Path,
-        block: &WriteBlock,
+        block: &mut WriteBlock,
     ) -> Result<PreparedWrite, String> {
         let path = root.join(&block.path);
         let original = if path.exists() {
@@ -95,6 +108,10 @@ impl JarvisCore {
         } else {
             None
         };
+        // Code from the model has LF line endings; a CRLF file keeps its own.
+        if original.as_deref().is_some_and(|o| o.contains("\r\n")) {
+            block.use_crlf();
+        }
         let code = block.code();
         let (tool_name, input, prefix, suffix) = match &block.change {
             WriteChange::Create => (
@@ -316,6 +333,20 @@ impl JarvisCore {
                 }
             }
         }
+        // An empty change (a deletion) still has to reach the file.
+        if typed.is_empty() {
+            if let Err(reason) = check_unchanged(&write.path, last.as_deref()) {
+                return Ended::Stopped(reason);
+            }
+            let content = format!("{}{}", write.prefix, write.suffix);
+            if let Err(reason) = write_file(&write.scope, &write.path, &content) {
+                return Ended::Stopped(reason);
+            }
+            if let Some(session) = self.mentor.session().as_mut() {
+                session.baseline.mark_written(root, &relative);
+                session.watch_baseline.mark_written(root, &relative);
+            }
+        }
         Ended::Done
     }
 
@@ -375,6 +406,15 @@ struct PreparedWrite {
     summary: String,
     details: String,
     timeout: Duration,
+}
+
+/// Frees the one-change-at-a-time slot when the change is done.
+struct WritingSlot<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for WritingSlot<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// Fails when the file is not what JARVIS last left there: the user edited

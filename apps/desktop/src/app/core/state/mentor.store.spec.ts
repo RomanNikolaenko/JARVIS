@@ -131,6 +131,24 @@ describe('MentorStore', () => {
     expect(api['mentorReportBusy']).toHaveBeenCalledWith(true);
   });
 
+  it('sends held phrases even when the reply ends before the send returns', async () => {
+    let finishSend: (value: string) => void = () => undefined;
+    chat.send.mockImplementationOnce(() => new Promise<string>((resolve) => (finishSend = resolve)));
+    const first = store.handlePhrase(phrase('Перше'));
+    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledTimes(1));
+    await store.handlePhrase(phrase('Друге'));
+    expect(store.held()).toEqual(['Друге']);
+    // The whole reply runs and ends while the first send is still pending.
+    chat.busy.set(true);
+    TestBed.tick();
+    chat.busy.set(false);
+    TestBed.tick();
+    finishSend('sent');
+    await first;
+    await vi.waitFor(() => expect(chat.send).toHaveBeenCalledTimes(2));
+    expect(chat.send).toHaveBeenLastCalledWith('Друге', true, [], undefined, 'phrase');
+  });
+
   it('commands never reach the model', async () => {
     await store.handlePhrase(phrase('Пауза'));
     expect(api['mentorPause']).toHaveBeenCalled();

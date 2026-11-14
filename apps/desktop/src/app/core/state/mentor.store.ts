@@ -248,6 +248,8 @@ export class MentorStore {
       this.showNotice(IpcError.from(error).message);
     } finally {
       this.sending = false;
+      // The reply may have ended before the send returned.
+      void this.flushHeld();
     }
   }
 

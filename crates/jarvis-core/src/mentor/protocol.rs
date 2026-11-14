@@ -46,6 +46,17 @@ pub(crate) struct WritePart {
 }
 
 impl WriteBlock {
+    /// Turns the code (and the fragment to find) into CRLF line endings.
+    pub(crate) fn use_crlf(&mut self) {
+        let crlf = |text: &str| text.replace("\r\n", "\n").replace('\n', "\r\n");
+        if let WriteChange::Replace { find } = &mut self.change {
+            *find = crlf(find);
+        }
+        for part in &mut self.parts {
+            part.code = crlf(&part.code);
+        }
+    }
+
     /// All the code, in order.
     pub(crate) fn code(&self) -> String {
         self.parts.iter().map(|p| p.code.as_str()).collect()

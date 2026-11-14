@@ -414,11 +414,14 @@ impl JarvisCore {
         self.memory_state.touch();
 
         let attachments = self.attachments(&request.attachments)?;
-        // A mentor turn without a model choice uses the lesson's model.
-        let lesson_model =
-            (request.mentor.is_some() && request.provider_id.is_none() && request.model.is_none())
-                .then(|| self.mentor.model_for(conversation_id))
-                .flatten();
+        // A mentor turn always uses the lesson's model, whatever the chat
+        // has selected.
+        let lesson_model = request
+            .mentor
+            .is_some()
+            .then(|| self.mentor.model_for(conversation_id))
+            .flatten();
+        let in_lesson = lesson_model.is_some();
         let (provider_choice, model_choice) = match lesson_model {
             Some((provider, model)) => (Some(provider), Some(model)),
             None => (request.provider_id.clone(), request.model.clone()),
@@ -435,6 +438,15 @@ impl JarvisCore {
             self.check_vision_model(&model, &settings)?;
             model
         };
+        // Project files go to a cloud model only while the permission is on.
+        if in_lesson
+            && model.descriptor.locality == DataLocality::ThirdPartyCloud
+            && !settings.privacy.allow_cloud_agents
+        {
+            return Err(CoreError::PrivacyBlocked(
+                "The mentor sends your project files to a cloud model only with \"Let agents use cloud AI providers\" on in Settings → Privacy".to_owned(),
+            ));
+        }
         let window = ContextWindow::new(
             self.model_window(&model, &settings),
             settings.memory.context_limit_tokens,
@@ -455,12 +467,8 @@ impl JarvisCore {
         };
         let mentor = match request.mentor {
             Some(trigger) => {
-                self.mentor_turn_context(
-                    conversation_id,
-                    trigger,
-                    self.model_window(&model, &settings),
-                )
-                .await?
+                self.mentor_turn_context(conversation_id, trigger, Some(window.total_tokens))
+                    .await?
             }
             None => None,
         };

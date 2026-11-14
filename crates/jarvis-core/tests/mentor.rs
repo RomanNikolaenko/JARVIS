@@ -941,3 +941,188 @@ async fn own_writes_never_nudge() {
             .is_none()
     );
 }
+
+// ----- review fixes -----
+
+async fn try_turn(
+    test: &TestCore,
+    conversation: Uuid,
+    text: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<(), jarvis_core::CoreError> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    test.core
+        .send_message(
+            ChatTurnRequest {
+                conversation_id: conversation,
+                content: text.to_owned(),
+                provider_id: provider.map(ProviderId::new),
+                model: model.map(str::to_owned),
+                temperature: None,
+                max_output_tokens: None,
+                speak: false,
+                attachments: Vec::new(),
+                mentor: Some(MentorTrigger::Phrase),
+            },
+            move |event| tx.send(event).map_err(|_| SinkClosed),
+        )
+        .await?;
+    while let Some(event) = rx.recv().await {
+        if matches!(
+            event,
+            ChatStreamEvent::Finished { .. } | ChatStreamEvent::Failed { .. }
+        ) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mentor_turns_recheck_the_cloud_permission_and_keep_the_lesson_model() {
+    let Some(test) = start(DataLocality::ThirdPartyCloud, true).await else {
+        return;
+    };
+    let mut settings = test.core.settings();
+    settings.privacy.allow_cloud_agents = true;
+    test.core.update_settings(settings).await.unwrap();
+    let conversation = started(&test).await;
+    // The chat's model choice does not move the lesson to another model.
+    try_turn(
+        &test,
+        conversation,
+        "Що далі?",
+        Some("diagnostic-echo"),
+        Some("echo"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        test.teacher.seen.lock().unwrap().len(),
+        1,
+        "the lesson model answered"
+    );
+    // Revoking the permission mid-lesson stops project files at once.
+    let mut settings = test.core.settings();
+    settings.privacy.allow_cloud_agents = false;
+    test.core.update_settings(settings).await.unwrap();
+    let err = try_turn(&test, conversation, "А тепер?", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PrivacyBlocked, "{err}");
+    assert_eq!(test.teacher.seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_write_waits_for_the_first() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    ask_to_write(&test, conversation, &create_block("src/one.ts", &lines(2))).await;
+    let first = approval(&test).await;
+    ask_to_write(&test, conversation, &create_block("src/two.ts", &lines(2))).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        test.core.pending_approvals().len(),
+        1,
+        "one change at a time"
+    );
+    let messages = saved(&test, conversation, 5).await;
+    assert!(
+        messages
+            .iter()
+            .any(|(_, text)| text.contains("src/two.ts") && text.contains("not written")),
+        "{messages:?}"
+    );
+    assert!(test.core.resolve_approval(first.id, false));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replace_works_in_crlf_files_and_keeps_their_line_endings() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let path = test.project.join("src/win.ts");
+    std::fs::write(&path, "// head\r\nconst a = 1;\r\n// tail\r\n").unwrap();
+    let reply = "<write path=\"src/win.ts\" mode=\"replace\">\n<find>\nconst a = 1;\n</find>\n<say>Два рядки.</say>\n<code>\nconst a = 2;\nconst b = 3;\n</code>\n</write>";
+    ask_to_write(&test, conversation, reply).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    let status = typed(&test).await;
+    assert!(status.last_error.is_none(), "{status:?}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "// head\r\nconst a = 2;\r\nconst b = 3;\r\n// tail\r\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_replacement_removes_the_fragment() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let conversation = started(&test).await;
+    let path = test.project.join("src/cut.ts");
+    std::fs::write(&path, "keep\nremove me\nkeep too\n").unwrap();
+    let reply = "<write path=\"src/cut.ts\" mode=\"replace\">\n<find>\nremove me\n</find>\n<say>Прибираємо рядок.</say>\n<code>\n</code>\n</write>";
+    ask_to_write(&test, conversation, reply).await;
+    let pending = approval(&test).await;
+    assert!(test.core.resolve_approval(pending.id, true));
+    let status = typed(&test).await;
+    assert!(status.last_error.is_none(), "{status:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep\nkeep too\n");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changed_files_respect_the_context_limit() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    let mut settings = test.core.settings();
+    settings.memory.context_limit_tokens = Some(2_048);
+    test.core.update_settings(settings).await.unwrap();
+    let conversation = started(&test).await;
+    std::fs::write(test.project.join("src/big.ts"), "x".repeat(3_000)).unwrap();
+    mentor_turn(&test, conversation, "Глянь", Some(MentorTrigger::Phrase)).await;
+    let (_, user) = last_request(&test);
+    assert!(
+        !user.contains(&"x".repeat(3_000)),
+        "within the user's limit"
+    );
+    assert!(user.contains("src/big.ts"), "still named");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_microphone_failure_ends_the_lesson() {
+    let Some(test) = start(DataLocality::OnDevice, true).await else {
+        return;
+    };
+    started(&test).await;
+    wait_mic(&test, true).await;
+    let mic = test.fake.lock().mic.clone().expect("open microphone");
+    mic.send(jarvis_core::jarvis_voice::audio::CaptureEvent::Failed(
+        "unplugged".into(),
+    ))
+    .await
+    .unwrap();
+    let mut status = test.core.subscribe_mentor();
+    let ended = tokio::time::timeout(
+        Duration::from_secs(10),
+        status.wait_for(|s| s.phase == MentorPhase::Off && s.last_error.is_some()),
+    )
+    .await
+    .expect("the lesson ends")
+    .unwrap()
+    .clone();
+    assert!(
+        ended
+            .last_error
+            .unwrap()
+            .to_lowercase()
+            .contains("microphone"),
+        "says why"
+    );
+}
