@@ -52,6 +52,11 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(6);
 /// it. Starting takes about a second; a waiting process holds roughly
 /// 150 MB, so it is kept only while the user is chatting.
 pub const PREPARED_FOR: Duration = Duration::from_secs(5 * 60);
+/// Name prefix of the request work folders in the system temporary folder.
+const WORK_DIR_PREFIX: &str = "jarvis-cli-";
+/// Age after which a work folder cannot belong to a running request (a
+/// request may last an hour at most).
+const STALE_WORK_DIR: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Replaces Claude Code's coding-agent prompt. JARVIS's own instructions
 /// travel with the conversation (see [`transcript`]).
@@ -161,6 +166,7 @@ pub struct CliProvider {
 
 impl CliProvider {
     pub fn new(descriptor: ProviderDescriptor, kind: CliKind) -> Self {
+        sweep_stale_work_dirs();
         Self {
             descriptor,
             kind,
@@ -515,7 +521,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 fn work_dir() -> Result<tempfile::TempDir, AiError> {
     tempfile::Builder::new()
-        .prefix("jarvis-cli-")
+        .prefix(WORK_DIR_PREFIX)
         .tempdir()
         .map_err(|err| AiError::Unavailable(format!("cannot create a work folder: {err}")))
 }
@@ -588,6 +594,48 @@ fn remove_when_released(path: PathBuf) {
         }
         tracing::warn!(path = %path.display(), "could not delete a CLI work folder");
     });
+}
+
+/// Deletes work folders that an earlier run left behind: JARVIS closed or
+/// crashed before a stopped CLI released its folder. Runs once per process,
+/// in the background.
+fn sweep_stale_work_dirs() {
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| {
+        std::thread::spawn(|| {
+            let removed = remove_stale_work_dirs(&std::env::temp_dir(), STALE_WORK_DIR);
+            if removed > 0 {
+                tracing::debug!(removed, "deleted old CLI work folders");
+            }
+        });
+    });
+}
+
+/// Deletes the work folders in `parent` not changed for `older_than`.
+/// Symbolic links are skipped.
+fn remove_stale_work_dirs(parent: &Path, older_than: Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(WORK_DIR_PREFIX)
+        })
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| {
+            entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|changed| changed.elapsed().ok())
+                .is_some_and(|age| age >= older_than)
+        })
+        .filter(|entry| std::fs::remove_dir_all(entry.path()).is_ok())
+        .count()
 }
 
 enum Output {
@@ -1377,6 +1425,25 @@ mod tests {
         assert_eq!(content[2]["source"]["data"], "/9j/");
         let plain: Value = serde_json::from_str(&claude_input("hi", &[])).expect("json");
         assert_eq!(plain["message"]["content"], "hi");
+    }
+
+    #[test]
+    fn old_work_folders_are_deleted() {
+        let temp = tempfile::tempdir().expect("dir");
+        let stale = temp.path().join(format!("{WORK_DIR_PREFIX}old"));
+        std::fs::create_dir(&stale).expect("dir");
+        std::fs::write(stale.join("image-1.png"), b"png").expect("file");
+        let other = temp.path().join("someone-else");
+        std::fs::create_dir(&other).expect("dir");
+        let file = temp.path().join(format!("{WORK_DIR_PREFIX}file"));
+        std::fs::write(&file, b"not a folder").expect("file");
+
+        // Fresh folders may belong to a running request.
+        assert_eq!(remove_stale_work_dirs(temp.path(), STALE_WORK_DIR), 0);
+        assert!(stale.is_dir());
+        assert_eq!(remove_stale_work_dirs(temp.path(), Duration::ZERO), 1);
+        assert!(!stale.exists());
+        assert!(other.is_dir() && file.is_file());
     }
 
     #[test]
