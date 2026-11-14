@@ -25,6 +25,7 @@ import { Icon } from '../../shared/icon/icon';
 import { MarkdownPipe } from '../../shared/markdown/markdown';
 import { levelPercent } from '../voice/voice';
 import { AttachMenu } from './attach-menu/attach-menu';
+import { MentorBar } from './mentor-bar/mentor-bar';
 import { ConversationList } from './conversation-list/conversation-list';
 import { ChatAgentAction, type ChatAgentSubmission } from './chat-agent-action';
 
@@ -45,7 +46,7 @@ function withoutReasoning(text: string): string {
 
 @Component({
   selector: 'jv-chat',
-  imports: [AttachMenu, ConversationList, FormsModule, Icon, MarkdownPipe, RouterLink, ChatAgentAction],
+  imports: [AttachMenu, ConversationList, FormsModule, Icon, MarkdownPipe, MentorBar, RouterLink, ChatAgentAction],
   templateUrl: './chat.html',
   styleUrl: './chat.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

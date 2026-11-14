@@ -7,6 +7,7 @@ import { JarvisApi } from '../ipc/jarvis-api';
 import { listenerWithDeadline } from '../ipc/listener-deadline';
 import { withRequestDeadline } from '../ipc/request-deadline';
 import { ChatStore } from './chat.store';
+import { MentorStore } from './mentor.store';
 import { VisionStore } from './vision.store';
 
 const IDLE: VoiceState = {
@@ -21,6 +22,9 @@ const IDLE: VoiceState = {
   inputDevice: null,
   lastError: null,
 };
+
+/** A wake-word command that opens the lesson start dialog. */
+const START_LESSON = /^(починаємо урок|почнімо урок|start (a|the) lesson)[.!]?$/i;
 
 /** How long a voice problem stays on screen. */
 const NOTICE_MS = 6_000;
@@ -41,6 +45,7 @@ export class VoiceStore {
   private readonly api = inject(JarvisApi);
   private readonly chat = inject(ChatStore);
   private readonly vision = inject(VisionStore);
+  private readonly mentor = inject(MentorStore);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private captureContext: number | null = null;
@@ -251,6 +256,15 @@ export class VoiceStore {
 
   private async handleTranscript(transcript: VoiceTranscript): Promise<void> {
     if (this.destroyRef.destroyed || !this.started) return;
+    // Conversation mode belongs to the mentor lesson.
+    if (transcript.source === 'conversation') {
+      await this.mentor.handlePhrase(transcript);
+      return;
+    }
+    if (transcript.source === 'wakeWord' && START_LESSON.test(transcript.text.trim())) {
+      this.mentor.openStart();
+      return;
+    }
     if (!this.captures.has(transcript.captureId)) {
       if (this.pendingTranscripts.has(transcript.captureId) || this.pendingTranscripts.size >= 64) return;
       const timer = setTimeout(() => this.pendingTranscripts.delete(transcript.captureId), 5_000);
@@ -266,6 +280,8 @@ export class VoiceStore {
       if (transcript.captureId === this.testCaptureId) this.testTranscript.set(transcript.text);
       return;
     }
+    // "Continue" said by push-to-talk resumes a paused lesson.
+    if (await this.mentor.handlePausedPhrase(transcript)) return;
     const context = capture.context;
     const current = () => !this.destroyRef.destroyed && context === this.chat.inputContext();
     if (!current()) return;

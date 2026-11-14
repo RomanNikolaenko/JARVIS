@@ -10,6 +10,7 @@ import { pollWhileVisible } from './core/state/poll';
 import { SettingsStore } from './core/state/settings.store';
 import { SystemStore } from './core/state/system.store';
 import { UpdatesStore } from './core/state/updates.store';
+import { MentorStore } from './core/state/mentor.store';
 import { VoiceStore } from './core/state/voice.store';
 import { ApprovalDialog } from './shared/approval-dialog/approval-dialog';
 import { Icon, type IconName } from './shared/icon/icon';
@@ -108,6 +109,8 @@ export class App {
     void agents.start();
     // The microphone indicator and spoken requests work on every screen.
     void this.voice.start();
+    // A running lesson keeps listening on every screen.
+    void inject(MentorStore).start();
     // A found update is announced on every screen.
     void this.updates.start();
     // Suggested facts are counted next to Memory on every screen.

@@ -329,6 +329,8 @@
       }
     </div>
 
+    <jv-mentor-bar class="mentor" />
+
     @if (voice.phase() !== 'idle' || voice.state().awaitingCommand || voice.notice()) {
       <div class="voice-bar" role="status">
         @switch (voice.phase()) {

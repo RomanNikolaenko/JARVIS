@@ -1,0 +1,69 @@
+@let status = mentor.status();
+@if (status.phase === 'off') {
+  @if (mentor.starting()) {
+    <form class="mentor-start" (submit)="$event.preventDefault(); begin()">
+      <p class="hint">
+        JARVIS listens all the time, teaches you step by step and sees the project's files. Say «пауза» or «закінчуємо урок» at
+        any time.
+      </p>
+      <label class="select">
+        <span>Project folder</span>
+        <select [value]="folder()" (change)="onFolder($event)">
+          @for (path of folders(); track path) {
+            <option [value]="path" [selected]="path === folder()">{{ path }}</option>
+          }
+        </select>
+      </label>
+      @if (!folders().length) {
+        <p class="hint">Add the folder of your project first; JARVIS reads and writes only there.</p>
+      }
+      <div class="actions">
+        <button type="button" class="ghost small" (click)="addFolder()">Add folder…</button>
+        <button type="submit" class="primary small" [disabled]="!folder() || busy()">Start</button>
+        <button type="button" class="ghost small" (click)="mentor.closeStart()">Cancel</button>
+      </div>
+      @if (error() ?? mentor.notice(); as message) {
+        <p class="error" role="alert">{{ message }}</p>
+      }
+    </form>
+  } @else {
+    <button type="button" class="ghost small start" (click)="mentor.openStart()">Start a lesson</button>
+  }
+} @else {
+  <div class="mentor-bar" role="status">
+    <span class="dot" [class.on]="status.phase === 'listening'"></span>
+    @switch (status.phase) {
+      @case ('listening') {
+        <span>Mentor is listening</span>
+      }
+      @case ('paused') {
+        <span>Paused</span>
+      }
+      @case ('typing') {
+        <span>Typing into {{ status.typingFile }}</span>
+      }
+    }
+    <span class="folder" [title]="status.projectFolder ?? ''">{{ status.projectFolder }}</span>
+    @if (status.pendingWrite; as pending) {
+      <span class="pending">Waiting for your approval: {{ pending }}</span>
+    }
+    @if (mentor.held().length) {
+      <span class="held">{{ mentor.held().length }} waiting</span>
+    }
+    <div class="actions">
+      @if (status.phase === 'paused') {
+        <button type="button" class="ghost small" (click)="mentor.resume()">Resume</button>
+      } @else {
+        <button type="button" class="ghost small" (click)="mentor.pause()">Pause</button>
+      }
+      <button type="button" class="ghost small" (click)="mentor.look()">Look at the screen</button>
+      @if (status.phase === 'typing') {
+        <button type="button" class="ghost small" (click)="mentor.stopTyping()">Stop typing</button>
+      }
+      <button type="button" class="ghost small" (click)="mentor.end()">End lesson</button>
+    </div>
+    @if (status.lastError ?? mentor.notice(); as message) {
+      <p class="error" role="alert">{{ message }}</p>
+    }
+  </div>
+}

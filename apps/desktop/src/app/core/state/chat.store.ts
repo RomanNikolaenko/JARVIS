@@ -3,6 +3,7 @@ import type {
   CaptureInfo,
   ChatStreamEvent,
   ContextReport,
+  MentorTrigger,
   Conversation,
   ConversationDetail,
   ConversationPatch,
@@ -390,7 +391,8 @@ export class ChatStore {
     text: string,
     speak = false,
     attachments: readonly CaptureInfo[] = [],
-    onResult?: (result: ChatSendResult) => void
+    onResult?: (result: ChatSendResult) => void,
+    mentor: MentorTrigger | null = null
   ): Promise<ChatSendResult> {
     let result: ChatSendResult | null = null;
     const settle = (next: ChatSendResult): ChatSendResult => {
@@ -465,7 +467,7 @@ export class ChatStore {
               maxOutputTokens: null,
               speak,
               attachments: attachments.map((a) => a.id),
-              mentor: null,
+              mentor,
             },
             (event) => {
               // An event proves admission even if it finishes before invoke replies.

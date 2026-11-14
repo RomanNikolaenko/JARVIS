@@ -1,0 +1,66 @@
+:host {
+  display: block;
+}
+
+.mentor-bar,
+.mentor-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--jv-border);
+  border-radius: var(--jv-radius);
+  background: var(--jv-surface);
+}
+
+.mentor-start {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--jv-text-muted);
+
+  &.on {
+    background: var(--jv-accent);
+  }
+}
+
+.folder,
+.held,
+.hint {
+  color: var(--jv-text-muted);
+  font-size: 0.85em;
+}
+
+.folder {
+  overflow: hidden;
+  max-width: 40ch;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending {
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--jv-danger);
+}
+
+.start {
+  align-self: flex-start;
+}

@@ -6,6 +6,7 @@ import { IDLE_VOICE, voiceStatus } from '../../testing/voice.fixture';
 import { JarvisApi } from '../ipc/jarvis-api';
 import { ChatStore, type ChatSendResult } from './chat.store';
 import { VisionStore } from './vision.store';
+import { MentorStore } from './mentor.store';
 import { VoiceStore } from './voice.store';
 
 const CAPTURE: CaptureInfo = {
@@ -34,9 +35,19 @@ describe('VoiceStore', () => {
   let consume: ReturnType<typeof vi.fn>;
   let store: VoiceStore;
   let stops: ReturnType<typeof vi.fn>[];
+  let mentor: {
+    handlePhrase: ReturnType<typeof vi.fn>;
+    handlePausedPhrase: ReturnType<typeof vi.fn>;
+    openStart: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     stops = [];
+    mentor = {
+      handlePhrase: vi.fn(async () => undefined),
+      handlePausedPhrase: vi.fn(async () => false),
+      openStart: vi.fn(),
+    };
     api = {
       onVoiceState: vi.fn(async (handler: (state: VoiceState) => void) => {
         onState = handler;
@@ -86,6 +97,7 @@ describe('VoiceStore', () => {
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
         { provide: VisionStore, useValue: { prepareSend } },
+        { provide: MentorStore, useValue: mentor },
       ],
     });
     store = TestBed.inject(VoiceStore);
@@ -96,6 +108,23 @@ describe('VoiceStore', () => {
     onState({ ...IDLE_VOICE, captureId, micOpen: true, hearingSpeech: true });
     return { text, source, language: 'uk', captureId };
   };
+
+  it('hands conversation-mode phrases and lesson commands to the mentor', async () => {
+    const heard = transcript('Що писати далі?', 'conversation', 'phrase-c');
+    onTranscript(heard);
+    await vi.waitFor(() => expect(mentor.handlePhrase).toHaveBeenCalledWith(heard));
+    expect(chat.send).not.toHaveBeenCalled();
+
+    mentor.handlePausedPhrase.mockResolvedValueOnce(true);
+    onTranscript(transcript('Продовжуємо', 'pushToTalk', 'phrase-p'));
+    await vi.waitFor(() => expect(mentor.handlePausedPhrase).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(chat.send).not.toHaveBeenCalled();
+
+    onTranscript(transcript('починаємо урок', 'wakeWord', 'phrase-w'));
+    await vi.waitFor(() => expect(mentor.openStart).toHaveBeenCalled());
+    expect(chat.send).not.toHaveBeenCalled();
+  });
 
   it('loads the status and follows the engine state and level', () => {
     expect(store.available()).toBe(true);
@@ -349,6 +378,7 @@ describe('VoiceStore', () => {
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
         { provide: VisionStore, useValue: { prepareSend } },
+        { provide: MentorStore, useValue: mentor },
       ],
     });
     store = TestBed.inject(VoiceStore);
@@ -369,6 +399,7 @@ describe('VoiceStore', () => {
         { provide: JarvisApi, useValue: api },
         { provide: ChatStore, useValue: chat },
         { provide: VisionStore, useValue: { prepareSend } },
+        { provide: MentorStore, useValue: mentor },
       ],
     });
     store = TestBed.inject(VoiceStore);
